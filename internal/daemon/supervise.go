@@ -81,7 +81,7 @@ func (sv *supervisor) scan() {
 	for file, w := range sv.files {
 		if !there[file] {
 			if w.s != nil {
-				sv.remove(w.s)
+				sv.d.remove(w.s)
 			}
 			delete(sv.files, file)
 		}
@@ -106,26 +106,39 @@ func (sv *supervisor) load(file string, w *watched) {
 		// waiting there.
 		s.mailbox = old.mailbox
 	}
-	sv.d.do(func(st *state) { st.addrs[s.name] = s })
+	held := false
+	sv.d.do(func(st *state) {
+		if other := st.addrs[s.name]; other != nil && other.client {
+			held = true
+			return
+		}
+		st.addrs[s.name] = s
+	})
+	if held {
+		close(s.quit) // drops the timers its :start set
+		sv.d.note("%s: :%s is held by a client, so the service isn't loaded", file, s.name)
+		return
+	}
 	if old != nil {
-		sv.stop(old)
+		sv.d.stop(old)
 	}
 	w.s = s
 	sv.d.wg.Go(func() { s.run(sv.d.ctx) })
 }
 
-// remove takes s's address away and stops it. Calls waiting in its mailbox
-// get (err {:kind :no-address}), and so do the senders of the messages in
-// its inbox, as [:whiff/done id result].
-func (sv *supervisor) remove(s *service) {
-	sv.d.do(func(st *state) {
+// remove takes s's address away and stops it: a service whose file is
+// gone, or a client's address when it hangs up. Calls waiting in its
+// mailbox get (err {:kind :no-address}), and so do the senders of the
+// messages in its inbox, as [:whiff/done id result].
+func (d *daemon) remove(s *service) {
+	d.do(func(st *state) {
 		delete(st.addrs, s.name)
 		for _, a := range st.inbox(s.name) {
 			st.take(s.name, a.id)
-			sv.d.answer(st, a.ticket, s.name, puff.Errorf("no-address", "no address :%s", s.name))
+			d.answer(st, a.ticket, s.name, puff.Errorf("no-address", "no address :%s", s.name))
 		}
 	})
-	sv.stop(s)
+	d.stop(s)
 	for {
 		select {
 		case m := <-s.mailbox:
@@ -139,7 +152,7 @@ func (sv *supervisor) remove(s *service) {
 }
 
 // stop has s finish the message it is handling, if any, and waits for it.
-func (sv *supervisor) stop(s *service) {
+func (d *daemon) stop(s *service) {
 	close(s.quit)
 	<-s.done
 }

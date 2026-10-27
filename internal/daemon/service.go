@@ -16,11 +16,13 @@ import (
 // it.
 var loadTimeout = 5 * time.Second
 
-// service is a loaded (srv name ...): its env belongs to the goroutine
+// service is a loaded (srv name ...), or an address a client holds, whose
+// functions are native and forward to it: its env belongs to the goroutine
 // running it. Its name, fns, code and forms don't change after loading, so
 // anyone can read them.
 type service struct {
 	name    string
+	client  bool // held by a client connection
 	env     *puff.Env
 	fns     map[string]handler
 	subs    map[string]subscriber   // by topic
@@ -392,17 +394,17 @@ func (s *service) handle(ctx context.Context, m message) (reply string, faulted 
 	for i := range args {
 		args[i] = vec.At(i)
 	}
+	if m.ctx == nil {
+		var cancel context.CancelFunc
+		m.ctx, cancel = context.WithTimeout(ctx, s.d.callTimeout)
+		defer cancel()
+	}
 	if native != nil {
 		r, err := native(m, args)
 		if err != nil {
 			return fail("bad-call", "%s: %v", what, err)
 		}
 		return puff.Print(r), false
-	}
-	if m.ctx == nil {
-		var cancel context.CancelFunc
-		m.ctx, cancel = context.WithTimeout(ctx, s.d.callTimeout)
-		defer cancel()
 	}
 	s.cur.chain = slices.Concat(m.chain, []string{s.name})
 	s.cur.user = m.user

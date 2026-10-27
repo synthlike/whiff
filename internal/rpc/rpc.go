@@ -10,39 +10,57 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 )
 
 // Version is the protocol version. Bump it when a message changes; hello and
 // stop must stay readable by every version, so an old daemon can be stopped.
-const Version = 7
+const Version = 8
 
-// Request is a client's message to the daemon.
+// Request is a client's message to the daemon. The daemon answers each with
+// a Response, in order, except an answer, which has none.
 type Request struct {
-	Op      string `json:"op"`                // "hello", "eval", "call", "send", "pub", "inbox", "reply", "wait", "history", "ls" or "stop"
+	Op      string `json:"op"`                // "hello", "eval", "call", "send", "pub", "inbox", "reply", "wait", "claim", "answer", "history", "ls" or "stop"
 	Version int    `json:"version,omitempty"` // hello: the client's protocol
-	Src     string `json:"src,omitempty"`     // eval: puff code
-	Target  string `json:"target,omitempty"`  // call, send: address/fn; pub: the topic; inbox: the address
-	Args    string `json:"args,omitempty"`    // call, send, pub: a printed puff vector, of one value for pub; reply: [id result]; wait: [id]
+	Src     string `json:"src,omitempty"`     // eval: puff code; claim: the interface, (on ...) and (ask ...) forms without bodies
+	Target  string `json:"target,omitempty"`  // call, send: address/fn; pub: the topic; inbox, claim: the address
+	Args    string `json:"args,omitempty"`    // call, send, pub: a printed puff vector, of one value for pub; reply: [id result]; wait: [id]; answer: the printed Result
 	Dir     string `json:"dir,omitempty"`     // eval, call, send, pub: the client's working directory
+	ID      int64  `json:"id,omitempty"`      // answer: the Delivery's ID
 	// Agent says the client acts for an agent: its messages' origin is
 	// :agent, not :user. eval, call, send, pub.
 	Agent bool `json:"agent,omitempty"`
 }
 
-// Response is the daemon's answer to one Request.
+// Response is the daemon's answer to one Request, or, with Delivery set, a
+// message for the address the client holds.
 type Response struct {
-	Version int    `json:"version,omitempty"` // hello: the daemon's protocol
-	Value   string `json:"value,omitempty"`   // eval: the printed value
-	Out     string `json:"out,omitempty"`     // eval: what io/println wrote
-	Error   string `json:"error,omitempty"`
-	Fault   bool   `json:"fault,omitempty"` // eval: Error is a fault
+	Version  int       `json:"version,omitempty"` // hello: the daemon's protocol
+	Value    string    `json:"value,omitempty"`   // eval: the printed value
+	Out      string    `json:"out,omitempty"`     // eval: what io/println wrote
+	Error    string    `json:"error,omitempty"`
+	Fault    bool      `json:"fault,omitempty"` // eval: Error is a fault
+	Delivery *Delivery `json:"delivery,omitempty"`
 }
 
-// Conn sends and receives JSON lines.
+// Delivery is a message to a function of the address a client holds. The
+// client answers it with an answer Request carrying its ID and Result,
+// within the caller's timeout.
+type Delivery struct {
+	ID     int64  `json:"id"`
+	Fn     string `json:"fn"`
+	Args   string `json:"args"`           // a printed puff vector
+	From   string `json:"from,omitempty"` // the sender's address; "" for a client
+	Origin string `json:"origin"`         // "user" or "agent"
+	Dir    string `json:"dir,omitempty"`  // the sender's working directory
+}
+
+// Conn sends and receives JSON lines. Send is safe for concurrent use.
 type Conn struct {
 	c   net.Conn
+	mu  sync.Mutex // held while sending
 	enc *json.Encoder
 	dec *json.Decoder
 }
@@ -51,7 +69,11 @@ func NewConn(c net.Conn) *Conn {
 	return &Conn{c: c, enc: json.NewEncoder(c), dec: json.NewDecoder(c)}
 }
 
-func (c *Conn) Send(v any) error { return c.enc.Encode(v) }
+func (c *Conn) Send(v any) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.enc.Encode(v)
+}
 func (c *Conn) Recv(v any) error { return c.dec.Decode(v) }
 func (c *Conn) Close() error     { return c.c.Close() }
 
@@ -86,13 +108,20 @@ func PrepareDir(dir string) error {
 	return nil
 }
 
-// Client is a connection to the daemon after the hello.
+// Client is a connection to the daemon after the hello. Its methods are
+// safe for concurrent use; requests go one at a time.
 type Client struct {
 	conn *Conn
 	// Daemon is the daemon's protocol version.
 	Daemon int
 	// Agent makes every request act for an agent: see Request.Agent.
 	Agent bool
+
+	mu         sync.Mutex // held for a request and its response
+	resps      chan Response
+	deliveries chan Delivery
+	done       chan struct{} // closed when the connection ends
+	err        error         // why it ended, set before done is closed
 }
 
 // Dial connects to the daemon in dir and exchanges protocol versions. If no
@@ -118,7 +147,9 @@ func Dial(dir string, start func() error) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := &Client{conn: NewConn(nc)}
+	c := &Client{conn: NewConn(nc), resps: make(chan Response),
+		deliveries: make(chan Delivery, 100), done: make(chan struct{})}
+	go c.read()
 	var resp Response
 	if err := c.roundTrip(Request{Op: "hello", Version: Version}, &resp); err != nil {
 		c.Close()
@@ -177,6 +208,26 @@ func (c *Client) Ls() (string, error) {
 	return resp.Out, err
 }
 
+// Claim makes addr this connection's address, with iface, its (on ...) and
+// (ask ...) forms without bodies. The Response's Value is (ok :done), or
+// (err {:kind :taken}) if addr is held or whiff's own. Messages to addr then
+// come on Deliveries until the connection closes.
+func (c *Client) Claim(addr, iface string) (Response, error) {
+	var resp Response
+	err := c.roundTrip(Request{Op: "claim", Target: addr, Src: iface}, &resp)
+	return resp, err
+}
+
+// Deliveries are the messages to the address this connection holds. A
+// client that claims one keeps reading them: until it does, the responses
+// to its requests wait behind them.
+func (c *Client) Deliveries() <-chan Delivery { return c.deliveries }
+
+// Answer answers the delivery id with result, a printed (ok v) or (err e).
+func (c *Client) Answer(id int64, result string) error {
+	return c.conn.Send(Request{Op: "answer", ID: id, Args: result})
+}
+
 // Stop asks the daemon to stop and waits until it has stopped listening.
 func (c *Client) Stop() error {
 	var resp Response
@@ -184,19 +235,41 @@ func (c *Client) Stop() error {
 		return err
 	}
 	// The daemon closes every connection once it no longer listens.
-	c.conn.Recv(&resp)
+	<-c.done
 	return nil
 }
 
 func (c *Client) Close() error { return c.conn.Close() }
 
+// read sorts what the daemon sends into responses and deliveries until the
+// connection ends.
+func (c *Client) read() {
+	defer close(c.done)
+	for {
+		var r Response
+		if err := c.conn.Recv(&r); err != nil {
+			c.err = err
+			return
+		}
+		if r.Delivery != nil {
+			c.deliveries <- *r.Delivery
+			continue
+		}
+		c.resps <- r
+	}
+}
+
 func (c *Client) roundTrip(req Request, resp *Response) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	req.Agent = c.Agent
 	if err := c.conn.Send(req); err != nil {
 		return err
 	}
-	if err := c.conn.Recv(resp); err != nil {
-		return fmt.Errorf("whiff daemon: %w", err)
+	select {
+	case *resp = <-c.resps:
+	case <-c.done:
+		return fmt.Errorf("whiff daemon: %w", c.err)
 	}
 	if resp.Error != "" && req.Op != "eval" {
 		return errors.New(resp.Error)

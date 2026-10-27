@@ -118,9 +118,17 @@ func (d *daemon) newEnv(stdout io.Writer, cur *caller) *puff.Env {
 }
 
 // serve answers one client's requests in order. A client that hangs up
-// cancels the evaluation it asked for.
+// cancels the evaluation it asked for, and lets go of the address it holds.
 func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 	conn := rpc.NewConn(nc)
+	l := newLink(conn)
+	var held *service // the address the client holds, if any
+	defer func() {
+		close(l.gone)
+		if held != nil {
+			d.remove(held)
+		}
+	}()
 	defer func() {
 		// When whiff stops, a client sees its connection close only once
 		// whiff no longer listens, so it can start the next daemon.
@@ -147,6 +155,12 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 			if err := conn.Recv(&req); err != nil {
 				return
 			}
+			// An answer goes straight to the delivery waiting for it: the
+			// client may be waiting on a request of its own meanwhile.
+			if req.Op == "answer" {
+				l.answered(req)
+				continue
+			}
 			select {
 			case reqs <- req:
 			case <-ctx.Done():
@@ -163,13 +177,23 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 			return
 		}
 		var resp rpc.Response
+		from := ""
+		if held != nil {
+			from = held.name
+		}
 		switch req.Op {
 		case "hello":
 			resp.Version = rpc.Version
 		case "eval":
-			resp = d.eval(ctx, req)
+			resp = d.eval(ctx, from, req)
 		case "call", "send", "pub":
-			resp = d.message(ctx, req)
+			resp = d.message(ctx, from, req)
+		case "claim":
+			if held != nil {
+				resp.Error = fmt.Sprintf("this connection holds :%s already", held.name)
+				break
+			}
+			held, resp = d.claim(l, req)
 		case "history":
 			resp.Out = d.historyText()
 		case "ls":
@@ -194,9 +218,10 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 }
 
 // message calls or sends req.Target, :address/fn, with req.Args, a printed
-// vector, from the client's directory, or publishes req.Args's one value to
-// the topic req.Target. Its Value is the Result.
-func (d *daemon) message(ctx context.Context, req rpc.Request) rpc.Response {
+// vector, from the client's directory and address (from, "" for none), or
+// publishes req.Args's one value to the topic req.Target. Its Value is the
+// Result.
+func (d *daemon) message(ctx context.Context, from string, req rpc.Request) rpc.Response {
 	args, err := puff.ReadValue(req.Args)
 	vec, ok := args.(puff.Vector)
 	if err != nil || !ok {
@@ -207,14 +232,14 @@ func (d *daemon) message(ctx context.Context, req rpc.Request) rpc.Response {
 		if topic == "" || vec.Len() != 1 {
 			return rpc.Response{Error: "pub wants a topic and one value"}
 		}
-		d.publish(message{topic: topic, args: puff.Print(vec), dir: req.Dir, user: !req.Agent})
+		d.publish(message{from: from, topic: topic, args: puff.Print(vec), dir: req.Dir, user: !req.Agent})
 		return rpc.Response{Value: puff.Print(puff.Done)}
 	}
 	vals := []puff.Value{puff.Keyword(strings.TrimPrefix(req.Target, ":"))}
 	for i := range vec.Len() {
 		vals = append(vals, vec.At(i))
 	}
-	cur := &caller{user: !req.Agent}
+	cur := &caller{addr: from, user: !req.Agent}
 	m, addr, err := cur.message(req.Dir, vals)
 	if err != nil {
 		return rpc.Response{Error: err.Error()}
@@ -230,10 +255,11 @@ func (d *daemon) message(ctx context.Context, req rpc.Request) rpc.Response {
 	return rpc.Response{Value: puff.Print(r)}
 }
 
-// eval evaluates req.Src in a fresh environment, in the client's directory.
-func (d *daemon) eval(ctx context.Context, req rpc.Request) rpc.Response {
+// eval evaluates req.Src in a fresh environment, in the client's directory,
+// acting for its address (from, "" for none).
+func (d *daemon) eval(ctx context.Context, from string, req rpc.Request) rpc.Response {
 	var out strings.Builder
-	env := d.newEnv(&out, &caller{user: !req.Agent})
+	env := d.newEnv(&out, &caller{addr: from, user: !req.Agent})
 	env.Dir = req.Dir
 	v, err := env.Load(ctx, "eval", req.Src)
 	resp := rpc.Response{Out: out.String()}

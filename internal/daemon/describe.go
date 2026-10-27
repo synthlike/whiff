@@ -205,7 +205,11 @@ func (mk *marker) ls() string {
 	tw := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
 	for _, addr := range slices.Sorted(maps.Keys(mk.services)) {
 		s := mk.services[addr]
-		fmt.Fprintf(tw, ":%s\n", addr)
+		if s.client {
+			fmt.Fprintf(tw, ":%s (client)\n", addr)
+		} else {
+			fmt.Fprintf(tw, ":%s\n", addr)
+		}
 		for _, fn := range slices.Sorted(maps.Keys(s.fns)) {
 			h := s.fns[fn]
 			params := slices.Clone(h.params)
