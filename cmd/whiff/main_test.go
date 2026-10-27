@@ -33,6 +33,15 @@ func TestRun(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(services, "greet.puff"), []byte(greet), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// A greet being tried, beside the installed one.
+	trial, broken := filepath.Join(dir, "greet.puff"), filepath.Join(dir, "x", "greet.puff")
+	os.Mkdir(filepath.Join(dir, "x"), 0o700)
+	if err := os.WriteFile(trial, []byte(`(srv greet (on (hello name) "Greets name." (ok (string/concat "hi, " name))))`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(broken, []byte("(srv greet\n  (on (hello) \"Doc.\" (ok x)))"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("WHIFF_TEST_DIR", dir)
 	t.Cleanup(func() { run([]string{"stop"}, dir, services, new(strings.Builder), new(strings.Builder)) })
 
@@ -56,6 +65,13 @@ func TestRun(t *testing.T) {
 			wantErr: "whiff: {:kind :no-function :message \":greet has no function nope\"}\n"},
 		{name: "call a bad target", args: []string{"call", "greet"}, code: 1,
 			wantErr: "whiff: :greet has no address: only a service can leave it out, want :address/fn\n"},
+		{name: "try", args: []string{"try", trial, "hello", "dee"}, wantOut: "hi, dee\n"},
+		{name: "installed after try", args: []string{"call", "greet/hello", "dee"}, wantOut: "hello, dee\n"},
+		{name: "try err", args: []string{"try", trial, "nope"}, code: 1,
+			wantErr: "whiff: {:kind :no-function :message \":try/2/greet has no function nope\"}\n"},
+		{name: "try a broken file", args: []string{"try", broken, "hello"}, code: 1, wantErr: broken + ":2:26: unknown name x\n"},
+		{name: "try a missing file", args: []string{"try", "nope.puff", "hello"}, code: 1,
+			wantErr: "whiff: open nope.puff: no such file or directory\n"},
 		{name: "send", args: []string{"send", "greet/hello", "cat"}},
 		{name: "send err", args: []string{"send", "nobody/x"}, code: 1,
 			wantErr: "whiff: {:kind :no-address :message \"no address :nobody\"}\n"},

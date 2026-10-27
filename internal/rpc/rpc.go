@@ -17,17 +17,18 @@ import (
 
 // Version is the protocol version. Bump it when a message changes; hello and
 // stop must stay readable by every version, so an old daemon can be stopped.
-const Version = 8
+const Version = 9
 
 // Request is a client's message to the daemon. The daemon answers each with
 // a Response, in order, except an answer, which has none.
 type Request struct {
-	Op      string `json:"op"`                // "hello", "eval", "call", "send", "pub", "inbox", "reply", "wait", "claim", "answer", "history", "ls" or "stop"
+	Op      string `json:"op"`                // "hello", "eval", "call", "send", "pub", "try", "inbox", "reply", "wait", "claim", "answer", "history", "ls" or "stop"
 	Version int    `json:"version,omitempty"` // hello: the client's protocol
-	Src     string `json:"src,omitempty"`     // eval: puff code; claim: the interface, (on ...) and (ask ...) forms without bodies
-	Target  string `json:"target,omitempty"`  // call, send: address/fn; pub: the topic; inbox, claim: the address
-	Args    string `json:"args,omitempty"`    // call, send, pub: a printed puff vector, of one value for pub; reply: [id result]; wait: [id]; answer: the printed Result
-	Dir     string `json:"dir,omitempty"`     // eval, call, send, pub: the client's working directory
+	Src     string `json:"src,omitempty"`     // eval: puff code; claim: the interface, (on ...) and (ask ...) forms without bodies; try: the service file
+	File    string `json:"file,omitempty"`    // try: the service file's name, for its errors
+	Target  string `json:"target,omitempty"`  // call, send: address/fn; pub: the topic; inbox, claim: the address; try: the fn
+	Args    string `json:"args,omitempty"`    // call, send, pub, try: a printed puff vector, of one value for pub; reply: [id result]; wait: [id]; answer: the printed Result
+	Dir     string `json:"dir,omitempty"`     // eval, call, send, pub, try: the client's working directory
 	ID      int64  `json:"id,omitempty"`      // answer: the Delivery's ID
 	// Agent says the client acts for an agent: its messages' origin is
 	// :agent, not :user. eval, call, send, pub.
@@ -38,7 +39,7 @@ type Request struct {
 // message for the address the client holds.
 type Response struct {
 	Version  int       `json:"version,omitempty"` // hello: the daemon's protocol
-	Value    string    `json:"value,omitempty"`   // eval: the printed value
+	Value    string    `json:"value,omitempty"`   // eval: the printed value; others: the printed Result
 	Out      string    `json:"out,omitempty"`     // eval: what io/println wrote
 	Error    string    `json:"error,omitempty"`
 	Fault    bool      `json:"fault,omitempty"` // eval: Error is a fault
@@ -187,6 +188,16 @@ func (c *Client) Message(op, target, args, dir string) (Response, error) {
 	return resp, err
 }
 
+// Try loads src, the service file named file, under a scratch address,
+// calls its function fn with args, a printed puff vector, from dir, and
+// unloads it. The Response's Value is the printed Result; a file that
+// doesn't load is its Error, at file:line:col.
+func (c *Client) Try(file, src, fn, args, dir string) (Response, error) {
+	var resp Response
+	err := c.roundTrip(Request{Op: "try", File: file, Src: src, Target: fn, Args: args, Dir: dir}, &resp)
+	return resp, err
+}
+
 // History is the daemon's history, newest first, a line an entry.
 func (c *Client) History() (string, error) {
 	var resp Response
@@ -271,7 +282,7 @@ func (c *Client) roundTrip(req Request, resp *Response) error {
 	case <-c.done:
 		return fmt.Errorf("whiff daemon: %w", c.err)
 	}
-	if resp.Error != "" && req.Op != "eval" {
+	if resp.Error != "" && req.Op != "eval" && req.Op != "try" {
 		return errors.New(resp.Error)
 	}
 	return nil

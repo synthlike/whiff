@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -35,7 +36,8 @@ type daemon struct {
 	restarts    chan *service // services that faulted, for the supervisor
 	log         io.Writer     // notes, and what services print
 	callTimeout time.Duration
-	base        *puff.Env // only looked up in, for builtins' marks
+	base        *puff.Env    // only looked up in, for builtins' marks
+	tries       atomic.Int64 // the last whiff try's number, for its scratch address
 	wg          sync.WaitGroup
 }
 
@@ -188,6 +190,8 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 			resp = d.eval(ctx, from, req)
 		case "call", "send", "pub":
 			resp = d.message(ctx, from, req)
+		case "try":
+			resp = d.try(ctx, from, req)
 		case "claim":
 			if held != nil {
 				resp.Error = fmt.Sprintf("this connection holds :%s already", held.name)

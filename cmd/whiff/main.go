@@ -21,6 +21,7 @@ const usage = `usage:
   whiff call address/fn args...   call a function and print its value
   whiff send address/fn args...   send a message without waiting
   whiff pub topic value           publish value to the topic's subscribers
+  whiff try file.puff fn args...  load a service file, call its function once and unload it
   whiff inbox address             list the messages waiting for a reply
   whiff reply id value            answer a message waiting for a reply
   whiff wait id                   print the answer to a pending message or job, waiting for it
@@ -30,7 +31,7 @@ const usage = `usage:
   whiff stop                      stop the daemon
   whiff daemon                    run the daemon in the foreground
 
-Each arg of call, send, pub and reply is read as a puff value, or taken as
+Each arg of call, send, pub, try and reply is read as a puff value, or taken as
 a string if it doesn't read as one: 12 is 12, ann is "ann", '"12"' is "12".
 A reply that isn't (ok v) or (err e) is sent as (ok value).
 `
@@ -51,6 +52,8 @@ func run(args []string, dir, services string, stdout, stderr io.Writer) int {
 	switch {
 	case len(args) >= 2 && (args[0] == "call" || args[0] == "send"):
 		return message(dir, args[0], args[1], args[2:], stdout, stderr)
+	case len(args) >= 3 && args[0] == "try":
+		return try(dir, args[1], args[2], args[3:], stdout, stderr)
 	case len(args) == 3 && args[0] == "pub":
 		return message(dir, args[0], args[1], args[2:], stdout, stderr)
 	case len(args) == 3 && args[0] == "reply", len(args) == 2 && args[0] == "wait":
@@ -121,6 +124,47 @@ func message(dir, op, target string, args []string, stdout, stderr io.Writer) in
 		fmt.Fprintf(stderr, "whiff: %v\n", err)
 		return 1
 	}
+	return result(op, resp, stdout, stderr)
+}
+
+// try loads file under a scratch address, calls its function fn with args
+// and prints the reply as call does. A file that doesn't load prints its
+// error, at file:line:col, and exits 1.
+func try(dir, file, fn string, args []string, stdout, stderr io.Writer) int {
+	src, err := os.ReadFile(file)
+	if err != nil {
+		fmt.Fprintf(stderr, "whiff: %v\n", err)
+		return 1
+	}
+	vals := make([]puff.Value, len(args))
+	for i, a := range args {
+		vals[i] = shellArg(a)
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(stderr, "whiff: %v\n", err)
+		return 1
+	}
+	c := connect(dir, stderr)
+	if c == nil {
+		return 1
+	}
+	defer c.Close()
+	resp, err := c.Try(file, string(src), fn, puff.Print(puff.NewVector(vals...)), wd)
+	switch {
+	case err != nil:
+		fmt.Fprintf(stderr, "whiff: %v\n", err)
+		return 1
+	case resp.Error != "":
+		fmt.Fprintln(stderr, resp.Error)
+		return 1
+	}
+	return result("call", resp, stdout, stderr)
+}
+
+// result prints resp's Result for op: the value of (ok v) for a call or a
+// wait, a string as it is; (err e) prints e and exits 1.
+func result(op string, resp rpc.Response, stdout, stderr io.Writer) int {
 	v, err := puff.ReadValue(resp.Value)
 	r, ok := v.(puff.Tag)
 	if err != nil || !ok || r.Len() != 1 {

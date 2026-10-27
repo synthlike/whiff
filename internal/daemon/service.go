@@ -70,7 +70,13 @@ func (d *daemon) loadService(file string) (*service, error) {
 	if err != nil {
 		return nil, err
 	}
-	forms, err := puff.Read(file, string(src))
+	return d.loadSource(file, string(src), "")
+}
+
+// loadSource is loadService for src, read from file, at addr: the
+// service's name if addr is "", else a scratch address for whiff try.
+func (d *daemon) loadSource(file, src, addr string) (*service, error) {
+	forms, err := puff.Read(file, src)
 	if err != nil {
 		return nil, err
 	}
@@ -104,9 +110,12 @@ func (d *daemon) loadService(file string) (*service, error) {
 		break
 	}
 
+	if addr == "" {
+		addr = name
+	}
 	quit := make(chan struct{})
-	s := &service{name: name, fns: map[string]handler{}, subs: map[string]subscriber{}, code: map[string][]*puff.Form{},
-		forms: srv.Items[2:], mailbox: make(chan message, mailboxSize), cur: caller{addr: name, stop: quit}, d: d,
+	s := &service{name: addr, fns: map[string]handler{}, subs: map[string]subscriber{}, code: map[string][]*puff.Form{},
+		forms: srv.Items[2:], mailbox: make(chan message, mailboxSize), cur: caller{addr: addr, stop: quit}, d: d,
 		quit: quit, done: make(chan struct{})}
 	var loads []*puff.Form
 	fns := map[string]*puff.Form{} // each subscriber's (fn (v) body...)

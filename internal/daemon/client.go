@@ -63,7 +63,8 @@ func (l *link) forward(m message, _ []puff.Value) (puff.Value, error) {
 
 // claim makes req.Target l's address, with the interface in req.Src. The
 // Response's Value is (ok :done), or (err {:kind :taken}) for an address
-// that is held, or that whiff assigns: :jobs, :review and :agent/*.
+// that is held, or that whiff assigns: :jobs, :review, :agent/* and
+// whiff try's :try/*.
 func (d *daemon) claim(l *link, req rpc.Request) (*service, rpc.Response) {
 	name := strings.TrimPrefix(req.Target, ":")
 	if k, err := puff.ReadValue(":" + name); err != nil || name == "" || !puff.Equal(k, puff.Keyword(name)) {
@@ -72,7 +73,8 @@ func (d *daemon) claim(l *link, req rpc.Request) (*service, rpc.Response) {
 	taken := func(why string) (*service, rpc.Response) {
 		return nil, rpc.Response{Value: puff.Print(puff.Errorf("taken", ":%s %s", name, why))}
 	}
-	if name == "jobs" || name == "review" || name == "agent" || strings.HasPrefix(name, "agent/") {
+	if name == "jobs" || name == "review" || name == "agent" || strings.HasPrefix(name, "agent/") ||
+		name == "try" || strings.HasPrefix(name, "try/") {
 		return taken("is assigned by whiff")
 	}
 	fns, err := clientInterface(req.Src, l)
