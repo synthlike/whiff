@@ -5,54 +5,41 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"strings"
 )
 
-// Builtin is a function implemented in Go. An error from Fn is a fault: a
-// wrong argument, an overflow.
-type Builtin struct {
-	Name     string
-	Doc      string
-	Min, Max int // number of arguments; Max is -1 for any
-	Fn       func(args []Value) (Value, error)
-}
-
-func (f *Builtin) print(b *strings.Builder) {
-	b.WriteString("#<builtin ")
-	b.WriteString(f.Name)
-	b.WriteByte('>')
-}
-
-// core is what every Env starts with, until the stdlib table.
-var core = []*Builtin{
-	{"ok", "(ok v): a successful Result", 1, 1, tagFn("ok")},
-	{"err", "(err e): a failed Result", 1, 1, tagFn("err")},
-	{"some", "(some v): an Option with a value", 1, 1, tagFn("some")},
-	{"none", "(none): an empty Option", 0, 0, tagFn("none")},
-	{"fail", "(fail e): stop with a fault", 1, 1, func(args []Value) (Value, error) {
-		if s, ok := args[0].(String); ok {
-			return nil, errors.New(string(s))
-		}
-		return nil, errors.New(Print(args[0]))
-	}},
-	{"=", "(= a b): whether a and b are the same value", 2, 2, func(args []Value) (Value, error) {
+// base is puff's own table: every Env starts with it.
+var base = []*Builtin{
+	{Name: "ok", Args: "v", Doc: "A successful Result.", Fn: tagFn("ok")},
+	{Name: "err", Args: "e", Doc: "A failed Result.", Fn: tagFn("err")},
+	{Name: "some", Args: "v", Doc: "An Option with a value.", Fn: tagFn("some")},
+	{Name: "none", Doc: "An empty Option.", Fn: tagFn("none")},
+	{Name: "fail", Args: "e", Doc: "Stop with a fault, e as its message.", Fn: fail},
+	{Name: "help", Args: "[f]", Doc: "Print f's arguments, mark and doc, or list every builtin.", Fn: help},
+	{Name: "=", Args: "a b", Doc: "Whether a and b are the same value.", Fn: func(_ *Call, args []Value) (Value, error) {
 		return Bool(Equal(args[0], args[1])), nil
 	}},
-	{"not", "(not b): the other bool", 1, 1, not},
-	{"<", "(< a b): whether a is less than b", 2, 2, compareFn(func(c int) bool { return c < 0 })},
-	{"<=", "(<= a b): whether a is at most b", 2, 2, compareFn(func(c int) bool { return c <= 0 })},
-	{">", "(> a b): whether a is greater than b", 2, 2, compareFn(func(c int) bool { return c > 0 })},
-	{">=", "(>= a b): whether a is at least b", 2, 2, compareFn(func(c int) bool { return c >= 0 })},
-	{"+", "(+ a b ...): the sum of ints, floats or durations", 2, -1, add},
-	{"-", "(- a b): a minus b; (- a): minus a", 1, 2, sub},
-	{"*", "(* a b ...): the product of ints or floats", 2, -1, mul},
+	{Name: "not", Args: "b", Doc: "The other bool.", Fn: not},
+	{Name: "<", Args: "a b", Doc: "Whether a is less than b: ints, floats, strings or durations.", Fn: compareFn(func(c int) bool { return c < 0 })},
+	{Name: "<=", Args: "a b", Doc: "Whether a is at most b.", Fn: compareFn(func(c int) bool { return c <= 0 })},
+	{Name: ">", Args: "a b", Doc: "Whether a is greater than b.", Fn: compareFn(func(c int) bool { return c > 0 })},
+	{Name: ">=", Args: "a b", Doc: "Whether a is at least b.", Fn: compareFn(func(c int) bool { return c >= 0 })},
+	{Name: "+", Args: "a b ...", Doc: "The sum of ints, floats or durations.", Fn: add},
+	{Name: "-", Args: "a [b]", Doc: "a minus b, or minus a.", Fn: sub},
+	{Name: "*", Args: "a b ...", Doc: "The product of ints or floats.", Fn: mul},
 }
 
-func tagFn(name string) func([]Value) (Value, error) {
-	return func(args []Value) (Value, error) { return NewTag(name, args...), nil }
+func tagFn(name string) func(*Call, []Value) (Value, error) {
+	return func(_ *Call, args []Value) (Value, error) { return NewTag(name, args...), nil }
 }
 
-func not(args []Value) (Value, error) {
+func fail(_ *Call, args []Value) (Value, error) {
+	if s, ok := args[0].(String); ok {
+		return nil, errors.New(string(s))
+	}
+	return nil, errors.New(Print(args[0]))
+}
+
+func not(_ *Call, args []Value) (Value, error) {
 	b, ok := args[0].(Bool)
 	if !ok {
 		return nil, fmt.Errorf("want a bool, got %s", Print(args[0]))
@@ -60,8 +47,8 @@ func not(args []Value) (Value, error) {
 	return !b, nil
 }
 
-func compareFn(ok func(int) bool) func([]Value) (Value, error) {
-	return func(args []Value) (Value, error) {
+func compareFn(ok func(int) bool) func(*Call, []Value) (Value, error) {
+	return func(_ *Call, args []Value) (Value, error) {
 		c, err := compare(args[0], args[1])
 		if err != nil {
 			return nil, err
@@ -93,7 +80,7 @@ func compare(a, b Value) (int, error) {
 	return 0, fmt.Errorf("can't compare %s and %s", typeName(a), typeName(b))
 }
 
-func add(args []Value) (Value, error) {
+func add(_ *Call, args []Value) (Value, error) {
 	acc := args[0]
 	for _, v := range args[1:] {
 		var err error
@@ -104,7 +91,7 @@ func add(args []Value) (Value, error) {
 	return acc, nil
 }
 
-func sub(args []Value) (Value, error) {
+func sub(_ *Call, args []Value) (Value, error) {
 	if len(args) == 2 {
 		return arith("subtract", args[0], args[1], subInt, func(x, y float64) float64 { return x - y }, true)
 	}
@@ -119,7 +106,7 @@ func sub(args []Value) (Value, error) {
 	return nil, fmt.Errorf("can't negate %s", typeName(args[0]))
 }
 
-func mul(args []Value) (Value, error) {
+func mul(_ *Call, args []Value) (Value, error) {
 	acc := args[0]
 	for _, v := range args[1:] {
 		var err error

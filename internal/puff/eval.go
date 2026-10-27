@@ -3,7 +3,9 @@ package puff
 import (
 	"context"
 	"fmt"
+	"io"
 	"maps"
+	"os"
 	"slices"
 	"strings"
 )
@@ -28,9 +30,10 @@ func faultf(p Pos, format string, args ...any) *Fault {
 // Func is a function defined in puff.
 type Func struct {
 	name    string // "" for an anonymous fn
-	params  int
+	params  []string
 	body    expr
 	closure *frame
+	refs    []*global // the globals its body refers to, for its mark
 }
 
 func (f *Func) print(b *strings.Builder) {
@@ -45,6 +48,8 @@ func (f *Func) print(b *strings.Builder) {
 // Env is a global scope: the builtins and the top-level defs of everything
 // loaded into it. It is not safe for concurrent use.
 type Env struct {
+	// Stdout is where io/println and help write.
+	Stdout  io.Writer
 	globals map[string]*global
 }
 
@@ -53,13 +58,27 @@ type global struct {
 	builtin bool
 }
 
-// NewEnv returns an Env with the core builtins.
+// NewEnv returns an Env with puff's base table, writing to os.Stdout.
 func NewEnv() *Env {
-	e := &Env{globals: map[string]*global{}}
-	for _, b := range core {
-		e.globals[b.Name] = &global{val: b, builtin: true}
+	e := &Env{Stdout: os.Stdout, globals: map[string]*global{}}
+	if err := e.Register(base...); err != nil {
+		panic(err)
 	}
 	return e
+}
+
+// Register adds builtins, such as a host's own on top of the base table.
+// A name that is already taken is an error.
+func (e *Env) Register(bs ...*Builtin) error {
+	for _, b := range bs {
+		if _, ok := e.globals[b.Name]; ok {
+			return fmt.Errorf("builtin %s registered twice", b.Name)
+		}
+		own := *b
+		own.min, own.max = parseArgs(b.Args)
+		e.globals[b.Name] = &global{val: &own, builtin: true}
+	}
+	return nil
 }
 
 // Load reads, checks and evaluates src, and returns the value of its last
@@ -91,7 +110,7 @@ func (e *Env) Load(ctx context.Context, file, src string) (Value, error) {
 		}
 	}
 	maps.Copy(e.globals, c.defined)
-	t := &thread{ctx: ctx}
+	t := &thread{ctx: ctx, env: e}
 	var v Value
 	for i, step := range steps {
 		if v, err = step(t, nil); err != nil {
@@ -110,6 +129,7 @@ type expr func(t *thread, f *frame) (Value, error)
 // thread is the state of one evaluation.
 type thread struct {
 	ctx   context.Context
+	env   *Env
 	depth int
 }
 
@@ -167,6 +187,7 @@ type compiler struct {
 	env     *Env
 	defined map[string]*global // defs in this load, installed if it compiles
 	defPos  map[string]Pos
+	refs    []*global // globals referred to in the fn being compiled
 }
 
 func isDef(f *Form) bool {
@@ -368,6 +389,7 @@ func (c *compiler) name(f *Form, s *scope) (expr, error) {
 	if g == nil {
 		return nil, errorf(f.Pos, "unknown name %s", f.Name)
 	}
+	c.refs = append(c.refs, g)
 	return func(*thread, *frame) (Value, error) {
 		if g.val == nil {
 			return nil, faultf(f.Pos, "%s used before its def", f.Name)
@@ -643,13 +665,16 @@ func (c *compiler) fn(name string, pos Pos, params, body []*Form, s *scope) (exp
 	if what == "" {
 		what = "fn"
 	}
+	outer := c.refs
+	c.refs = nil
 	b, err := c.body(what, pos, body, fs, true)
 	if err != nil {
 		return nil, err
 	}
-	n := len(params)
+	refs := c.refs
+	c.refs = append(outer, refs...) // what an inner fn refers to, its outer one does too
 	return func(_ *thread, fr *frame) (Value, error) {
-		return &Func{name: name, params: n, body: b, closure: fr}, nil
+		return &Func{name: name, params: fs.names, body: b, closure: fr, refs: refs}, nil
 	}, nil
 }
 
@@ -779,12 +804,12 @@ func (t *thread) call(pos Pos, fn Value, args []Value) (Value, error) {
 	}
 	switch fn := fn.(type) {
 	case *Func:
-		if len(args) != fn.params {
+		if len(args) != len(fn.params) {
 			name := fn.name
 			if name == "" {
 				name = "fn"
 			}
-			return nil, faultf(pos, "%s", arity(name, fn.params, fn.params, len(args)))
+			return nil, faultf(pos, "%s", arity(name, len(fn.params), len(fn.params), len(args)))
 		}
 		if t.depth >= maxDepth {
 			return nil, faultf(pos, "too deep: more than %d nested calls", maxDepth)
@@ -797,10 +822,10 @@ func (t *thread) call(pos Pos, fn Value, args []Value) (Value, error) {
 		}
 		return v, err
 	case *Builtin:
-		if len(args) < fn.Min || fn.Max >= 0 && len(args) > fn.Max {
-			return nil, faultf(pos, "%s", arity(fn.Name, fn.Min, fn.Max, len(args)))
+		if len(args) < fn.min || fn.max >= 0 && len(args) > fn.max {
+			return nil, faultf(pos, "%s", arity(fn.Name, fn.min, fn.max, len(args)))
 		}
-		v, err := fn.Fn(args)
+		v, err := fn.Fn(&Call{Ctx: t.ctx, Env: t.env}, args)
 		if err != nil {
 			return nil, faultf(pos, "%s: %v", fn.Name, err)
 		}

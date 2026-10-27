@@ -35,7 +35,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, interactive b
 		fmt.Fprint(stdout, usage)
 		return 0
 	case args[0] == "-e" && len(args) == 2:
-		return eval(puff.NewEnv(), "-e", args[1], stdout, stderr, true)
+		return eval(newEnv(stdout), "-e", args[1], stdout, stderr, true)
 	case strings.HasPrefix(args[0], "-"):
 		fmt.Fprint(stderr, usage)
 		return 2
@@ -45,7 +45,13 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, interactive b
 		fmt.Fprintf(stderr, "puff: %v\n", err)
 		return 1
 	}
-	return eval(puff.NewEnv(), args[0], string(src), stdout, stderr, false)
+	return eval(newEnv(stdout), args[0], string(src), stdout, stderr, false)
+}
+
+func newEnv(stdout io.Writer) *puff.Env {
+	env := puff.NewEnv()
+	env.Stdout = stdout
+	return env
 }
 
 // eval loads src into env and, if show is set, prints its value. A fault
@@ -69,7 +75,7 @@ func eval(env *puff.Env, file, src string, stdout, stderr io.Writer, show bool) 
 // repl reads stdin a line at a time and evaluates what it has read, printing
 // the value; it keeps reading while a form or string is still open.
 func repl(stdin io.Reader, stdout, stderr io.Writer, interactive bool) int {
-	env := puff.NewEnv()
+	env := newEnv(stdout)
 	sc := bufio.NewScanner(stdin)
 	var buf strings.Builder
 	for {
