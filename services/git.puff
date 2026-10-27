@@ -1,0 +1,54 @@
+; git: the repository in the caller's directory. Read only.
+;   whiff call git/status
+;   whiff call git/branch
+
+(srv git
+  ; git runs git with args: (ok stdout), or (err {:kind :git}) with what it
+  ; said when it fails, outside a repository say.
+  (def (git args)
+    (match (try (proc/run (vector/concat ["git" "-c" "core.quotePath=false"] args)))
+      [{:exit 0 :stdout out} (ok out)]
+      [{:exit n :stderr e} (err {:kind :git :exit n :message (string/trim e)})]))
+
+  ; change is one letter of a status's XY as a keyword.
+  (def (change c)
+    (match c
+      ["." :none] ["M" :modified] ["T" :modified] ["A" :added] ["D" :deleted]
+      ["R" :renamed] ["C" :copied] ["U" :unmerged] [_ :unknown]))
+
+  (def (file xy path)
+    {:path path :index (change (string/slice xy 0 1)) :work (change (string/slice xy 1 2))})
+
+  ; after is the fields from i on: a path, which may hold spaces.
+  (def (after fields i) (string/join (vector/slice fields i) " "))
+
+  (def (number s) (match (int/from-string (string/slice s 1)) [(ok n) n]))
+
+  (def (with-file st f)
+    (match st [{:files fs} (map/set st :files (vector/append fs f))]))
+
+  ; add adds one line of git status --porcelain=v2 --branch to st.
+  (def (add st line)
+    (let [f (string/split line " ")]
+      (match f
+        [["#" "branch.head" "(detached)"] st]
+        [["#" "branch.head" b] (map/set st :branch (some b))]
+        [["#" "branch.upstream" u] (map/set st :upstream (some u))]
+        [["#" "branch.ab" a b] (map/merge st {:ahead (number a) :behind (number b)})]
+        [["1" xy & _] (with-file st (file xy (after f 8)))]
+        ; A rename's path is followed by a tab and the path it had.
+        [["2" xy & _] (with-file st (file xy (match (string/split (after f 9) "\t") [[p & _] p])))]
+        [["u" xy & _] (with-file st (file xy (after f 10)))]
+        [["?" & _] (with-file st {:path (after f 1) :index :untracked :work :untracked})]
+        [_ st])))
+
+  (on (status) :read
+    "The branch, (some name) or (none) when detached; its upstream, an Option too; commits :ahead and :behind it; and each changed file, {:path :index :work}, with what changed in the index and the work tree: :none, :modified, :added, :deleted, :renamed, :copied, :unmerged or :untracked."
+    (let [out (try (git ["status" "--porcelain=v2" "--branch"]))]
+      (ok (vector/reduce (string/lines out) {:branch (none) :upstream (none) :ahead 0 :behind 0 :files []} add))))
+
+  (on (branch) :read
+    "The current branch's name; (err {:kind :detached}) when HEAD isn't on one."
+    (match (string/trim (try (git ["branch" "--show-current"])))
+      ["" (err {:kind :detached :message "HEAD isn't on a branch"})]
+      [b (ok b)])))
