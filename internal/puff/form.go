@@ -23,12 +23,15 @@ func (p Pos) String() string {
 type Error struct {
 	Pos Pos
 	Msg string
+	// Unclosed is set when the source ends inside a form or string, so a
+	// REPL can read another line instead.
+	Unclosed bool
 }
 
 func (e *Error) Error() string { return e.Pos.String() + ": " + e.Msg }
 
 func errorf(p Pos, format string, args ...any) *Error {
-	return &Error{p, fmt.Sprintf(format, args...)}
+	return &Error{Pos: p, Msg: fmt.Sprintf(format, args...)}
 }
 
 type FormKind int

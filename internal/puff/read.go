@@ -111,7 +111,9 @@ func (r *reader) seq(p Pos, kind FormKind, close byte) (*Form, error) {
 	for {
 		r.skip()
 		if r.eof() {
-			return nil, errorf(p, "no closing %q", close)
+			e := errorf(p, "no closing %q", close)
+			e.Unclosed = true
+			return nil, e
 		}
 		if r.peek() == close {
 			r.next()
@@ -172,7 +174,9 @@ func (r *reader) str(p Pos) (*Form, error) {
 			}
 		}
 	}
-	return nil, errorf(p, "unclosed string")
+	e := errorf(p, "unclosed string")
+	e.Unclosed = true
+	return nil, e
 }
 
 // atom reads a token up to the next delimiter: a bool, keyword, number,
