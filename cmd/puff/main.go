@@ -8,44 +8,63 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
+	"sync/atomic"
 
 	"github.com/synthlike/whiff/internal/puff"
 )
 
 const usage = `usage:
-  puff file.puff   evaluate a file
-  puff -e code     evaluate code and print its value
-  puff             evaluate forms from stdin as they're typed
+  puff file.puff args...   evaluate a file and call its main with args
+  puff -e code             evaluate code and print its value
+  puff                     evaluate forms from stdin as they're typed
 `
 
 func main() {
 	fi, err := os.Stdin.Stat()
 	interactive := err == nil && fi.Mode()&os.ModeCharDevice != 0
-	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, interactive))
+	interrupts := make(chan os.Signal, 1)
+	signal.Notify(interrupts, os.Interrupt)
+	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, interactive, interrupts))
 }
 
 // run is puff with its arguments and streams, returning the exit code.
-// interactive shows a prompt on stdout.
-func run(args []string, stdin io.Reader, stdout, stderr io.Writer, interactive bool) int {
+// interactive shows a prompt on stdout; an interrupt cancels what is being
+// evaluated.
+func run(args []string, stdin io.Reader, stdout, stderr io.Writer, interactive bool, interrupts <-chan os.Signal) int {
 	switch {
 	case len(args) == 0:
-		return repl(stdin, stdout, stderr, interactive)
+		return repl(stdin, stdout, stderr, interactive, interrupts)
 	case args[0] == "-h" || args[0] == "--help":
 		fmt.Fprint(stdout, usage)
 		return 0
 	case args[0] == "-e" && len(args) == 2:
-		return eval(newEnv(stdout), "-e", args[1], stdout, stderr, true)
+		ctx, cancel := cancelOn(interrupts)
+		defer cancel()
+		return eval(ctx, newEnv(stdout), "-e", args[1], stdout, stderr, true)
 	case strings.HasPrefix(args[0], "-"):
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
-	src, err := os.ReadFile(args[0])
-	if err != nil {
-		fmt.Fprintf(stderr, "puff: %v\n", err)
-		return 1
+	ctx, cancel := cancelOn(interrupts)
+	defer cancel()
+	return runFile(ctx, args[0], args[1:], stdout, stderr)
+}
+
+// cancelOn returns a context that the first interrupt cancels.
+func cancelOn(interrupts <-chan os.Signal) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
+	if interrupts != nil {
+		go func() {
+			select {
+			case <-interrupts:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
 	}
-	return eval(newEnv(stdout), args[0], string(src), stdout, stderr, false)
+	return ctx, cancel
 }
 
 func newEnv(stdout io.Writer) *puff.Env {
@@ -54,17 +73,64 @@ func newEnv(stdout io.Writer) *puff.Env {
 	return env
 }
 
-// eval loads src into env and, if show is set, prints its value. A fault
-// exits 70, any other error 1.
-func eval(env *puff.Env, file, src string, stdout, stderr io.Writer, show bool) int {
-	v, err := env.Load(context.Background(), file, src)
+// runFile evaluates a file and, if it defines main, calls it with args as a
+// vector of strings (or with nothing, if main takes no parameters). (ok v)
+// exits 0, (err e) 1, a fault 70.
+func runFile(ctx context.Context, file string, args []string, stdout, stderr io.Writer) int {
+	src, err := os.ReadFile(file)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
-		var fault *puff.Fault
-		if errors.As(err, &fault) {
-			return 70
-		}
+		fmt.Fprintf(stderr, "puff: %v\n", err)
 		return 1
+	}
+	env := newEnv(stdout)
+	if _, err := env.Load(ctx, file, string(src)); err != nil {
+		return report(stderr, err)
+	}
+	main, ok := env.Lookup("main")
+	if !ok {
+		return 0
+	}
+	var mainArgs []puff.Value
+	if f, ok := main.(*puff.Func); !ok || f.Arity() != 0 {
+		vs := make([]puff.Value, len(args))
+		for i, a := range args {
+			vs[i] = puff.String(a)
+		}
+		mainArgs = []puff.Value{puff.NewVector(vs...)}
+	}
+	v, err := env.Call(ctx, puff.Pos{File: file, Line: 1, Col: 1}, main, mainArgs...)
+	if err != nil {
+		return report(stderr, err)
+	}
+	if t, ok := v.(puff.Tag); ok && t.Len() == 1 {
+		switch t.Name() {
+		case "ok":
+			return 0
+		case "err":
+			fmt.Fprintf(stderr, "puff: %s\n", puff.Print(v))
+			return 1
+		}
+	}
+	fmt.Fprintf(stderr, "puff: main returned %s, want (ok v) or (err e)\n", puff.Print(v))
+	return 70
+}
+
+// report prints a read, check or evaluation error and returns its exit
+// code: 70 for a fault, 1 for the rest.
+func report(stderr io.Writer, err error) int {
+	fmt.Fprintln(stderr, err)
+	var fault *puff.Fault
+	if errors.As(err, &fault) {
+		return 70
+	}
+	return 1
+}
+
+// eval loads src into env and, if show is set, prints its value.
+func eval(ctx context.Context, env *puff.Env, file, src string, stdout, stderr io.Writer, show bool) int {
+	v, err := env.Load(ctx, file, src)
+	if err != nil {
+		return report(stderr, err)
 	}
 	if show && v != nil {
 		fmt.Fprintln(stdout, puff.Print(v))
@@ -73,8 +139,30 @@ func eval(env *puff.Env, file, src string, stdout, stderr io.Writer, show bool) 
 }
 
 // repl reads stdin a line at a time and evaluates what it has read, printing
-// the value; it keeps reading while a form or string is still open.
-func repl(stdin io.Reader, stdout, stderr io.Writer, interactive bool) int {
+// the value; it keeps reading while a form or string is still open. An
+// interrupt cancels the evaluation, or ends the REPL at its prompt.
+func repl(stdin io.Reader, stdout, stderr io.Writer, interactive bool, interrupts <-chan os.Signal) int {
+	var running atomic.Pointer[context.CancelFunc]
+	if interrupts != nil {
+		go func() {
+			for range interrupts {
+				if cancel := running.Load(); cancel != nil {
+					(*cancel)()
+					continue
+				}
+				fmt.Fprintln(stdout)
+				os.Exit(130)
+			}
+		}()
+	}
+	evalInput := func(env *puff.Env, src string) {
+		ctx, cancel := context.WithCancel(context.Background())
+		running.Store(&cancel)
+		eval(ctx, env, "", src, stdout, stderr, true)
+		running.Store(nil)
+		cancel()
+	}
+
 	env := newEnv(stdout)
 	sc := bufio.NewScanner(stdin)
 	var buf strings.Builder
@@ -95,7 +183,7 @@ func repl(stdin io.Reader, stdout, stderr io.Writer, interactive bool) int {
 		if _, err := puff.Read("", buf.String()); errors.As(err, &perr) && perr.Unclosed {
 			continue
 		}
-		eval(env, "", buf.String(), stdout, stderr, true)
+		evalInput(env, buf.String())
 		buf.Reset()
 	}
 	if interactive {
@@ -106,7 +194,7 @@ func repl(stdin io.Reader, stdout, stderr io.Writer, interactive bool) int {
 		return 1
 	}
 	if buf.Len() > 0 {
-		eval(env, "", buf.String(), stdout, stderr, true)
+		evalInput(env, buf.String())
 	}
 	return 0
 }

@@ -1,0 +1,11 @@
+; Greets everyone named on the command line:
+;   go run ./cmd/puff examples/hello.puff ann bob
+; or press Enter on it in hiss.
+
+(def (greet name)
+  (string/concat "hello, " name))
+
+(def (main args)
+  (match args
+    [[] (io/println (greet "world"))]
+    [names (vector/each names (fn (n) (io/println (greet n))))]))

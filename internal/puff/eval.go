@@ -84,6 +84,25 @@ func (e *Env) Register(bs ...*Builtin) error {
 	return nil
 }
 
+// Lookup returns the value of a global: a builtin, or a def that has run.
+func (e *Env) Lookup(name string) (Value, bool) {
+	g := e.globals[name]
+	if g == nil || g.val == nil {
+		return nil, false
+	}
+	return g.val, true
+}
+
+// Call calls the function f with args, as a host does: puff calling main,
+// whiff calling a handler. pos is where a fault in the call itself points.
+func (e *Env) Call(ctx context.Context, pos Pos, f Value, args ...Value) (Value, error) {
+	t := &thread{ctx: ctx, env: e}
+	return t.call(pos, f, args)
+}
+
+// Arity is the number of parameters f takes.
+func (f *Func) Arity() int { return len(f.params) }
+
 // Load reads, checks and evaluates src, and returns the value of its last
 // form: nil if that is a def or src has no forms. Names are checked before
 // anything runs, so an unknown name fails the whole load with an *Error.
