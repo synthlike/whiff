@@ -1,0 +1,20 @@
+; reviewer: Claude reviews the uncommitted changes in the caller's
+; repository. It gets the diff on stdin and no tools, so it can only read
+; what it is given and answer. Needs the claude CLI.
+;   whiff call reviewer/review    ; (err {:kind :pending :id 12}) at once
+;   whiff wait 12                 ; {:exit 0 :stdout "the review" :stderr ""}
+
+(srv reviewer
+  (def prompt "You are reviewing a diff before it is committed. List the real problems you find (bugs, races, unclear names, missing tests), most important first, each with its file and line and one or two sentences on why. Skip style nits. If there is nothing worth fixing, say so in one line.\n\n")
+
+  ; diff is the uncommitted changes to tracked files, against HEAD.
+  (def (diff)
+    (match (try (proc/run ["git" "diff" "HEAD"]))
+      [{:exit 0 :stdout ""} (err {:kind :nothing :message "no uncommitted changes to review"})]
+      [{:exit 0 :stdout d} (ok d)]
+      [{:exit n :stderr e} (err {:kind :git :exit n :message (string/trim e)})]))
+
+  (on (review) :read
+    "Reviews the uncommitted changes here (git diff HEAD) with Claude, without tools: pending at once; the job's {:exit :stdout :stderr} when done, with the review in :stdout."
+    (hand-on (call :jobs/run ["claude" "-p" "--tools" "" "--no-session-persistence"]
+               {:stdin (string/concat prompt (try (diff))) :timeout 10m}))))

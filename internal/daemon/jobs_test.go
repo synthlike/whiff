@@ -16,10 +16,25 @@ func TestJobs(t *testing.T) {
 	writeServices(t, dir, map[string]string{
 		"builder": `(srv builder
   (on (build) "Runs a job in the caller's directory." (call :jobs/run ["cat" "here"]))
+  (on (via) "Gets a job from hander." (call :hander/cat "handed on"))
   (on (whiff/done id r) "Writes the job's output."
     (match r [(ok {:stdout out}) (file/write "` + got + `" out)])))`,
 		"watch": `(srv watch
   (on :jobs/done (v) (ok v)))`,
+		"hander": `(srv hander
+  (on (cat text) "Hands its caller a job." (hand-on (call :jobs/run ["cat"] {:stdin text})))
+  (on (late) "Hands on a job that is done already, twice."
+    (let [r (call :jobs/run ["echo" "late"])]
+      (do (loop []
+            (match (call :jobs/list)
+              [(ok []) (ok :done)]
+              [_ (do (proc/run ["sleep" "0.01"]) (recur))]))
+          (match (hand-on r) [(err {:kind :pending}) (hand-on r)]))))
+  (on (whiff/done id r) "Writes the answers it got." (file/write "` + filepath.Join(dir, "hander-got") + `" (value/to-string r)))
+  (on (pass x) "Hands on an ask." (hand-on (call :box/q x)))
+  (on (bogus) "Hands on what isn't its own." (hand-on (err {:kind :pending :id 999})))
+  (on (plain) "Hands on a value." (hand-on (ok 1))))`,
+		"box":  `(srv box (ask (q x) "Waits."))`,
 		"jobs": `(srv jobs)`,
 	})
 	start(t, dir)
@@ -55,8 +70,45 @@ func TestJobs(t *testing.T) {
 	run(`(call :builder/build)`)
 	eventually(t, "builder's answer", func() string { b, _ := os.ReadFile(got); return string(b) }, "in dir")
 
+	id = run(`(call :jobs/run ["cat"] {:stdin "piped"})`)
+	inHistory(`done  user   :jobs -> client ` + id + ` (ok {:exit 0 :stderr "" :stdout "piped"})`)
+
+	// hand-on hands the caller a job or an ask: to a client, to a service's
+	// whiff/done, and when the answer came before the hand-on.
+	id = run(`(call :hander/cat "to you")`)
+	inHistory(`done  user   :jobs -> client ` + id + ` (ok {:exit 0 :stderr "" :stdout "to you"})`)
+	run(`(call :builder/via)`)
+	eventually(t, "the job hander handed on", func() string { b, _ := os.ReadFile(got); return string(b) }, "handed on")
+	// The answer came first, so both hander and its caller get it; the
+	// second hand-on finds nothing left to hand on.
+	resp, err := c.Eval(`(call :hander/late)`, dir)
+	if err != nil || !strings.HasPrefix(resp.Value, `(err {:kind :no-id :message "no job or ask `) {
+		t.Errorf("handing on twice = %s %v", resp.Value, err)
+	}
+	inHistory(` (ok {:exit 0 :stderr "" :stdout "late\n"})`)
+	h, _ := c.History()
+	if !strings.Contains(h, `  done  user   :jobs -> client `) || !strings.Contains(h, `:jobs -> :hander/whiff/done `) {
+		t.Errorf("want the late answer to go to both the client and hander:\n%s", h)
+	}
+	id = run(`(call :hander/pass 5)`)
+	if _, err := c.Message("reply", "", "["+id+" (ok 6)]", ""); err != nil {
+		t.Fatal(err)
+	}
+	inHistory(`done  user   client -> client ` + id + ` (ok 6)`)
+	for src, want := range map[string]string{
+		`(call :hander/bogus)`: `(err {:kind :no-id :message "no job or ask 999 of :hander's to hand on"})`,
+		`(call :hander/plain)`: `(ok 1)`,
+	} {
+		if resp, err := c.Eval(src, dir); err != nil || resp.Value != want {
+			t.Errorf("%s = %s %s %v, want %s", src, resp.Value, resp.Error, err, want)
+		}
+	}
+	// A send has nobody waiting for its answer, so there is nobody to hand on to.
+	c.Eval(`(send :hander/cat "x")`, dir)
+	inHistory(`send  user   client -> :hander/cat "x"  (err {:kind :no-id :message "only a call's handler can hand on: nobody waits for this message's answer"})`)
+
 	id = run(`(call :jobs/run ["sleep" "10"])`)
-	resp, err := c.Eval(`(call :jobs/list)`, dir)
+	resp, err = c.Eval(`(call :jobs/list)`, dir)
 	if want := `(ok [{:cmd ["sleep" "10"] :cwd "` + dir + `" :id ` + id + `}])`; err != nil || resp.Value != want {
 		t.Errorf("list = %s %v, want %s", resp.Value, err, want)
 	}
@@ -71,7 +123,7 @@ func TestJobs(t *testing.T) {
 
 	tests := []struct{ src, want string }{
 		{`(call :jobs/run [])`, `(err {:kind :bad-call :message ":jobs/run: want a command like [\"go\" \"test\"], got []"})`},
-		{`(call :jobs/run ["true"] {:wait 1s})`, `(err {:kind :bad-call :message ":jobs/run: want {:timeout d}, a positive duration, got {:wait 1s}"})`},
+		{`(call :jobs/run ["true"] {:wait 1s})`, `(err {:kind :bad-call :message ":jobs/run: want {:timeout d :stdin s}, a positive duration and a string, got {:wait 1s}"})`},
 		{`(call :jobs/run)`, `(err {:kind :bad-call :message ":jobs/run takes 1 to 2 arguments, got 0"})`},
 		{`(match (call :jobs/run ["no-such-program-whiff"]) [(err {:kind k}) k])`, `:start`},
 		{`(call :jobs/cancel 999)`, `(err {:kind :no-id :message "no job 999 is running"})`},
@@ -81,6 +133,10 @@ func TestJobs(t *testing.T) {
 		if err != nil || resp.Value != tt.want {
 			t.Errorf("%s = %s %s %v, want %s", tt.src, resp.Value, resp.Error, err, tt.want)
 		}
+	}
+
+	if resp, err := c.Eval(`(hand-on 1)`, dir); err != nil || !resp.Fault || resp.Error != "eval:1:1: hand-on: only a service's handler can hand on" {
+		t.Errorf("hand-on from a client = %+v %v", resp, err)
 	}
 
 	// A service file can't take :jobs's address.

@@ -209,3 +209,67 @@ func TestTodoService(t *testing.T) {
 		t.Errorf("a new TODO.md = %q", b)
 	}
 }
+
+// TestReviewerService tries services/reviewer.puff with a fake claude on
+// PATH, which says what it was given.
+func TestReviewerService(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	src, err := os.ReadFile(filepath.Join("..", "..", "services", "reviewer.puff"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := tempDir(t)
+	bin := filepath.Join(dir, "bin")
+	os.Mkdir(bin, 0o700)
+	// It fails unless it has no tools, and answers with the diff's added lines.
+	fake := `#!/bin/sh
+[ "$1 $2 $3" = "-p --tools " ] || { echo "want no tools, got $*" >&2; exit 9; }
+echo "reviewed:"; grep '^+[^+]'
+`
+	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(fake), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	start(t, dir)
+	c := dial(t, dir)
+
+	repo := filepath.Join(dir, "repo")
+	os.Mkdir(repo, 0o700)
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"commit", "-q", "--allow-empty", "-m", "first"}} {
+		cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	try := func() string {
+		t.Helper()
+		resp, err := c.Try("reviewer.puff", string(src), "review", "[]", repo)
+		if err != nil || resp.Error != "" {
+			t.Fatalf("try reviewer review: %v %s", err, resp.Error)
+		}
+		return resp.Value
+	}
+	if got := try(); !strings.HasPrefix(got, `(err {:kind :nothing :message "no uncommitted changes to review"`) {
+		t.Errorf("review with no changes = %s", got)
+	}
+
+	// A tracked file, changed: the review is the trial caller's to wait for.
+	os.WriteFile(filepath.Join(repo, "a.go"), []byte("package a\n"), 0o600)
+	cmd := exec.Command("git", "add", "a.go")
+	cmd.Dir = repo
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v\n%s", err, out)
+	}
+	got := try()
+	if !strings.HasPrefix(got, "(err {:id ") {
+		t.Fatalf("review = %s, want a pending", got)
+	}
+	id := strings.Fields(strings.TrimPrefix(got, "(err {:id "))[0]
+	resp, err := c.Message("wait", "", "["+id+"]", "")
+	if want := `(ok {:exit 0 :stderr "" :stdout "reviewed:\n+package a\n"})`; err != nil || resp.Value != want {
+		t.Errorf("wait %s = %s %v, want %s (try said %s)", id, resp.Value, err, want, got)
+	}
+}

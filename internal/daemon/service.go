@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -417,6 +418,13 @@ func (s *service) handle(ctx context.Context, m message) (reply string, faulted 
 	}
 	s.cur.chain = slices.Concat(m.chain, []string{s.name})
 	s.cur.user = m.user
+	s.cur.handOn = func(id int64) error {
+		if m.reply == nil {
+			return errors.New("only a call's handler can hand on: nobody waits for this message's answer")
+		}
+		return s.d.handOn(s.name, id, m)
+	}
+	defer func() { s.cur.handOn = nil }()
 	s.env.Dir = m.dir
 	r, err := s.env.Call(m.ctx, pos, f, args...)
 	if err != nil {

@@ -100,9 +100,11 @@ func (st *state) take(addr string, id int64) *asked {
 	return a
 }
 
-// answered is the result a message or job id was answered with.
+// answered is the result a message or job was answered with, by, for its
+// ticket.
 type answered struct {
-	id     int64
+	ticket
+	by     string
 	result puff.Value
 }
 
@@ -111,7 +113,7 @@ type answered struct {
 // an (on (whiff/done id result) ...), else a line in history. Anyone in
 // whiff wait for it gets it too, and so does a wait that comes later.
 func (d *daemon) answer(st *state, t ticket, by string, result puff.Value) {
-	st.answers = append(st.answers, answered{t.id, result})
+	st.answers = append(st.answers, answered{t, by, result})
 	if n := len(st.answers) - historySize; n > 0 {
 		st.answers = slices.Delete(st.answers, 0, n)
 	}
@@ -131,6 +133,57 @@ func (d *daemon) answer(st *state, t ticket, by string, result puff.Value) {
 		to = m.to(t.from)
 	}
 	st.record(entry{at: time.Now(), kind: m.kind(), user: m.user, from: by, to: to, args: m.args})
+}
+
+// handOn gives m's sender the answer to id, a job or ask by sent, as
+// (hand-on r) does: so a handler can hand its caller a job it started, as
+// if the caller had started it. The answer stays :user's only if both
+// chains are. An answer that came before the hand-on goes to both. The
+// error is for an id that isn't by's.
+func (d *daemon) handOn(by string, id int64, m message) error {
+	found := false
+	d.do(func(st *state) {
+		var t *ticket
+		if j := st.jobs[id]; j != nil {
+			t = &j.ticket
+		} else if i := slices.IndexFunc(st.asked, func(a *asked) bool { return a.id == id }); i >= 0 {
+			t = &st.asked[i].ticket
+		}
+		if t != nil && t.from == by {
+			found = true
+			t.from, t.dir, t.user = m.from, m.dir, t.user && m.user
+			return
+		}
+		for i, a := range slices.Backward(st.answers) {
+			if a.id == id && a.from == by {
+				found = true
+				// Handed on once: by can't hand it on again.
+				st.answers[i].from = m.from
+				d.answer(st, ticket{id: id, from: m.from, dir: m.dir, user: a.user && m.user}, a.by, a.result)
+				return
+			}
+		}
+	})
+	if !found {
+		return fmt.Errorf("no job or ask %d of :%s's to hand on", id, by)
+	}
+	return nil
+}
+
+// pendingID is the id of r if it is (err {:kind :pending :id n}).
+func pendingID(r puff.Value) (int64, bool) {
+	t, ok := r.(puff.Tag)
+	if !ok || t.Name() != "err" || t.Len() != 1 {
+		return 0, false
+	}
+	e, ok := t.At(0).(puff.Map)
+	if !ok {
+		return 0, false
+	}
+	kind, _ := e.Get(puff.Keyword("kind"))
+	id, _ := e.Get(puff.Keyword("id"))
+	n, ok := id.(puff.Int)
+	return int64(n), ok && puff.Equal(kind, puff.Keyword("pending"))
 }
 
 // reply answers the message id with result for by, a service that can

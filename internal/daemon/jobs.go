@@ -34,7 +34,7 @@ func (d *daemon) jobsService() *service {
 	return &service{name: "jobs", d: d, cur: caller{addr: "jobs"},
 		fns: map[string]handler{
 			"run": {params: []string{"cmd", "opts"}, optional: 1, mark: puff.MarkWrite, marked: true, native: d.runJob,
-				doc: "Run cmd, [program args...], here; pending now, {:exit :stdout :stderr} when done. Option: :timeout (1h)."},
+				doc: "Run cmd, [program args...], here; pending now, {:exit :stdout :stderr} when done. Options: :timeout (1h); :stdin, a string."},
 			"list": {mark: puff.MarkRead, marked: true, native: d.listJobs,
 				doc: "The running jobs, each {:id :cmd :cwd :from}."},
 			"cancel": {params: []string{"id"}, mark: puff.MarkWrite, marked: true, native: d.cancelJob,
@@ -56,6 +56,7 @@ func (d *daemon) runJob(m message, args []puff.Value) (puff.Value, error) {
 		return nil, fmt.Errorf(`want a command like ["go" "test"], got %s`, puff.Print(args[0]))
 	}
 	timeout := defaultJobTimeout
+	var stdin *string
 	if len(args) > 1 {
 		opts, ok := args[1].(puff.Map)
 		if !ok {
@@ -63,11 +64,16 @@ func (d *daemon) runJob(m message, args []puff.Value) (puff.Value, error) {
 		}
 		for i := range opts.Len() {
 			e := opts.Entry(i)
-			t, ok := e.Val.(puff.Duration)
-			if !puff.Equal(e.Key, puff.Keyword("timeout")) || !ok || t <= 0 {
-				return nil, fmt.Errorf("want {:timeout d}, a positive duration, got %s", puff.Print(opts))
+			t, isDur := e.Val.(puff.Duration)
+			s, isStr := e.Val.(puff.String)
+			switch {
+			case puff.Equal(e.Key, puff.Keyword("timeout")) && isDur && t > 0:
+				timeout = time.Duration(t)
+			case puff.Equal(e.Key, puff.Keyword("stdin")) && isStr:
+				stdin = (*string)(&s)
+			default:
+				return nil, fmt.Errorf("want {:timeout d :stdin s}, a positive duration and a string, got %s", puff.Print(opts))
 			}
-			timeout = time.Duration(t)
 		}
 	}
 
@@ -76,6 +82,9 @@ func (d *daemon) runJob(m message, args []puff.Value) (puff.Value, error) {
 	cmd.Dir = m.dir
 	var stdout, stderr tail
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if stdin != nil {
+		cmd.Stdin = strings.NewReader(*stdin)
+	}
 	// Its own process group, so a cancel or timeout kills what it started too.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }

@@ -115,7 +115,7 @@ func TestLs(t *testing.T) {
 :jobs
   (cancel id)       :write  Kill job id and everything it started.
   (list)            :read   The running jobs, each {:id :cmd :cwd :from}.
-  (run cmd [opts])  :write  Run cmd, [program args...], here; pending now, {:exit :stdout :stderr} when done. Option: :timeout (1h).
+  (run cmd [opts])  :write  Run cmd, [program args...], here; pending now, {:exit :stdout :stderr} when done. Options: :timeout (1h); :stdin, a string.
 warning: ` + greet + `:5:15: :nobody/x doesn't exist
 warning: ` + greet + `:5:32: :hello2 doesn't exist
 `

@@ -14,3 +14,6 @@ Or try one without installing it: `whiff try services/git.puff status`.
   branch's, `checks-of 12`), through the gh CLI, as you're logged in to it.
 - `todo`: the checkbox items in `TODO.md` in the caller's directory (`items`,
   `open`), `add text` and `done line`. The file is its state.
+- `reviewer`: `review` has Claude review the uncommitted changes (`git diff
+  HEAD`) with no tools; it answers at once with a pending id, and `whiff wait
+  <id>` gives the review. Needs the claude CLI.

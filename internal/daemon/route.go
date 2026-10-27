@@ -75,6 +75,9 @@ type caller struct {
 	// stop is closed when the service version acting stops; nil for a
 	// client.
 	stop <-chan struct{}
+	// handOn gives the sender of the message being handled the answer to
+	// a job or ask; nil outside a handler.
+	handOn func(id int64) error
 }
 
 // state is what the route goroutine owns.
@@ -204,6 +207,21 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 			Doc: "Answer the message id in this service's inbox with result: its sender gets [:whiff/done id result]. (err {:kind :no-id}) if it isn't there.",
 			Fn: func(_ *puff.Call, args []puff.Value) (puff.Value, error) {
 				return d.reply(cur.addr, cur.user, args[0], args[1])
+			}},
+		{Name: "hand-on", Args: "r", Mark: puff.MarkRead,
+			Doc: "r; if r is the pending of a job or ask this service started, its answer goes to the caller of the message being handled instead. (err {:kind :no-id}) for another pending.",
+			Fn: func(_ *puff.Call, args []puff.Value) (puff.Value, error) {
+				if cur.handOn == nil {
+					return nil, errors.New("only a service's handler can hand on")
+				}
+				id, ok := pendingID(args[0])
+				if !ok {
+					return args[0], nil
+				}
+				if err := cur.handOn(id); err != nil {
+					return puff.Errorf("no-id", "%v", err), nil
+				}
+				return args[0], nil
 			}},
 		{Name: "publish", Args: "topic v", Mark: puff.MarkWrite,
 			Doc: "Send v to every service subscribed to topic, a keyword: :done at once.",
