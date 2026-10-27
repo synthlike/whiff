@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -10,6 +11,8 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"syscall"
 
 	"github.com/synthlike/whiff/internal/daemon"
@@ -27,6 +30,7 @@ const usage = `usage:
   whiff reply id value            answer a message waiting for a reply
   whiff wait id                   print the answer to a pending message or job, waiting for it
   whiff eval code                 evaluate puff code in the daemon and print its value
+  whiff repl                      evaluate forms as they're typed, in the daemon, keeping what they define
   whiff history                   print every message, newest first
   whiff ls                        list every address's functions and their marks
   whiff stop                      stop the daemon
@@ -36,6 +40,9 @@ Each arg of call, send, pub, try and reply is read as a puff value, or taken as
 a string if it doesn't read as one: 12 is 12, ann is "ann", '"12"' is "12".
 A reply that isn't (ok v) or (err e) is sent as (ok value).
 `
+
+// stdin is what whiff repl reads; a var so tests can type into it.
+var stdin io.Reader = os.Stdin
 
 func main() {
 	home, err := os.UserHomeDir()
@@ -68,6 +75,8 @@ func run(args []string, dir, services string, stdout, stderr io.Writer) int {
 		}
 		inbox := func(c *rpc.Client) (string, error) { return c.Inbox(addr) }
 		return text(dir, inbox, stdout, stderr)
+	case len(args) == 1 && args[0] == "repl":
+		return repl(dir, stdin, stdout, stderr)
 	case len(args) == 2 && args[0] == "eval":
 		return eval(dir, args[1], stdout, stderr)
 	case len(args) == 1 && args[0] == "history":
@@ -259,6 +268,97 @@ func eval(dir, src string, stdout, stderr io.Writer) int {
 		return 1
 	case resp.Value != "":
 		fmt.Fprintln(stdout, resp.Value)
+	}
+	return 0
+}
+
+// repl reads puff from in a line at a time and evaluates it in the daemon,
+// in one env for the session, printing each value; it keeps reading while a
+// form or string is still open. An interrupt cancels the evaluation, or ends
+// the REPL at its prompt.
+func repl(dir string, in io.Reader, stdout, stderr io.Writer) int {
+	interactive := false
+	if f, ok := in.(*os.File); ok {
+		fi, err := f.Stat()
+		interactive = err == nil && fi.Mode()&os.ModeCharDevice != 0
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(stderr, "whiff: %v\n", err)
+		return 1
+	}
+	c := connect(dir, stderr)
+	if c == nil {
+		return 1
+	}
+	defer c.Close()
+
+	var running atomic.Bool
+	interrupts := make(chan os.Signal, 1)
+	signal.Notify(interrupts, os.Interrupt)
+	defer signal.Stop(interrupts)
+	go func() {
+		for range interrupts {
+			if running.Load() {
+				c.Cancel()
+				continue
+			}
+			fmt.Fprintln(stdout)
+			os.Exit(130)
+		}
+	}()
+	// evalInput reports whether the daemon is still there.
+	evalInput := func(src string) bool {
+		running.Store(true)
+		resp, err := c.Repl(src, wd)
+		running.Store(false)
+		if err != nil {
+			fmt.Fprintf(stderr, "whiff: %v\n", err)
+			return false
+		}
+		io.WriteString(stdout, resp.Out)
+		switch {
+		case resp.Error != "":
+			fmt.Fprintln(stderr, resp.Error)
+		case resp.Value != "":
+			fmt.Fprintln(stdout, resp.Value)
+		}
+		return true
+	}
+
+	sc := bufio.NewScanner(in)
+	var buf strings.Builder
+	for {
+		if interactive {
+			if buf.Len() == 0 {
+				fmt.Fprint(stdout, "whiff> ")
+			} else {
+				fmt.Fprint(stdout, "   ... ")
+			}
+		}
+		if !sc.Scan() {
+			break
+		}
+		buf.WriteString(sc.Text())
+		buf.WriteByte('\n')
+		var perr *puff.Error
+		if _, err := puff.Read("", buf.String()); errors.As(err, &perr) && perr.Unclosed {
+			continue
+		}
+		if !evalInput(buf.String()) {
+			return 1
+		}
+		buf.Reset()
+	}
+	if interactive {
+		fmt.Fprintln(stdout)
+	}
+	if err := sc.Err(); err != nil {
+		fmt.Fprintf(stderr, "whiff: %v\n", err)
+		return 1
+	}
+	if buf.Len() > 0 && !evalInput(buf.String()) {
+		return 1
 	}
 	return 0
 }

@@ -23,13 +23,28 @@ func tempDir(t *testing.T) string {
 }
 
 // start runs a daemon on dir, with the services in dir/services, and
-// returns Run's result.
+// returns Run's result. The test's cleanup stops it and waits until it has.
 func start(t *testing.T, dir string) <-chan error {
 	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
 	done := make(chan error, 1)
-	go func() { done <- Run(ctx, dir, filepath.Join(dir, "services")) }()
+	stopped := make(chan struct{})
+	go func() {
+		done <- Run(ctx, dir, filepath.Join(dir, "services"))
+		close(stopped)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-stopped
+	})
 	return done
+}
+
+// set sets *v to x for the test and restores it once the test's daemons
+// have stopped, so none reads it as it changes: call it before start.
+func set[T any](t *testing.T, v *T, x T) {
+	old := *v
+	*v = x
+	t.Cleanup(func() { *v = old })
 }
 
 // dial connects to the daemon on dir, waiting for it to listen.

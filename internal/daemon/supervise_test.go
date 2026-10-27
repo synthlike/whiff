@@ -9,8 +9,7 @@ import (
 )
 
 func TestReload(t *testing.T) {
-	defer func(d time.Duration) { pollInterval = d }(pollInterval)
-	pollInterval = 10 * time.Millisecond
+	set(t, &pollInterval, 10*time.Millisecond)
 
 	dir := tempDir(t)
 	services := filepath.Join(dir, "services")

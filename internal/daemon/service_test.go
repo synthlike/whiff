@@ -23,8 +23,7 @@ func writeServices(t *testing.T, dir string, files map[string]string) {
 }
 
 func TestCall(t *testing.T) {
-	defer func(d time.Duration) { defaultCallTimeout = d }(defaultCallTimeout)
-	defaultCallTimeout = 200 * time.Millisecond
+	set(t, &defaultCallTimeout, 200*time.Millisecond)
 
 	dir := tempDir(t)
 	writeServices(t, dir, map[string]string{
@@ -238,8 +237,7 @@ func TestLoadService(t *testing.T) {
 		{"fault", `(srv fault (def x (+ 1 1.0)))`, ":1:19: +: can't add int and float"},
 		{"forever", `(srv forever (def x (loop [] (recur))))`, "cancelled"},
 	}
-	defer func(d time.Duration) { loadTimeout = d }(loadTimeout)
-	loadTimeout = 100 * time.Millisecond
+	set(t, &loadTimeout, 100*time.Millisecond)
 	d := &daemon{ctx: context.Background()}
 	for _, tt := range tests {
 		path := write(tt.name, tt.src)

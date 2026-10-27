@@ -127,6 +127,12 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 	l := newLink(conn)
 	var held *service // the address the client holds, if any
 	var sub *watcher  // its subscription, if any
+	// The client's REPL keeps its env across requests, acting for cur.
+	var repl *puff.Env
+	var replOut strings.Builder
+	cur := &caller{}
+	// cancel stops the evaluation running for the client, if any.
+	var cancelEval atomic.Pointer[context.CancelFunc]
 	defer func() {
 		close(l.gone)
 		if held != nil {
@@ -168,6 +174,13 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 				l.answered(req)
 				continue
 			}
+			// So does a cancel, which stops the evaluation in progress.
+			if req.Op == "cancel" {
+				if c := cancelEval.Load(); c != nil {
+					(*c)()
+				}
+				continue
+			}
 			select {
 			case reqs <- req:
 			case <-ctx.Done():
@@ -191,8 +204,21 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 		switch req.Op {
 		case "hello":
 			resp.Version = rpc.Version
-		case "eval":
-			resp = d.eval(ctx, from, req)
+		case "eval", "repl":
+			ectx, cancel := context.WithCancel(ctx)
+			cancelEval.Store(&cancel)
+			if req.Op == "eval" {
+				resp = d.eval(ectx, from, req)
+			} else {
+				cur.addr, cur.user = from, !req.Agent
+				if repl == nil {
+					repl = d.newEnv(&replOut, cur)
+				}
+				resp = d.evalIn(ectx, repl, &replOut, "repl", req)
+				replOut.Reset()
+			}
+			cancelEval.Store(nil)
+			cancel()
 		case "call", "send", "pub":
 			resp = d.message(ctx, from, req)
 		case "try":
@@ -275,8 +301,14 @@ func (d *daemon) message(ctx context.Context, from string, req rpc.Request) rpc.
 func (d *daemon) eval(ctx context.Context, from string, req rpc.Request) rpc.Response {
 	var out strings.Builder
 	env := d.newEnv(&out, &caller{addr: from, user: !req.Agent})
+	return d.evalIn(ctx, env, &out, "eval", req)
+}
+
+// evalIn evaluates req.Src, named file in errors, in env, which prints to
+// out, in the client's directory.
+func (d *daemon) evalIn(ctx context.Context, env *puff.Env, out *strings.Builder, file string, req rpc.Request) rpc.Response {
 	env.Dir = req.Dir
-	v, err := env.Load(ctx, "eval", req.Src)
+	v, err := env.Load(ctx, file, req.Src)
 	resp := rpc.Response{Out: out.String()}
 	if err != nil {
 		var fault *puff.Fault

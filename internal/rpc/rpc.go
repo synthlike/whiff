@@ -18,14 +18,14 @@ import (
 
 // Version is the protocol version. Bump it when a message changes; hello and
 // stop must stay readable by every version, so an old daemon can be stopped.
-const Version = 10
+const Version = 11
 
 // Request is a client's message to the daemon. The daemon answers each with
-// a Response, in order, except an answer, which has none.
+// a Response, in order, except an answer or a cancel, which have none.
 type Request struct {
-	Op      string `json:"op"`                // "hello", "eval", "call", "send", "pub", "sub", "try", "inbox", "reply", "wait", "claim", "answer", "history", "ls" or "stop"
+	Op      string `json:"op"`                // "hello", "eval", "repl", "cancel", "call", "send", "pub", "sub", "try", "inbox", "reply", "wait", "claim", "answer", "history", "ls" or "stop"
 	Version int    `json:"version,omitempty"` // hello: the client's protocol
-	Src     string `json:"src,omitempty"`     // eval: puff code; claim: the interface, (on ...) and (ask ...) forms without bodies; try: the service file
+	Src     string `json:"src,omitempty"`     // eval, repl: puff code; claim: the interface, (on ...) and (ask ...) forms without bodies; try: the service file
 	File    string `json:"file,omitempty"`    // try: the service file's name, for its errors
 	Target  string `json:"target,omitempty"`  // call, send: address/fn; pub: the topic; inbox, claim: the address; try: the fn
 	Args    string `json:"args,omitempty"`    // call, send, pub, try: a printed puff vector, of one value for pub; reply: [id result]; wait: [id]; answer: the printed Result; sub: the topics, a printed vector of keywords, [] for every topic
@@ -191,6 +191,18 @@ func (c *Client) Eval(src, dir string) (Response, error) {
 	return resp, err
 }
 
+// Repl evaluates src like Eval, but in this connection's own env, which
+// keeps what earlier Repl calls defined.
+func (c *Client) Repl(src, dir string) (Response, error) {
+	var resp Response
+	err := c.roundTrip(Request{Op: "repl", Src: src, Dir: dir}, &resp)
+	return resp, err
+}
+
+// Cancel stops the Eval or Repl this connection is waiting for, which then
+// returns its error; it does nothing if there is none.
+func (c *Client) Cancel() error { return c.conn.Send(Request{Op: "cancel"}) }
+
 // Message calls or sends (op) target, address/fn, with args, a printed puff
 // vector, from dir; publishes args's one value to the topic target (op
 // "pub"); or answers a message in an inbox, with args [id result] (op
@@ -321,7 +333,7 @@ func (c *Client) roundTrip(req Request, resp *Response) error {
 	case <-c.done:
 		return fmt.Errorf("whiff daemon: %w", c.err)
 	}
-	if resp.Error != "" && req.Op != "eval" && req.Op != "try" {
+	if resp.Error != "" && req.Op != "eval" && req.Op != "repl" && req.Op != "try" {
 		return errors.New(resp.Error)
 	}
 	return nil

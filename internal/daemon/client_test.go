@@ -10,8 +10,7 @@ import (
 )
 
 func TestClient(t *testing.T) {
-	defer func(d time.Duration) { defaultCallTimeout = d }(defaultCallTimeout)
-	defaultCallTimeout = 500 * time.Millisecond
+	set(t, &defaultCallTimeout, 500*time.Millisecond)
 
 	dir := tempDir(t)
 	writeServices(t, dir, map[string]string{

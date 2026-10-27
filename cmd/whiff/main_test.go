@@ -51,10 +51,13 @@ func TestRun(t *testing.T) {
 		code             int
 		wantOut, wantErr string
 		outHas           string // instead of wantOut, a line stdout has
+		stdin            string // what whiff repl reads
 	}{
 		{name: "not running", args: []string{"stop"}, wantErr: "whiff isn't running\n"},
 		{name: "eval starts the daemon", args: []string{"eval", `(io/println "hi") (+ 1 2)`}, wantOut: "hi\n3\n"},
 		{name: "eval a call", args: []string{"eval", `(call :greet/hello "ann")`}, wantOut: "(ok \"hello, ann\")\n"},
+		{name: "repl", args: []string{"repl"}, stdin: "(def (greet n) (call :greet/hello n))\n(greet\n  \"rae\")\n(+ 1 1.0)\n(io/println \"still\")\n",
+			wantOut: "(ok \"hello, rae\")\nstill\n(ok :done)\n", wantErr: "repl:1:1: +: can't add int and float\n"},
 		{name: "read error", args: []string{"eval", "(a"}, code: 1, wantErr: "eval:1:1: no closing ')'\n"},
 		{name: "fault", args: []string{"eval", "(+ 1 1.0)"}, code: 70, wantErr: "eval:1:1: +: can't add int and float\n"},
 		{name: "call", args: []string{"call", "greet/hello", "bob"}, wantOut: "hello, bob\n"},
@@ -87,6 +90,7 @@ func TestRun(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var stdout, stderr strings.Builder
+			stdin = strings.NewReader(tt.stdin)
 			code := run(tt.args, dir, services, &stdout, &stderr)
 			out := stdout.String()
 			if tt.outHas != "" && strings.Contains(out, tt.outHas) {
