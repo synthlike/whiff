@@ -1,0 +1,79 @@
+; todo: the checkbox items in TODO.md, in the caller's directory. The file
+; is its state, so editing it by hand is fine.
+;   whiff call todo/open
+;   whiff call todo/add "write the docs"
+;   whiff call todo/done 12
+
+(srv todo
+  (def file "TODO.md")
+
+  ; An item is "- [ ] text" or "* [x] text", at any indent. Lines indented
+  ; under it, up to a blank line, continue its text.
+  (def item-re "^\\s*[-*] \\[([ xX])\\] (.*)$")
+  (def heading-re "^#+\\s+(.*)$")
+
+  ; continue adds line to the text of the last item.
+  (def (continue items line)
+    (match (vector/last items)
+      [(some it)
+       (vector/append (vector/slice items 0 (- (vector/length items) 1))
+         (match it [{:text t} (map/set it :text (string/concat t " " (string/trim line)))]))]))
+
+  ; step reads the next line into st: {:n :section :items :in-item}.
+  (def (step st line)
+    (match st
+      [{:n n :section section :items items :in-item in-item}
+       (let [n (+ n 1)
+             next (map/set st :n n)]
+         (match [(regex/groups line item-re) (regex/groups line heading-re)]
+           [[(some [mark text]) _]
+            (map/merge next {:in-item #t :items (vector/append items
+              {:line n :done (not (= mark " ")) :text (string/trim text) :section section})})]
+           [[_ (some [h])] (map/merge next {:in-item #f :section (string/trim h)})]
+           [_ when (and in-item (string/starts-with? line "  ") (not (= (string/trim line) "")))
+            (map/set next :items (continue items line))]
+           [_ (map/set next :in-item #f)]))]))
+
+  (def (parse text)
+    (match (vector/reduce (string/lines text) {:n 0 :section "" :items [] :in-item #f} step)
+      [{:items items} items]))
+
+  (def (read) (file/read-text file))
+
+  ; append is old, the file's text, with a new item for text at the end.
+  (def (append old text)
+    (let [sep (if (or (= old "") (string/ends-with? old "\n")) "" "\n")]
+      (string/concat old sep "- [ ] " (string/trim text) "\n")))
+
+  (def (write-new new)
+    (do (try (file/write-atomic file new))
+        (ok (vector/length (string/lines new)))))
+
+  (on (items)
+    "Every item in TODO.md, in order: {:line :done :text :section}, where :line counts from 1 and :section is the heading it is under, \"\" before any."
+    (ok (parse (try (read)))))
+
+  (on (open)
+    "The items not done yet, as items gives them."
+    (ok (vector/filter (parse (try (read))) (fn (it) (match it [{:done d} (not d)])))))
+
+  (on (add text)
+    "Adds \"- [ ] text\" at the end of TODO.md, creating the file if there isn't one; (ok line), the item's line."
+    (match (read)
+      [(ok old) (write-new (append old text))]
+      [(err {:kind :not-found}) (write-new (append "" text))]
+      [e e]))
+
+  (on (done line)
+    "Ticks the open item at line; (err {:kind :no-item}) if there isn't one there."
+    (let [text (try (read))
+          lines (string/lines text)]
+      (match (vector/find (parse text) (fn (it) (match it [{:line l :done d} (and (= l line) (not d))])))
+        [(none) (err {:kind :no-item :message (string/concat "no open item at line " (value/to-string line))})]
+        [(some _)
+         (let [l (match (vector/get lines (- line 1)) [(some l) l])
+               i (match (string/index l "[ ]") [(some i) i])
+               ticked (string/concat (string/slice l 0 i) "[x]" (string/slice l (+ i 3)))
+               new (vector/concat (vector/slice lines 0 (- line 1)) [ticked] (vector/slice lines line))]
+           (do (try (file/write-atomic file (string/concat (string/join new "\n") "\n")))
+               (ok :done)))]))))

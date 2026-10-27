@@ -133,3 +133,79 @@ esac
 		}
 	}
 }
+
+// TestTodoService tries services/todo.puff on a TODO.md in a scratch
+// directory.
+func TestTodoService(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "..", "services", "todo.puff"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := tempDir(t)
+	start(t, dir)
+	c := dial(t, dir)
+	work := filepath.Join(dir, "work")
+	os.Mkdir(work, 0o700)
+	todo := filepath.Join(work, "TODO.md")
+	if err := os.WriteFile(todo, []byte(`# TODO
+
+- [ ] under the title
+
+## v1
+
+- [x] done
+- [ ] a long one,
+      on two lines
+  - [ ] nested
+* [X] star
+- not an item
+  not a continuation
+
+## v2
+
+- [ ] last`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	call := func(fn, args, dir string) string {
+		t.Helper()
+		resp, err := c.Try("todo.puff", string(src), fn, args, dir)
+		if err != nil || resp.Error != "" {
+			t.Fatalf("try todo %s %s: %v %s", fn, args, err, resp.Error)
+		}
+		return resp.Value
+	}
+	tests := []struct{ fn, args, want string }{
+		{"items", "[]", `(ok [{:done #f :line 3 :section "TODO" :text "under the title"} ` +
+			`{:done #t :line 7 :section "v1" :text "done"} ` +
+			`{:done #f :line 8 :section "v1" :text "a long one, on two lines"} ` +
+			`{:done #f :line 10 :section "v1" :text "nested"} ` +
+			`{:done #t :line 11 :section "v1" :text "star"} ` +
+			`{:done #f :line 17 :section "v2" :text "last"}])`},
+		{"add", `["  new one "]`, `(ok 18)`},
+		{"done", "[8]", `(ok :done)`},
+		{"done", "[8]", `(err {:kind :no-item :message "no open item at line 8"})`},
+		{"done", "[12]", `(err {:kind :no-item :message "no open item at line 12"})`},
+		{"open", "[]", `(ok [{:done #f :line 3 :section "TODO" :text "under the title"} ` +
+			`{:done #f :line 10 :section "v1" :text "nested"} ` +
+			`{:done #f :line 17 :section "v2" :text "last"} ` +
+			`{:done #f :line 18 :section "v2" :text "new one"}])`},
+		{"add", `["first"]`, `(ok 1)`}, // in dir, which has no TODO.md
+	}
+	for i, tt := range tests {
+		in := work
+		if i == len(tests)-1 {
+			in = dir
+		}
+		if got := call(tt.fn, tt.args, in); got != tt.want {
+			t.Errorf("todo/%s %s =\n%s\nwant\n%s", tt.fn, tt.args, got, tt.want)
+		}
+	}
+	b, _ := os.ReadFile(todo)
+	if want := "- [x] a long one,\n      on two lines\n"; !strings.Contains(string(b), want) || !strings.HasSuffix(string(b), "- [ ] last\n- [ ] new one\n") {
+		t.Errorf("TODO.md after add and done:\n%s", b)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "TODO.md")); string(b) != "- [ ] first\n" {
+		t.Errorf("a new TODO.md = %q", b)
+	}
+}
