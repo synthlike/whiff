@@ -269,7 +269,7 @@ echo "reviewed:"; grep '^+[^+]'
 	}
 	id := strings.Fields(strings.TrimPrefix(got, "(err {:id "))[0]
 	resp, err := c.Message("wait", "", "["+id+"]", "")
-	if want := `(ok {:exit 0 :stderr "" :stdout "reviewed:\n+package a\n"})`; err != nil || resp.Value != want {
+	if want := `(ok "reviewed:\n+package a\n")`; err != nil || resp.Value != want {
 		t.Errorf("wait %s = %s %v, want %s (try said %s)", id, resp.Value, err, want, got)
 	}
 }

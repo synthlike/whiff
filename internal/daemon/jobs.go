@@ -34,7 +34,7 @@ func (d *daemon) jobsService() *service {
 	return &service{name: "jobs", d: d, cur: caller{addr: "jobs"},
 		fns: map[string]handler{
 			"run": {params: []string{"cmd", "opts"}, optional: 1, mark: puff.MarkWrite, marked: true, native: d.runJob,
-				doc: "Run cmd, [program args...], here; pending now, {:exit :stdout :stderr} when done. Options: :timeout (1h); :stdin, a string."},
+				doc: "Run cmd, [program args...], here; pending now, {:exit :stdout :stderr} when done. Options: :timeout (1h); :stdin, a string; :as :text answers (ok stdout), or (err {:kind :exit}) unless it exits 0."},
 			"list": {mark: puff.MarkRead, marked: true, native: d.listJobs,
 				doc: "The running jobs, each {:id :cmd :cwd :from}."},
 			"cancel": {params: []string{"id"}, mark: puff.MarkWrite, marked: true, native: d.cancelJob,
@@ -57,6 +57,7 @@ func (d *daemon) runJob(m message, args []puff.Value) (puff.Value, error) {
 	}
 	timeout := defaultJobTimeout
 	var stdin *string
+	text := false // :as :text
 	if len(args) > 1 {
 		opts, ok := args[1].(puff.Map)
 		if !ok {
@@ -71,8 +72,10 @@ func (d *daemon) runJob(m message, args []puff.Value) (puff.Value, error) {
 				timeout = time.Duration(t)
 			case puff.Equal(e.Key, puff.Keyword("stdin")) && isStr:
 				stdin = (*string)(&s)
+			case puff.Equal(e.Key, puff.Keyword("as")) && puff.Equal(e.Val, puff.Keyword("text")):
+				text = true
 			default:
-				return nil, fmt.Errorf("want {:timeout d :stdin s}, a positive duration and a string, got %s", puff.Print(opts))
+				return nil, fmt.Errorf("want {:timeout d :stdin s :as :text}, a positive duration and a string, got %s", puff.Print(opts))
 			}
 		}
 	}
@@ -117,6 +120,14 @@ func (d *daemon) runJob(m message, args []puff.Value) (puff.Value, error) {
 				puff.Entry{Key: puff.Keyword("stderr"), Val: puff.String(stderr.String())},
 			)
 			r = puff.Ok(out)
+			if code := cmd.ProcessState.ExitCode(); text && code == 0 {
+				r = puff.Ok(puff.String(stdout.String()))
+			} else if text {
+				e := puff.Errorf("exit", "job %d exited %d", j.id, code).(puff.Tag).At(0).(puff.Map)
+				e, _ = e.With(puff.Keyword("exit"), puff.Int(code))
+				e, _ = e.With(puff.Keyword("stderr"), puff.String(stderr.String()))
+				r = puff.NewTag("err", e)
+			}
 		default:
 			r = puff.Errorf("fault", "job %d: %v", j.id, err)
 		}
