@@ -22,7 +22,7 @@ const usage = `usage:
   whiff send address/fn args...   send a message without waiting
   whiff pub topic value           publish value to the topic's subscribers
   whiff try file.puff fn args...  load a service file, call its function once and unload it
-  whiff inbox address             list the messages waiting for a reply
+  whiff inbox [address]           list the messages waiting for a reply: yours, :me's, by default
   whiff reply id value            answer a message waiting for a reply
   whiff wait id                   print the answer to a pending message or job, waiting for it
   whiff eval code                 evaluate puff code in the daemon and print its value
@@ -58,8 +58,12 @@ func run(args []string, dir, services string, stdout, stderr io.Writer) int {
 		return message(dir, args[0], args[1], args[2:], stdout, stderr)
 	case len(args) == 3 && args[0] == "reply", len(args) == 2 && args[0] == "wait":
 		return message(dir, args[0], "", args[1:], stdout, stderr)
-	case len(args) == 2 && args[0] == "inbox":
-		inbox := func(c *rpc.Client) (string, error) { return c.Inbox(args[1]) }
+	case len(args) <= 2 && len(args) >= 1 && args[0] == "inbox":
+		addr := "me"
+		if len(args) == 2 {
+			addr = args[1]
+		}
+		inbox := func(c *rpc.Client) (string, error) { return c.Inbox(addr) }
 		return text(dir, inbox, stdout, stderr)
 	case len(args) == 2 && args[0] == "eval":
 		return eval(dir, args[1], stdout, stderr)

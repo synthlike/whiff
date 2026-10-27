@@ -145,5 +145,5 @@ func TestJobs(t *testing.T) {
 	}
 
 	// A service file can't take :jobs's address.
-	inHistory(`jobs.puff:1:1: :jobs is whiff's own service; rename the file`)
+	inHistory(`jobs.puff:1:1: :jobs is whiff's own address; rename the file`)
 }

@@ -116,6 +116,9 @@ func TestLs(t *testing.T) {
   (cancel id)       :write  Kill job id and everything it started.
   (list)            :read   The running jobs, each {:id :cmd :cwd :from}.
   (run cmd [opts])  :write  Run cmd, [program args...], here; pending now, {:exit :stdout :stderr} when done. Options: :timeout (1h); :stdin, a string; :as :text answers (ok stdout), or (err {:kind :exit}) unless it exits 0.
+:me
+  ask (ask question)  :read  Asks you question: pending now, your answer when you reply.
+  ask (tell text)     :read  Tells you text, a report: it waits in your inbox until you reply, which dismisses it.
 warning: ` + greet + `:5:15: :nobody/x doesn't exist
 warning: ` + greet + `:5:32: :hello2 doesn't exist
 `
