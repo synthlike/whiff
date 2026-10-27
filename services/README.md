@@ -17,3 +17,7 @@ Or try one without installing it: `whiff try services/git.puff status`.
 - `reviewer`: `review` has Claude review the uncommitted changes (`git diff
   HEAD`) with no tools; it answers at once with a pending id, and `whiff wait
   <id>` gives the review. Needs the claude CLI.
+- `assistant`: a resident agent. `tell text` wakes Claude for one turn of
+  the same session, with no tools; its answer lands in your inbox (`whiff
+  inbox`), and replying to it is your next message. Its home is
+  `~/.whiff/agents/assistant`. Needs the claude CLI.

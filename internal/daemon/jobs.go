@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"syscall"
@@ -34,7 +35,7 @@ func (d *daemon) jobsService() *service {
 	return &service{name: "jobs", d: d, cur: caller{addr: "jobs"},
 		fns: map[string]handler{
 			"run": {params: []string{"cmd", "opts"}, optional: 1, mark: puff.MarkWrite, marked: true, native: d.runJob,
-				doc: "Run cmd, [program args...], here; pending now, {:exit :stdout :stderr} when done. Options: :timeout (1h); :stdin, a string; :as :text answers (ok stdout), or (err {:kind :exit}) unless it exits 0."},
+				doc: "Run cmd, [program args...], here; pending now, {:exit :stdout :stderr} when done. Options: :timeout (1h); :stdin, a string; :dir, where it runs; :as :text answers (ok stdout), or (err {:kind :exit}) unless it exits 0."},
 			"list": {mark: puff.MarkRead, marked: true, native: d.listJobs,
 				doc: "The running jobs, each {:id :cmd :cwd :from}."},
 			"cancel": {params: []string{"id"}, mark: puff.MarkWrite, marked: true, native: d.cancelJob,
@@ -58,6 +59,7 @@ func (d *daemon) runJob(m message, args []puff.Value) (puff.Value, error) {
 	timeout := defaultJobTimeout
 	var stdin *string
 	text := false // :as :text
+	dir := m.dir
 	if len(args) > 1 {
 		opts, ok := args[1].(puff.Map)
 		if !ok {
@@ -72,17 +74,22 @@ func (d *daemon) runJob(m message, args []puff.Value) (puff.Value, error) {
 				timeout = time.Duration(t)
 			case puff.Equal(e.Key, puff.Keyword("stdin")) && isStr:
 				stdin = (*string)(&s)
+			case puff.Equal(e.Key, puff.Keyword("dir")) && isStr:
+				dir = string(s)
+				if !filepath.IsAbs(dir) {
+					dir = filepath.Join(m.dir, dir)
+				}
 			case puff.Equal(e.Key, puff.Keyword("as")) && puff.Equal(e.Val, puff.Keyword("text")):
 				text = true
 			default:
-				return nil, fmt.Errorf("want {:timeout d :stdin s :as :text}, a positive duration and a string, got %s", puff.Print(opts))
+				return nil, fmt.Errorf("want {:timeout d :stdin s :dir path :as :text}, a positive duration and strings, got %s", puff.Print(opts))
 			}
 		}
 	}
 
 	ctx, cancel := context.WithTimeout(d.ctx, timeout)
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	cmd.Dir = m.dir
+	cmd.Dir = dir
 	var stdout, stderr tail
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if stdin != nil {

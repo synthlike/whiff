@@ -273,3 +273,86 @@ echo "reviewed:"; grep '^+[^+]'
 		t.Errorf("wait %s = %s %v, want %s (try said %s)", id, resp.Value, err, want, got)
 	}
 }
+
+// TestAssistantService runs services/assistant.puff, installed, with a
+// fake claude on PATH that says whether it starts or resumes the session
+// and echoes the message.
+func TestAssistantService(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "..", "services", "assistant.puff"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := tempDir(t)
+	bin := filepath.Join(dir, "bin")
+	os.Mkdir(bin, 0o700)
+	fake := `#!/bin/sh
+[ "$1 $2 $3" = "-p --tools " ] || { echo "want no tools, got $*" >&2; exit 9; }
+case "$*" in *--session-id*) mode=new ;; *--resume*) mode=resume ;; esac
+msg=$(cat)
+case "$msg" in slow) sleep 1 ;; fail) echo "it broke" >&2; exit 1 ;; esac
+echo "$mode in $(basename "$PWD"): $msg"
+`
+	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(fake), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("HOME", dir)
+	writeServices(t, dir, map[string]string{"assistant": string(src)})
+	start(t, dir)
+	c := dial(t, dir)
+
+	tell := func(text string) string {
+		t.Helper()
+		resp, err := c.Eval(`(call :assistant/tell "`+text+`")`, "")
+		if err != nil || resp.Error != "" {
+			t.Fatalf("tell %s: %v %s", text, err, resp.Error)
+		}
+		return resp.Value
+	}
+	// inboxed waits for a line in :me's inbox holding want and returns its id.
+	inboxed := func(want string) string {
+		t.Helper()
+		var id string
+		eventually(t, want, func() string {
+			text, _ := c.Inbox("me")
+			for _, line := range strings.Split(text, "\n") {
+				if strings.Contains(line, want) {
+					id = strings.Fields(line)[0]
+					return want
+				}
+			}
+			return text
+		}, want)
+		return id
+	}
+
+	if got := tell("hello"); got != "(ok :thinking)" {
+		t.Fatalf("tell = %s", got)
+	}
+	first := inboxed(`:assistant -> :me/tell "new in assistant: hello"`)
+
+	// Your reply to its answer is the next turn, in the same session.
+	if _, err := c.Message("reply", "", "["+first+` (ok "and more")]`, ""); err != nil {
+		t.Fatal(err)
+	}
+	second := inboxed(`:assistant -> :me/tell "resume in assistant: and more"`)
+
+	// One turn at a time.
+	tell("slow")
+	if got := tell("too soon"); !strings.HasPrefix(got, "(err {:kind :busy") {
+		t.Errorf("tell while busy = %s", got)
+	}
+	inboxed(`"resume in assistant: slow"`)
+
+	// Dismissing an answer starts nothing; a failed turn says so.
+	if _, err := c.Message("reply", "", "["+second+" (ok :seen)]", ""); err != nil {
+		t.Fatal(err)
+	}
+	tell("fail")
+	inboxed(`:assistant -> :me/tell "I couldn't answer: {:exit 1 :kind :exit :message \"job `)
+	inboxed(` exited 1\" :stderr \"it broke\\n\"}"`)
+	// The first was replied to and the second dismissed: slow's and fail's wait.
+	if text, _ := c.Inbox("me"); strings.Count(text, "\n") != 2 {
+		t.Errorf("want two answers waiting:\n%s", text)
+	}
+}
