@@ -72,6 +72,9 @@ type caller struct {
 	addr  string
 	chain []string // addresses waiting in the current chain, addr last
 	user  bool     // whether the current chain began with the user
+	// stop is closed when the service version acting stops; nil for a
+	// client.
+	stop <-chan struct{}
 }
 
 // state is what the route goroutine owns.
@@ -248,8 +251,18 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 				if err != nil {
 					return nil, err
 				}
-				// A delivery that fails is in history.
+				// A service's timers to itself go with the version that set
+				// them, so a reload, whose :start sets its own, doesn't
+				// double a loop. A delivery that fails is in history.
+				own, stop := addr == cur.addr, cur.stop
 				time.AfterFunc(time.Duration(after), func() {
+					select {
+					case <-stop:
+						if own {
+							return
+						}
+					default:
+					}
 					if d.ctx.Err() == nil {
 						d.deliver(addr, m)
 					}

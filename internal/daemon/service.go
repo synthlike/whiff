@@ -84,15 +84,28 @@ func (d *daemon) loadService(file string) (*service, error) {
 		return nil, &puff.Error{Pos: srv.Pos, Msg: ":jobs is whiff's own service; rename the file"}
 	}
 	body := srv.Items[2:]
-	if len(body) > 0 && body[0].Kind == puff.FormLiteral {
-		if _, ok := body[0].Val.(puff.Keyword); ok {
+	var start *puff.Form
+	for len(body) > 0 && body[0].Kind == puff.FormLiteral {
+		k, ok := body[0].Val.(puff.Keyword)
+		switch {
+		case !ok:
+		case k != "start":
 			return nil, &puff.Error{Pos: body[0].Pos, Msg: "unknown srv option " + body[0].String()}
+		case start != nil:
+			return nil, &puff.Error{Pos: body[0].Pos, Msg: "srv takes :start once"}
+		case len(body) < 2:
+			return nil, &puff.Error{Pos: body[0].Pos, Msg: ":start wants a function"}
+		default:
+			start, body = body[1], body[2:]
+			continue
 		}
+		break
 	}
 
+	quit := make(chan struct{})
 	s := &service{name: name, fns: map[string]handler{}, subs: map[string]subscriber{}, code: map[string][]*puff.Form{},
-		forms: body, mailbox: make(chan message, mailboxSize), cur: caller{addr: name}, d: d,
-		quit: make(chan struct{}), done: make(chan struct{})}
+		forms: srv.Items[2:], mailbox: make(chan message, mailboxSize), cur: caller{addr: name, stop: quit}, d: d,
+		quit: quit, done: make(chan struct{})}
 	var loads []*puff.Form
 	fns := map[string]*puff.Form{} // each subscriber's (fn (v) body...)
 	// add adds a handler named at pos, unless the name is taken.
@@ -155,7 +168,34 @@ func (d *daemon) loadService(file string) (*service, error) {
 		sub.fn = v
 		s.subs[topic] = sub
 	}
+	if start != nil {
+		if err := s.start(ctx, start); err != nil {
+			return nil, err
+		}
+	}
 	return s, nil
+}
+
+// start runs :start's function, f, as the user, before s takes its
+// address: so a first message to itself goes with send-after. An err, or
+// anything but a Result, fails the load.
+func (s *service) start(ctx context.Context, f *puff.Form) error {
+	fn, err := s.env.LoadForms(ctx, []*puff.Form{f})
+	if err != nil {
+		return err
+	}
+	if fn == nil {
+		return &puff.Error{Pos: f.Pos, Msg: ":start wants a function"}
+	}
+	s.cur.chain, s.cur.user = []string{s.name}, true
+	r, err := s.env.Call(ctx, f.Pos, fn)
+	if err != nil {
+		return err
+	}
+	if t, ok := r.(puff.Tag); !ok || t.Len() != 1 || t.Name() != "ok" {
+		return &puff.Error{Pos: f.Pos, Msg: fmt.Sprintf(":start returned %s, want (ok v)", puff.Print(r))}
+	}
+	return nil
 }
 
 // subscriberDef reads (on :topic (v) body...) and returns its topic and
