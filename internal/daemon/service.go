@@ -3,7 +3,6 @@ package daemon
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -24,9 +23,8 @@ type service struct {
 	env     *puff.Env
 	fns     map[string]handler
 	mailbox chan message
-	cur     caller        // whiff's builtins in env act for it
-	timeout time.Duration // bounds handling a send, as a call bounds its own
-	log     io.Writer     // where results of sends that fail go
+	cur     caller // whiff's builtins in env act for it
+	d       *daemon
 }
 
 // handler is an (on (fn params...) "doc" body...).
@@ -37,16 +35,16 @@ type handler struct {
 }
 
 // loadServices loads every .puff file in dir and starts its service. One
-// that fails to load is reported to the log and left out.
+// that fails to load is noted in history and left out.
 func (d *daemon) loadServices(dir string) {
 	files, _ := filepath.Glob(filepath.Join(dir, "*.puff"))
 	for _, file := range files {
 		s, err := d.loadService(file)
 		if err != nil {
-			fmt.Fprintf(d.log, "whiff: %v\n", err)
+			d.note("%v", err)
 			continue
 		}
-		d.do(func(addrs map[string]*service) { addrs[s.name] = s })
+		d.do(func(st *state) { st.addrs[s.name] = s })
 		d.wg.Go(func() { s.run(d.ctx) })
 	}
 }
@@ -79,7 +77,7 @@ func (d *daemon) loadService(file string) (*service, error) {
 	}
 
 	s := &service{name: name, fns: map[string]handler{}, mailbox: make(chan message, mailboxSize),
-		cur: caller{addr: name}, timeout: d.callTimeout, log: d.log}
+		cur: caller{addr: name}, d: d}
 	var loads []*puff.Form
 	for _, f := range body {
 		if !isList(f, "on") {
@@ -140,14 +138,15 @@ func (s *service) run(ctx context.Context) {
 	for {
 		select {
 		case m := <-s.mailbox:
+			begin := time.Now()
 			r := s.handle(ctx, m)
-			switch {
-			case m.reply != nil:
+			// Recorded before the reply, so the caller finds it in history.
+			s.d.do(func(st *state) {
+				st.record(entry{at: begin, call: m.reply != nil, from: m.from, to: s.name + "/" + m.fn,
+					args: m.args, reply: r, took: time.Since(begin)})
+			})
+			if m.reply != nil {
 				m.reply <- r
-			case strings.HasPrefix(r, "(err "):
-				// Nobody waits for a send's Result; until history, a failed one
-				// goes to the log.
-				fmt.Fprintf(s.log, "whiff: :%s/%s: %s\n", s.name, m.fn, r)
 			}
 		case <-ctx.Done():
 			return
@@ -176,7 +175,7 @@ func (s *service) handle(ctx context.Context, m message) string {
 	}
 	if m.ctx == nil {
 		var cancel context.CancelFunc
-		m.ctx, cancel = context.WithTimeout(ctx, s.timeout)
+		m.ctx, cancel = context.WithTimeout(ctx, s.d.callTimeout)
 		defer cancel()
 	}
 	f, _ := s.env.Lookup(m.fn)

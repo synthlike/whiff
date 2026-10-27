@@ -16,14 +16,16 @@ import (
 
 // Version is the protocol version. Bump it when a message changes; hello and
 // stop must stay readable by every version, so an old daemon can be stopped.
-const Version = 1
+const Version = 2
 
 // Request is a client's message to the daemon.
 type Request struct {
-	Op      string `json:"op"`                // "hello", "eval" or "stop"
+	Op      string `json:"op"`                // "hello", "eval", "call", "send", "history" or "stop"
 	Version int    `json:"version,omitempty"` // hello: the client's protocol
 	Src     string `json:"src,omitempty"`     // eval: puff code
-	Dir     string `json:"dir,omitempty"`     // eval: the client's working directory
+	Target  string `json:"target,omitempty"`  // call, send: address/fn
+	Args    string `json:"args,omitempty"`    // call, send: a printed puff vector
+	Dir     string `json:"dir,omitempty"`     // eval, call, send: the client's working directory
 }
 
 // Response is the daemon's answer to one Request.
@@ -137,6 +139,21 @@ func (c *Client) Eval(src, dir string) (Response, error) {
 	var resp Response
 	err := c.roundTrip(Request{Op: "eval", Src: src, Dir: dir}, &resp)
 	return resp, err
+}
+
+// Message calls or sends (op) target, address/fn, with args, a printed puff
+// vector, from dir. The Response's Value is the printed Result.
+func (c *Client) Message(op, target, args, dir string) (Response, error) {
+	var resp Response
+	err := c.roundTrip(Request{Op: op, Target: target, Args: args, Dir: dir}, &resp)
+	return resp, err
+}
+
+// History is the daemon's history, newest first, a line an entry.
+func (c *Client) History() (string, error) {
+	var resp Response
+	err := c.roundTrip(Request{Op: "history"}, &resp)
+	return resp.Out, err
 }
 
 // Stop asks the daemon to stop and waits until it has stopped listening.

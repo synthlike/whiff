@@ -20,6 +20,7 @@ type message struct {
 	// ctx is the caller's, done when it stops waiting; nil for a send,
 	// which the service bounds itself.
 	ctx  context.Context
+	from string // the sender's address; "" for a client
 	fn   string
 	args string
 	dir  string // the caller's working directory
@@ -32,20 +33,25 @@ type message struct {
 }
 
 // caller is who whiff's builtins act for: a service handling a message, or
-// a client's eval, which has no address.
+// a client, which has no address.
 type caller struct {
 	addr  string
 	chain []string // addresses waiting in the current chain, addr last
 }
 
-// route owns the address table until the daemon stops; others reach it
-// through do.
+// state is what the route goroutine owns.
+type state struct {
+	addrs   map[string]*service
+	history []entry // oldest first
+}
+
+// route owns the state until the daemon stops; others reach it through do.
 func (d *daemon) route() {
-	addrs := map[string]*service{}
+	st := &state{addrs: map[string]*service{}}
 	for {
 		select {
 		case op := <-d.ops:
-			op(addrs)
+			op(st)
 		case <-d.ctx.Done():
 			return
 		}
@@ -54,10 +60,10 @@ func (d *daemon) route() {
 
 // do runs op on the route goroutine and waits for it. It reports false if
 // the daemon is stopping and op didn't run.
-func (d *daemon) do(op func(addrs map[string]*service)) bool {
+func (d *daemon) do(op func(st *state)) bool {
 	done := make(chan struct{})
 	select {
-	case d.ops <- func(addrs map[string]*service) { op(addrs); close(done) }:
+	case d.ops <- func(st *state) { op(st); close(done) }:
 	case <-d.ctx.Done():
 		return false
 	}
@@ -65,20 +71,23 @@ func (d *daemon) do(op func(addrs map[string]*service)) bool {
 	return true
 }
 
-// deliver puts m in addr's mailbox, or returns the (err e) for its sender.
+// deliver puts m in addr's mailbox, or returns the (err e) for its sender
+// and records it in history.
 func (d *daemon) deliver(addr string, m message) puff.Value {
 	var res puff.Value
-	ok := d.do(func(addrs map[string]*service) {
-		s := addrs[addr]
+	ok := d.do(func(st *state) {
+		s := st.addrs[addr]
 		if s == nil {
 			res = puff.Errorf("no-address", "no address :%s", addr)
-			return
+		} else {
+			select {
+			case s.mailbox <- m:
+				return
+			default:
+				res = puff.Errorf("full", ":%s's mailbox is full", addr)
+			}
 		}
-		select {
-		case s.mailbox <- m:
-		default:
-			res = puff.Errorf("full", ":%s's mailbox is full", addr)
-		}
+		st.record(entry{at: time.Now(), call: m.reply != nil, from: m.from, to: addr + "/" + m.fn, args: m.args, reply: puff.Print(res)})
 	})
 	if !ok {
 		return puff.Errorf("no-address", "whiff is stopping")
@@ -93,12 +102,16 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 		{Name: "call", Args: "target [arg] ...", Mark: puff.MarkWrite,
 			Doc: "Send target, :address/fn, a message and wait for its Result; (err {:kind :timeout}) after 5s.",
 			Fn: func(c *puff.Call, args []puff.Value) (puff.Value, error) {
-				return d.call(c, cur, args)
+				m, addr, err := cur.message(c.Env.Dir, args)
+				if err != nil {
+					return nil, err
+				}
+				return d.request(c.Ctx, cur, addr, m)
 			}},
 		{Name: "send", Args: "target [arg] ...", Mark: puff.MarkWrite,
 			Doc: "Send target, :address/fn, a message without waiting: :done once it is in the mailbox.",
 			Fn: func(c *puff.Call, args []puff.Value) (puff.Value, error) {
-				m, addr, err := cur.message(c, args)
+				m, addr, err := cur.message(c.Env.Dir, args)
 				if err != nil {
 					return nil, err
 				}
@@ -114,16 +127,14 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 				if !ok || after < 0 {
 					return nil, fmt.Errorf("want a duration of 0s or more, got %s", puff.Print(args[0]))
 				}
-				m, addr, err := cur.message(c, args[1:])
+				m, addr, err := cur.message(c.Env.Dir, args[1:])
 				if err != nil {
 					return nil, err
 				}
+				// A delivery that fails is in history.
 				time.AfterFunc(time.Duration(after), func() {
-					if d.ctx.Err() != nil {
-						return
-					}
-					if e := d.deliver(addr, m); e != nil {
-						fmt.Fprintf(d.log, "whiff: dropped a send-after to %s: %s\n", puff.Print(args[1]), puff.Print(e))
+					if d.ctx.Err() == nil {
+						d.deliver(addr, m)
 					}
 				})
 				return puff.Done, nil
@@ -131,24 +142,23 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 	}
 }
 
-// call sends a message and waits for its reply. A call to an address
-// already waiting in the chain would wait for itself, so it fails at once.
-func (d *daemon) call(c *puff.Call, cur *caller, args []puff.Value) (puff.Value, error) {
-	m, addr, err := cur.message(c, args)
-	if err != nil {
-		return nil, err
-	}
+// request sends m to addr for cur and waits for its reply: the target's
+// Result, or an (err e) when there is none. A call to an address already
+// waiting in the chain would wait for itself, so it fails at once. The
+// error is for ctx ending.
+func (d *daemon) request(ctx context.Context, cur *caller, addr string, m message) (puff.Value, error) {
+	target := ":" + addr + "/" + m.fn
 	if slices.Contains(cur.chain, addr) {
 		var path strings.Builder
 		for _, a := range cur.chain {
 			fmt.Fprintf(&path, ":%s -> ", a)
 		}
 		path.WriteString(":" + addr)
-		return puff.Errorf("cycle", "%s would wait for itself: %s", puff.Print(args[0]), path.String()), nil
+		return puff.Errorf("cycle", "%s would wait for itself: %s", target, path.String()), nil
 	}
-	ctx, cancel := context.WithTimeout(c.Ctx, d.callTimeout)
+	wait, cancel := context.WithTimeout(ctx, d.callTimeout)
 	defer cancel()
-	m.ctx = ctx
+	m.ctx = wait
 	m.chain = cur.chain
 	m.reply = make(chan string, 1)
 	if e := d.deliver(addr, m); e != nil {
@@ -157,17 +167,17 @@ func (d *daemon) call(c *puff.Call, cur *caller, args []puff.Value) (puff.Value,
 	select {
 	case r := <-m.reply:
 		return puff.ReadValue(r)
-	case <-ctx.Done():
-		if c.Ctx.Err() != nil {
+	case <-wait.Done():
+		if ctx.Err() != nil {
 			return nil, errors.New("cancelled")
 		}
-		return puff.Errorf("timeout", "%s didn't reply within %v", puff.Print(args[0]), d.callTimeout), nil
+		return puff.Errorf("timeout", "%s didn't reply within %v", target, d.callTimeout), nil
 	}
 }
 
 // message builds the message args, a target and its arguments, ask for,
-// and returns it with the target's address.
-func (cur *caller) message(c *puff.Call, args []puff.Value) (message, string, error) {
+// sent from dir, and returns it with the target's address.
+func (cur *caller) message(dir string, args []puff.Value) (message, string, error) {
 	addr, fn, err := cur.target(args[0])
 	if err != nil {
 		return message{}, "", err
@@ -176,7 +186,7 @@ func (cur *caller) message(c *puff.Call, args []puff.Value) (message, string, er
 	if err != nil {
 		return message{}, "", err
 	}
-	return message{fn: fn, args: msg, dir: c.Env.Dir}, addr, nil
+	return message{from: cur.addr, fn: fn, args: msg, dir: dir}, addr, nil
 }
 
 // target splits :address/fn at its last slash: :gh/prs, :agent/1/inbox.

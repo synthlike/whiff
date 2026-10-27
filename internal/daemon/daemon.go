@@ -5,6 +5,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -29,8 +30,8 @@ var defaultCallTimeout = 5 * time.Second
 // belongs to the route goroutine; each service's to its own goroutine.
 type daemon struct {
 	ctx         context.Context
-	ops         chan func(addrs map[string]*service)
-	log         io.Writer // failed loads, and what services print
+	ops         chan func(st *state)
+	log         io.Writer // notes, and what services print
 	callTimeout time.Duration
 	wg          sync.WaitGroup
 }
@@ -75,7 +76,7 @@ func Run(ctx context.Context, dir, services string) error {
 		close(closing)
 	}()
 
-	d := &daemon{ctx: ctx, ops: make(chan func(map[string]*service)), log: os.Stderr, callTimeout: defaultCallTimeout}
+	d := &daemon{ctx: ctx, ops: make(chan func(*state)), log: os.Stderr, callTimeout: defaultCallTimeout}
 	d.wg.Go(d.route)
 	// Clients wait in the listen queue until the services are loaded.
 	d.loadServices(services)
@@ -150,6 +151,10 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 			resp.Version = rpc.Version
 		case "eval":
 			resp = d.eval(ctx, req)
+		case "call", "send":
+			resp = d.message(ctx, req)
+		case "history":
+			resp.Out = d.historyText()
 		case "stop":
 			conn.Send(resp)
 			stop()
@@ -161,6 +166,34 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 			return
 		}
 	}
+}
+
+// message calls or sends req.Target, :address/fn, with req.Args, a printed
+// vector, from the client's directory. Its Value is the Result.
+func (d *daemon) message(ctx context.Context, req rpc.Request) rpc.Response {
+	args, err := puff.ReadValue(req.Args)
+	vec, ok := args.(puff.Vector)
+	if err != nil || !ok {
+		return rpc.Response{Error: fmt.Sprintf("want arguments as a vector, got %s", req.Args)}
+	}
+	vals := []puff.Value{puff.Keyword(strings.TrimPrefix(req.Target, ":"))}
+	for i := range vec.Len() {
+		vals = append(vals, vec.At(i))
+	}
+	cur := &caller{}
+	m, addr, err := cur.message(req.Dir, vals)
+	if err != nil {
+		return rpc.Response{Error: err.Error()}
+	}
+	var r puff.Value
+	if req.Op == "send" {
+		if r = d.deliver(addr, m); r == nil {
+			r = puff.Done
+		}
+	} else if r, err = d.request(ctx, cur, addr, m); err != nil {
+		return rpc.Response{Error: err.Error()}
+	}
+	return rpc.Response{Value: puff.Print(r)}
 }
 
 // eval evaluates req.Src in a fresh environment, in the client's directory.

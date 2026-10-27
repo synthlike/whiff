@@ -180,7 +180,7 @@ func TestCycle(t *testing.T) {
 	// The default 5s timeout stays: a cycle must fail at once, not time out.
 	tests := []struct{ src, want string }{
 		{`(call :a/ping)`, `(err {:kind :cycle :message ":a/ping would wait for itself: :a -> :b -> :a"})`},
-		{`(call :a/self)`, `(err {:kind :cycle :message ":self would wait for itself: :a -> :a"})`},
+		{`(call :a/self)`, `(err {:kind :cycle :message ":a/self would wait for itself: :a -> :a"})`},
 		{`(call :b/fine)`, `(ok :fine)`},
 	}
 	for _, tt := range tests {

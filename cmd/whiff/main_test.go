@@ -27,7 +27,9 @@ func TestRun(t *testing.T) {
 	os.Mkdir(services, 0o700)
 	greet := `(srv greet
   (on (hello name) "Greets name."
-    (ok (string/concat "hello, " name))))`
+    (ok (string/concat "hello, " name)))
+  (on (echo x) "Returns x."
+    (ok x)))`
 	if err := os.WriteFile(filepath.Join(services, "greet.puff"), []byte(greet), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -39,12 +41,25 @@ func TestRun(t *testing.T) {
 		args             []string
 		code             int
 		wantOut, wantErr string
+		outHas           string // instead of wantOut, a line stdout has
 	}{
 		{name: "not running", args: []string{"stop"}, wantErr: "whiff isn't running\n"},
 		{name: "eval starts the daemon", args: []string{"eval", `(io/println "hi") (+ 1 2)`}, wantOut: "hi\n3\n"},
-		{name: "call a service", args: []string{"eval", `(call :greet/hello "ann")`}, wantOut: "(ok \"hello, ann\")\n"},
+		{name: "eval a call", args: []string{"eval", `(call :greet/hello "ann")`}, wantOut: "(ok \"hello, ann\")\n"},
 		{name: "read error", args: []string{"eval", "(a"}, code: 1, wantErr: "eval:1:1: no closing ')'\n"},
 		{name: "fault", args: []string{"eval", "(+ 1 1.0)"}, code: 70, wantErr: "eval:1:1: +: can't add int and float\n"},
+		{name: "call", args: []string{"call", "greet/hello", "bob"}, wantOut: "hello, bob\n"},
+		{name: "call with a colon", args: []string{"call", ":greet/hello", "bob"}, wantOut: "hello, bob\n"},
+		{name: "call an int", args: []string{"call", "greet/echo", "12"}, wantOut: "12\n"},
+		{name: "call a vector", args: []string{"call", "greet/echo", "[1 :a]"}, wantOut: "[1 :a]\n"},
+		{name: "call err", args: []string{"call", "greet/nope"}, code: 1,
+			wantErr: "whiff: {:kind :no-function :message \":greet has no function nope\"}\n"},
+		{name: "call a bad target", args: []string{"call", "greet"}, code: 1,
+			wantErr: "whiff: :greet has no address: only a service can leave it out, want :address/fn\n"},
+		{name: "send", args: []string{"send", "greet/hello", "cat"}},
+		{name: "send err", args: []string{"send", "nobody/x"}, code: 1,
+			wantErr: "whiff: {:kind :no-address :message \"no address :nobody\"}\n"},
+		{name: "history", args: []string{"history"}, outHas: `  call  client -> :greet/hello "bob"  (ok "hello, bob")  `},
 		{name: "stop", args: []string{"stop"}},
 		{name: "stopped", args: []string{"stop"}, wantErr: "whiff isn't running\n"},
 		{name: "eval starts it again", args: []string{"eval", "(os/cwd)"}, wantOut: quote(t) + "\n"},
@@ -54,7 +69,11 @@ func TestRun(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var stdout, stderr strings.Builder
 			code := run(tt.args, dir, services, &stdout, &stderr)
-			if code != tt.code || stdout.String() != tt.wantOut || stderr.String() != tt.wantErr {
+			out := stdout.String()
+			if tt.outHas != "" && strings.Contains(out, tt.outHas) {
+				out = ""
+			}
+			if code != tt.code || out != tt.wantOut || stderr.String() != tt.wantErr {
 				t.Errorf("run(%q) = %d\nstdout %q\nstderr %q\nwant %d, %q, %q",
 					tt.args, code, stdout.String(), stderr.String(), tt.code, tt.wantOut, tt.wantErr)
 			}
