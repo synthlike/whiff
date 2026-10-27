@@ -93,9 +93,12 @@ func (e *Env) Load(ctx context.Context, file, src string) (Value, error) {
 	maps.Copy(e.globals, c.defined)
 	t := &thread{ctx: ctx}
 	var v Value
-	for _, step := range steps {
+	for i, step := range steps {
 		if v, err = step(t, nil); err != nil {
 			return nil, err
+		}
+		if i < len(steps)-1 && isErr(v) {
+			return nil, faultf(forms[i].Pos, "dropped an err: %s", Print(v))
 		}
 	}
 	return v, nil
@@ -156,7 +159,7 @@ func (s *scope) loop() *scope {
 
 var specialForms = map[string]bool{
 	"def": true, "let": true, "fn": true, "if": true, "cond": true, "do": true, "and": true, "or": true,
-	"match": true, "when": true, "loop": true, "recur": true, "->": true,
+	"match": true, "when": true, "loop": true, "recur": true, "->": true, "try": true,
 }
 
 // compiler turns forms into exprs, resolving every name.
@@ -313,6 +316,8 @@ func (c *compiler) expr(f *Form, s *scope, tail bool) (expr, error) {
 			return c.recur(f, s, tail)
 		case "->":
 			return c.thread(f, s, tail)
+		case "try":
+			return c.try(f, s)
 		}
 	}
 	return c.call(f, s)
@@ -383,7 +388,8 @@ func (c *compiler) binding(f *Form) (string, error) {
 }
 
 // body compiles forms evaluated in order for the value of the last, which
-// is in tail position if the body is.
+// is in tail position if the body is. An (err e) from any other form
+// faults: errors are handled or returned, not dropped.
 func (c *compiler) body(what string, pos Pos, forms []*Form, s *scope, tail bool) (expr, error) {
 	if len(forms) == 0 {
 		return nil, errorf(pos, "%s needs a body", what)
@@ -400,13 +406,22 @@ func (c *compiler) body(what string, pos Pos, forms []*Form, s *scope, tail bool
 		return last, nil
 	}
 	return func(t *thread, fr *frame) (Value, error) {
-		for _, x := range xs {
-			if _, err := x(t, fr); err != nil {
+		for i, x := range xs {
+			v, err := x(t, fr)
+			if err != nil {
 				return nil, err
+			}
+			if isErr(v) {
+				return nil, faultf(forms[i].Pos, "dropped an err: %s", Print(v))
 			}
 		}
 		return last(t, fr)
 	}, nil
+}
+
+func isErr(v Value) bool {
+	t, ok := v.(Tag)
+	return ok && t.name == "err" && len(t.args) == 1
 }
 
 // bindings compiles a let or loop's [name value ...] into scope bs; each
@@ -530,7 +545,7 @@ func (c *compiler) recur(f *Form, s *scope, tail bool) (expr, error) {
 
 // thread compiles (-> value steps...) by rewriting it: each step is a call
 // with the value so far as its first argument, and a bare name is a call
-// with no other arguments.
+// with no other arguments. A (try f args...) step is (try (f value args...)).
 func (c *compiler) thread(f *Form, s *scope, tail bool) (expr, error) {
 	if len(f.Items) < 2 {
 		return nil, errorf(f.Pos, "-> wants a value and steps")
@@ -540,6 +555,10 @@ func (c *compiler) thread(f *Form, s *scope, tail bool) (expr, error) {
 		switch {
 		case step.Kind == FormSymbol:
 			acc = &Form{Kind: FormList, Pos: step.Pos, Items: []*Form{step, acc}}
+		case step.Kind == FormList && len(step.Items) > 1 && step.Items[0].Kind == FormSymbol && step.Items[0].Name == "try":
+			items := append([]*Form{step.Items[1], acc}, step.Items[2:]...)
+			call := &Form{Kind: FormList, Pos: step.Pos, Items: items}
+			acc = &Form{Kind: FormList, Pos: step.Pos, Items: []*Form{step.Items[0], call}}
 		case step.Kind == FormList && len(step.Items) > 0:
 			items := append([]*Form{step.Items[0], acc}, step.Items[1:]...)
 			acc = &Form{Kind: FormList, Pos: step.Pos, Items: items}
@@ -548,6 +567,63 @@ func (c *compiler) thread(f *Form, s *scope, tail bool) (expr, error) {
 		}
 	}
 	return c.expr(acc, s, tail)
+}
+
+// returnSignal is how try returns an err from its function: it travels back
+// as an error to the call.
+type returnSignal struct{ val Value }
+
+func (*returnSignal) Error() string { return "try outside a function" }
+
+// try compiles (try result): (ok v) gives v, and (err e) returns from the
+// function with the err, its position added to e's :trace.
+func (c *compiler) try(f *Form, s *scope) (expr, error) {
+	if len(f.Items) != 2 {
+		return nil, errorf(f.Pos, "try takes one Result")
+	}
+	in := s
+	for in != nil && in.kind != scopeFn {
+		in = in.parent
+	}
+	if in == nil {
+		return nil, errorf(f.Pos, "try only inside a function")
+	}
+	x, err := c.expr(f.Items[1], s, false)
+	if err != nil {
+		return nil, err
+	}
+	return func(t *thread, fr *frame) (Value, error) {
+		v, err := x(t, fr)
+		if err != nil {
+			return nil, err
+		}
+		if r, ok := v.(Tag); ok && len(r.args) == 1 {
+			switch r.name {
+			case "ok":
+				return r.args[0], nil
+			case "err":
+				return nil, &returnSignal{NewTag("err", traced(r.args[0], f.Pos))}
+			}
+		}
+		return nil, faultf(f.Pos, "try wants (ok v) or (err e), got %s", Print(v))
+	}, nil
+}
+
+// traced adds pos to the :trace vector of an error map, so an error records
+// the trys it went through. Other errors are left as they are.
+func traced(e Value, pos Pos) Value {
+	m, ok := e.(Map)
+	if !ok {
+		return e
+	}
+	var trace []Value
+	if v, ok := m.Get(Keyword("trace")); ok {
+		if vec, ok := v.(Vector); ok {
+			trace = slices.Clone(vec.items)
+		}
+	}
+	m, _ = m.With(Keyword("trace"), Vector{append(trace, String(pos.String()))})
+	return m
 }
 
 // fn compiles a function's params and body; name is "" for an anonymous fn.
@@ -715,7 +791,11 @@ func (t *thread) call(pos Pos, fn Value, args []Value) (Value, error) {
 		}
 		t.depth++
 		defer func() { t.depth-- }()
-		return fn.body(t, &frame{vals: args, parent: fn.closure})
+		v, err := fn.body(t, &frame{vals: args, parent: fn.closure})
+		if r, ok := err.(*returnSignal); ok {
+			return r.val, nil
+		}
+		return v, err
 	case *Builtin:
 		if len(args) < fn.Min || fn.Max >= 0 && len(args) > fn.Max {
 			return nil, faultf(pos, "%s", arity(fn.Name, fn.Min, fn.Max, len(args)))

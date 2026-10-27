@@ -68,13 +68,32 @@ func (m Map) Get(key Value) (Value, bool) {
 	if keyRank(key) < 0 {
 		return nil, false
 	}
-	i, ok := slices.BinarySearchFunc(m.entries, key, func(e Entry, k Value) int {
-		return compareKeys(e.Key, k)
-	})
+	i, ok := m.find(key)
 	if !ok {
 		return nil, false
 	}
 	return m.entries[i].Val, true
+}
+
+// With returns m with key set to val.
+func (m Map) With(key, val Value) (Map, error) {
+	if keyRank(key) < 0 {
+		return Map{}, fmt.Errorf("map key %s: must be a bool, int, string or keyword", Print(key))
+	}
+	es := slices.Clone(m.entries)
+	if i, ok := m.find(key); ok {
+		es[i].Val = val
+	} else {
+		es = slices.Insert(es, i, Entry{key, val})
+	}
+	return Map{es}, nil
+}
+
+// find returns where key is, or would go, in m's entries.
+func (m Map) find(key Value) (int, bool) {
+	return slices.BinarySearchFunc(m.entries, key, func(e Entry, k Value) int {
+		return compareKeys(e.Key, k)
+	})
 }
 
 // keyRank orders map keys by kind: bools, ints, strings, keywords. It is -1

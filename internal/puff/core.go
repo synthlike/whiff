@@ -29,6 +29,12 @@ var core = []*Builtin{
 	{"err", "(err e): a failed Result", 1, 1, tagFn("err")},
 	{"some", "(some v): an Option with a value", 1, 1, tagFn("some")},
 	{"none", "(none): an empty Option", 0, 0, tagFn("none")},
+	{"fail", "(fail e): stop with a fault", 1, 1, func(args []Value) (Value, error) {
+		if s, ok := args[0].(String); ok {
+			return nil, errors.New(string(s))
+		}
+		return nil, errors.New(Print(args[0]))
+	}},
 	{"=", "(= a b): whether a and b are the same value", 2, 2, func(args []Value) (Value, error) {
 		return Bool(Equal(args[0], args[1])), nil
 	}},
