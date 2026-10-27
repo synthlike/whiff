@@ -80,3 +80,56 @@ func TestGitService(t *testing.T) {
 		t.Errorf("git/status when detached = %s", got)
 	}
 }
+
+// TestGhService tries services/gh.puff with a fake gh on PATH that prints
+// what the real one does.
+func TestGhService(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "..", "services", "gh.puff"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := tempDir(t)
+	bin := filepath.Join(dir, "bin")
+	os.Mkdir(bin, 0o700)
+	fake := `#!/bin/sh
+case "$*" in
+"pr list "*)
+  echo '[{"author":{"login":"ann","is_bot":false},"createdAt":"2026-10-27T17:35:19Z","headRefName":"ann/fix","isDraft":false,"number":12,"reviewDecision":"APPROVED","title":"Fix it","url":"https://github.com/o/r/pull/12"},{"author":{"login":"bob"},"createdAt":"2026-10-26T08:00:00Z","headRefName":"wip","isDraft":true,"number":11,"reviewDecision":"","title":"WIP","url":"https://github.com/o/r/pull/11"}]' ;;
+"pr checks --json "*)
+  echo '[{"bucket":"pass","link":"https://l/1","name":"build","workflow":"CI"},{"bucket":"pending","link":"https://l/2","name":"test","workflow":"CI"}]'
+  exit 8 ;;
+"pr checks 12 "*)
+  echo '[{"bucket":"fail","link":"https://l/3","name":"lint","workflow":"CI"}]'
+  exit 1 ;;
+"pr checks 7 "*)
+  echo "no checks reported on the 'ann/fix' branch" >&2
+  exit 1 ;;
+*)
+  echo 'no pull requests found for branch "main"' >&2
+  exit 1 ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(fake), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	start(t, dir)
+	c := dial(t, dir)
+
+	tests := []struct{ fn, args, want string }{
+		{"prs", "[]", `(ok [` +
+			`{:author "ann" :branch "ann/fix" :created 2026-10-27T17:35:19Z :draft #f :number 12 :review :approved :title "Fix it" :url "https://github.com/o/r/pull/12"} ` +
+			`{:author "bob" :branch "wip" :created 2026-10-26T08:00:00Z :draft #t :number 11 :review :none :title "WIP" :url "https://github.com/o/r/pull/11"}])`},
+		{"checks", "[]", `(ok [{:bucket :pass :link "https://l/1" :name "build" :workflow "CI"} {:bucket :pending :link "https://l/2" :name "test" :workflow "CI"}])`},
+		{"checks-of", "[12]", `(ok [{:bucket :fail :link "https://l/3" :name "lint" :workflow "CI"}])`},
+		{"checks-of", "[7]", `(ok [])`},
+		{"checks-of", "[3]", `(err {:exit 1 :kind :gh :message "no pull requests found for branch \"main\""})`},
+		{"checks-of", `["x"]`, `(err {:kind :bad-call :message "want a pull request's number, got \"x\""})`},
+	}
+	for _, tt := range tests {
+		resp, err := c.Try("gh.puff", string(src), tt.fn, tt.args, dir)
+		if err != nil || resp.Error != "" || resp.Value != tt.want {
+			t.Errorf("gh/%s %s = %s %s %v\nwant %s", tt.fn, tt.args, resp.Value, resp.Error, err, tt.want)
+		}
+	}
+}

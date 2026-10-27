@@ -1,0 +1,63 @@
+; gh: pull requests and their checks for the repository in the caller's
+; directory, through the gh CLI. Read only.
+;   whiff call gh/prs
+;   whiff call gh/checks
+;   whiff call gh/checks-of 12
+
+(srv gh
+  ; gh runs gh with args and reads what it prints as JSON: (ok v), or
+  ; (err {:kind :gh}) with what it said. A failing exit in ok-exits that
+  ; still prints JSON is ok: gh pr checks exits 1 when a check failed and 8
+  ; while one is pending, but 1 too when there is no pull request.
+  (def (gh args ok-exits)
+    (match (try (proc/run (vector/concat ["gh"] args)))
+      [{:exit 0 :stdout out} (json/parse out)]
+      [{:exit n :stdout out} when (and (vector/contains? ok-exits n) (string/starts-with? out "[")) (json/parse out)]
+      [{:exit n :stderr e} (err {:kind :gh :exit n :message (string/trim e)})]))
+
+  (def (at s) (match (time/from-string s) [(ok t) t]))
+
+  (def (review s)
+    (match s
+      ["APPROVED" :approved] ["CHANGES_REQUESTED" :changes-requested]
+      ["REVIEW_REQUIRED" :review-required] [_ :none]))
+
+  (def (pull p)
+    (match p
+      [{:number n :title title :author {:login who} :headRefName branch :isDraft draft
+        :reviewDecision r :url url :createdAt created}
+       {:number n :title title :author who :branch branch :draft draft :review (review r)
+        :url url :created (at created)}]))
+
+  (def (bucket s)
+    (match s
+      ["pass" :pass] ["fail" :fail] ["pending" :pending] ["skipping" :skipping]
+      ["cancel" :cancel] [_ :unknown]))
+
+  (def (check c)
+    (match c
+      [{:name name :workflow w :bucket b :link link}
+       {:name name :workflow w :bucket (bucket b) :link link}]))
+
+  ; checks-for is the checks of the pull request args name, the current
+  ; branch's if none; a pull request without checks has none.
+  (def (checks-for args)
+    (match (gh (vector/concat ["pr" "checks"] args ["--json" "name,workflow,bucket,link"]) [1 8])
+      [(ok cs) (ok (vector/map cs check))]
+      [(err {:message m}) when (string/starts-with? m "no checks reported") (ok [])]
+      [e e]))
+
+  (on (prs) :read
+    "The open pull requests, newest first: each {:number :title :author :branch :draft :review :url :created}, with :review one of :approved, :changes-requested, :review-required or :none."
+    (let [ps (try (gh ["pr" "list" "--json" "number,title,author,headRefName,isDraft,reviewDecision,url,createdAt"] []))]
+      (ok (vector/map ps pull))))
+
+  (on (checks) :read
+    "The checks of the current branch's pull request: each {:name :workflow :bucket :link}, with :bucket one of :pass, :fail, :pending, :skipping or :cancel."
+    (checks-for []))
+
+  (on (checks-of pr) :read
+    "The checks of pull request pr, a number, as checks gives them."
+    (match pr
+      [n when (= (value/type n) :int) (checks-for [(int/to-string n)])]
+      [_ (err {:kind :bad-call :message (string/concat "want a pull request's number, got " (value/to-string pr))})])))
