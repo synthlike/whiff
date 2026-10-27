@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/synthlike/whiff/internal/daemon"
@@ -22,19 +23,25 @@ const usage = `usage:
 `
 
 func main() {
-	os.Exit(run(os.Args[1:], rpc.DefaultDir(), os.Stdout, os.Stderr))
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "whiff: %v\n", err)
+		os.Exit(1)
+	}
+	services := filepath.Join(home, ".whiff", "services")
+	os.Exit(run(os.Args[1:], rpc.DefaultDir(), services, os.Stdout, os.Stderr))
 }
 
-// run is whiff with its arguments, the socket directory and its streams,
-// returning the exit code.
-func run(args []string, dir string, stdout, stderr io.Writer) int {
+// run is whiff with its arguments, the socket and services directories and
+// its streams, returning the exit code.
+func run(args []string, dir, services string, stdout, stderr io.Writer) int {
 	switch {
 	case len(args) == 2 && args[0] == "eval":
 		return eval(dir, args[1], stdout, stderr)
 	case len(args) == 1 && args[0] == "stop":
 		return stop(dir, stderr)
 	case len(args) == 1 && args[0] == "daemon":
-		return runDaemon(dir, stderr)
+		return runDaemon(dir, services, stderr)
 	case len(args) == 1 && (args[0] == "-h" || args[0] == "--help"):
 		fmt.Fprint(stdout, usage)
 		return 0
@@ -99,10 +106,10 @@ func stop(dir string, stderr io.Writer) int {
 	return 0
 }
 
-func runDaemon(dir string, stderr io.Writer) int {
+func runDaemon(dir, services string, stderr io.Writer) int {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	if err := daemon.Run(ctx, dir); err != nil {
+	if err := daemon.Run(ctx, dir, services); err != nil {
 		fmt.Fprintf(stderr, "whiff: %v\n", err)
 		return 1
 	}

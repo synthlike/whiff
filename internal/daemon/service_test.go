@@ -1,0 +1,146 @@
+package daemon
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+// writeServices writes name.puff files into dir/services.
+func writeServices(t *testing.T, dir string, files map[string]string) {
+	services := filepath.Join(dir, "services")
+	if err := os.MkdirAll(services, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, src := range files {
+		if err := os.WriteFile(filepath.Join(services, name+".puff"), []byte(src), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestCall(t *testing.T) {
+	defer func(d time.Duration) { defaultCallTimeout = d }(defaultCallTimeout)
+	defaultCallTimeout = 200 * time.Millisecond
+
+	dir := tempDir(t)
+	writeServices(t, dir, map[string]string{
+		"greet": `(srv greet
+  (def (greeting name) (string/concat "hello, " name))
+  (on (hello name) "Greets name."
+    (ok (greeting name)))
+  (on (both a b) "Greets a and b, calling hello by name."
+    (ok [(try (hello a)) (try (hello b))]))
+  (on (refuse) "Fails as a value."
+    (err {:kind :nope}))
+  (on (boom) "Faults."
+    (+ 1 1.0))
+  (on (plain) "Returns a value that isn't a Result."
+    5)
+  (on (leak) "Replies with a function."
+    (ok greeting))
+  (on (cwd) "The caller's directory."
+    (ok (os/cwd))))`,
+		"relay": `(srv relay
+  (on (hello name) "Asks greet."
+    (call :greet/hello name)))`,
+		"slow": `(srv slow
+  (on (spin) "Never ends."
+    (loop [] (recur)))
+  (on (fast) "Ends."
+    (ok :fast)))`,
+	})
+	start(t, dir)
+	c := dial(t, dir)
+
+	// kind is the :kind of an err, or the value of an ok.
+	kind := func(call string) string {
+		return `(match ` + call + ` [(err {:kind k}) k] [(ok v) v])`
+	}
+	tests := []struct {
+		src, want string
+	}{
+		{`(call :greet/hello "ann")`, `(ok "hello, ann")`},
+		{`(call :greet/both "ann" "bob")`, `(ok ["hello, ann" "hello, bob"])`},
+		{`(call :relay/hello "ann")`, `(ok "hello, ann")`},
+		{`(call :greet/refuse)`, `(err {:kind :nope})`},
+		{`(call :greet/cwd)`, `(ok "/tmp/w")`},
+		{kind(`(call :nobody/hello)`), `:no-address`},
+		{kind(`(call :greet/nope)`), `:no-function`},
+		{kind(`(call :greet/hello)`), `:bad-call`},
+		{kind(`(call :greet/boom)`), `:fault`},
+		{kind(`(call :greet/plain)`), `:fault`},
+		{kind(`(call :greet/leak)`), `:fault`},
+		// A timeout cancels the handler, so the service is free again.
+		{kind(`(call :slow/spin)`), `:timeout`},
+		{`(call :slow/fast)`, `(ok :fast)`},
+		// Helpers aren't functions of the service.
+		{kind(`(call :greet/greeting "ann")`), `:no-function`},
+	}
+	for _, tt := range tests {
+		got, err := c.Eval(tt.src, "/tmp/w")
+		if err != nil {
+			t.Fatalf("%s: %v", tt.src, err)
+		}
+		if got.Value != tt.want || got.Error != "" {
+			t.Errorf("%s = %s %s, want %s", tt.src, got.Value, got.Error, tt.want)
+		}
+	}
+
+	faults := []struct{ src, want string }{
+		{`(call :greet/hello (fn (x) x))`, "eval:1:1: call: can't send [#<fn>]: only data travels"},
+		{`(call :greet "ann")`, "eval:1:1: call: want a target :address/fn, got :greet"},
+	}
+	for _, tt := range faults {
+		got, err := c.Eval(tt.src, "")
+		if err != nil {
+			t.Fatalf("%s: %v", tt.src, err)
+		}
+		if !got.Fault || got.Error != tt.want {
+			t.Errorf("%s = %+v, want fault %q", tt.src, got, tt.want)
+		}
+	}
+}
+
+func TestLoadService(t *testing.T) {
+	dir := tempDir(t)
+	write := func(name, src string) string {
+		path := filepath.Join(dir, name+".puff")
+		if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	tests := []struct {
+		name, src, want string
+	}{
+		{"ok", `(srv ok (on (f) "Doc." (ok 1)))`, ""},
+		{"read", `(srv read`, ":1:1: no closing ')'"},
+		{"two", "(srv two)\n(def x 1)", ":1:1: a service file holds one (srv name ...)"},
+		{"bare", `(def x 1)`, ":1:1: a service file holds one (srv name ...)"},
+		{"named", `(srv other)`, ":1:1: srv wants its name, named, as in its file name"},
+		{"option", `(srv option :start 1)`, ":1:13: unknown srv option :start"},
+		{"nodoc", `(srv nodoc (on (f) (ok 1)))`, ":1:12: on wants (fn params...), a doc string and a body"},
+		{"nodoc2", `(srv nodoc2 (on (f) (ok 1) (ok 2)))`, ":1:13: on wants a doc string after (fn params...)"},
+		{"unknown", `(srv unknown (on (f) "Doc." (nope)))`, ":1:30: unknown name nope"},
+		{"twice", `(srv twice (on (f) "Doc." (ok 1)) (on (f) "Doc." (ok 2)))`, ":1:40: f is already defined at"},
+		{"fault", `(srv fault (def x (+ 1 1.0)))`, ":1:19: +: can't add int and float"},
+		{"forever", `(srv forever (def x (loop [] (recur))))`, "cancelled"},
+	}
+	defer func(d time.Duration) { loadTimeout = d }(loadTimeout)
+	loadTimeout = 100 * time.Millisecond
+	d := &daemon{ctx: context.Background()}
+	for _, tt := range tests {
+		path := write(tt.name, tt.src)
+		_, err := d.loadService(path)
+		switch {
+		case tt.want == "" && err != nil:
+			t.Errorf("%s: %v", tt.name, err)
+		case tt.want != "" && (err == nil || !strings.Contains(err.Error(), tt.want)):
+			t.Errorf("%s: %v, want %q", tt.name, err, tt.want)
+		}
+	}
+}

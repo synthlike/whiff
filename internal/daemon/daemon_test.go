@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -21,12 +22,13 @@ func tempDir(t *testing.T) string {
 	return dir
 }
 
-// start runs a daemon on dir and returns Run's result.
+// start runs a daemon on dir, with the services in dir/services, and
+// returns Run's result.
 func start(t *testing.T, dir string) <-chan error {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	done := make(chan error, 1)
-	go func() { done <- Run(ctx, dir) }()
+	go func() { done <- Run(ctx, dir, filepath.Join(dir, "services")) }()
 	return done
 }
 
@@ -90,7 +92,7 @@ func TestOneDaemonPerDir(t *testing.T) {
 	dir := tempDir(t)
 	start(t, dir)
 	dial(t, dir)
-	if err := Run(context.Background(), dir); !errors.Is(err, ErrRunning) {
+	if err := Run(context.Background(), dir, ""); !errors.Is(err, ErrRunning) {
 		t.Errorf("second Run: %v, want ErrRunning", err)
 	}
 }

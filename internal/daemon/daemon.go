@@ -1,15 +1,18 @@
-// Package daemon is whiff's daemon: it serves clients on the per-user socket.
+// Package daemon is whiff's daemon: it serves clients on the per-user socket
+// and runs the services they talk to.
 package daemon
 
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/synthlike/whiff/internal/puff"
 	"github.com/synthlike/whiff/internal/rpc"
@@ -18,9 +21,24 @@ import (
 // ErrRunning is returned by Run when another daemon holds dir.
 var ErrRunning = errors.New("whiff is already running")
 
+// defaultCallTimeout is how long a call waits for its reply; a var so tests
+// can shorten it.
+var defaultCallTimeout = 5 * time.Second
+
+// daemon is the state shared by everything Run starts. Routing state
+// belongs to the route goroutine; each service's to its own goroutine.
+type daemon struct {
+	ctx         context.Context
+	ops         chan func(addrs map[string]*service)
+	log         io.Writer // failed loads, and what services print
+	callTimeout time.Duration
+	wg          sync.WaitGroup
+}
+
 // Run serves clients on the socket in dir until a client stops it or ctx
-// ends. A lock file in dir keeps it to one daemon per directory.
-func Run(ctx context.Context, dir string) error {
+// ends, with the services in services. A lock file in dir keeps it to one
+// daemon per directory.
+func Run(ctx context.Context, dir, services string) error {
 	if err := rpc.PrepareDir(dir); err != nil {
 		return err
 	}
@@ -57,29 +75,43 @@ func Run(ctx context.Context, dir string) error {
 		close(closing)
 	}()
 
-	var wg sync.WaitGroup
+	d := &daemon{ctx: ctx, ops: make(chan func(map[string]*service)), log: os.Stderr, callTimeout: defaultCallTimeout}
+	d.wg.Go(d.route)
+	// Clients wait in the listen queue until the services are loaded.
+	d.loadServices(services)
 	for {
 		nc, err := ln.Accept()
 		if err != nil {
 			if ctx.Err() == nil {
 				stop()
-				wg.Wait()
+				d.wg.Wait()
 				return err
 			}
 			break
 		}
-		wg.Go(func() { serve(ctx, stop, closing, nc) })
+		d.wg.Go(func() { d.serve(stop, closing, nc) })
 	}
-	wg.Wait()
+	d.wg.Wait()
 	return nil
+}
+
+// newEnv is a fresh puff env with whiff's functions on top of the base
+// table.
+func (d *daemon) newEnv(stdout io.Writer) *puff.Env {
+	env := puff.NewEnv()
+	env.Stdout = stdout
+	if err := env.Register(d.builtins()...); err != nil {
+		panic(err)
+	}
+	return env
 }
 
 // serve answers one client's requests in order. A client that hangs up
 // cancels the evaluation it asked for.
-func serve(ctx context.Context, stop func(), closing <-chan struct{}, nc net.Conn) {
+func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 	conn := rpc.NewConn(nc)
 	defer conn.Close()
-	ctx, cancel := context.WithCancel(ctx)
+	ctx, cancel := context.WithCancel(d.ctx)
 	defer cancel()
 	go func() {
 		select {
@@ -117,7 +149,7 @@ func serve(ctx context.Context, stop func(), closing <-chan struct{}, nc net.Con
 		case "hello":
 			resp.Version = rpc.Version
 		case "eval":
-			resp = eval(ctx, req)
+			resp = d.eval(ctx, req)
 		case "stop":
 			conn.Send(resp)
 			stop()
@@ -132,10 +164,9 @@ func serve(ctx context.Context, stop func(), closing <-chan struct{}, nc net.Con
 }
 
 // eval evaluates req.Src in a fresh environment, in the client's directory.
-func eval(ctx context.Context, req rpc.Request) rpc.Response {
+func (d *daemon) eval(ctx context.Context, req rpc.Request) rpc.Response {
 	var out strings.Builder
-	env := puff.NewEnv()
-	env.Stdout = &out
+	env := d.newEnv(&out)
 	env.Dir = req.Dir
 	v, err := env.Load(ctx, "eval", req.Src)
 	resp := rpc.Response{Out: out.String()}

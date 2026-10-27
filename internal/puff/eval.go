@@ -103,16 +103,22 @@ func (e *Env) Call(ctx context.Context, pos Pos, f Value, args ...Value) (Value,
 // Arity is the number of parameters f takes.
 func (f *Func) Arity() int { return len(f.params) }
 
-// Load reads, checks and evaluates src, and returns the value of its last
-// form: nil if that is a def or src has no forms. Names are checked before
-// anything runs, so an unknown name fails the whole load with an *Error.
-// Evaluation stops at a *Fault, keeping the defs that ran before it. A def
-// of an existing name replaces it for everything that uses it.
+// Load reads src and evaluates its forms, as LoadForms does.
 func (e *Env) Load(ctx context.Context, file, src string) (Value, error) {
 	forms, err := Read(file, src)
 	if err != nil {
 		return nil, err
 	}
+	return e.LoadForms(ctx, forms)
+}
+
+// LoadForms checks and evaluates forms, and returns the value of the last:
+// nil if that is a def or there are no forms. Names are checked before
+// anything runs, so an unknown name fails the whole load with an *Error.
+// Evaluation stops at a *Fault, keeping the defs that ran before it. A def
+// of an existing name replaces it for everything that uses it.
+func (e *Env) LoadForms(ctx context.Context, forms []*Form) (Value, error) {
+	var err error
 	c := &compiler{env: e, defined: map[string]*global{}, defPos: map[string]Pos{}}
 	// Declare the defs first, so functions can call ones defined later.
 	for _, f := range forms {
