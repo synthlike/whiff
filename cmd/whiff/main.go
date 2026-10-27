@@ -23,6 +23,7 @@ const usage = `usage:
   whiff pub topic value           publish value to the topic's subscribers
   whiff inbox address             list the messages waiting for a reply
   whiff reply id value            answer a message waiting for a reply
+  whiff wait id                   print the answer to a pending message or job, waiting for it
   whiff eval code                 evaluate puff code in the daemon and print its value
   whiff history                   print every message, newest first
   whiff ls                        list every address's functions and their marks
@@ -52,7 +53,7 @@ func run(args []string, dir, services string, stdout, stderr io.Writer) int {
 		return message(dir, args[0], args[1], args[2:], stdout, stderr)
 	case len(args) == 3 && args[0] == "pub":
 		return message(dir, args[0], args[1], args[2:], stdout, stderr)
-	case len(args) == 3 && args[0] == "reply":
+	case len(args) == 3 && args[0] == "reply", len(args) == 2 && args[0] == "wait":
 		return message(dir, args[0], "", args[1:], stdout, stderr)
 	case len(args) == 2 && args[0] == "inbox":
 		inbox := func(c *rpc.Client) (string, error) { return c.Inbox(args[1]) }
@@ -92,9 +93,9 @@ func connect(dir string, stderr io.Writer) *rpc.Client {
 	return c
 }
 
-// message calls, sends, publishes or replies (op). A call prints the value
-// of (ok v), a string as it is; (err e) prints e and exits 1. The others
-// print nothing.
+// message calls, sends, publishes, replies or waits (op). A call or wait
+// prints the value of (ok v), a string as it is; (err e) prints e and exits
+// 1. The others print nothing.
 func message(dir, op, target string, args []string, stdout, stderr io.Writer) int {
 	vals := make([]puff.Value, len(args))
 	for i, a := range args {
@@ -130,7 +131,7 @@ func message(dir, op, target string, args []string, stdout, stderr io.Writer) in
 	case r.Name() == "err":
 		fmt.Fprintf(stderr, "whiff: %s\n", puff.Print(r.At(0)))
 		return 1
-	case op == "call":
+	case op == "call" || op == "wait":
 		if s, ok := r.At(0).(puff.String); ok {
 			fmt.Fprintln(stdout, string(s))
 		} else {

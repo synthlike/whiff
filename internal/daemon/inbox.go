@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -96,10 +98,25 @@ func (st *state) take(addr string, id int64) *asked {
 	return a
 }
 
+// answered is the result a message or job id was answered with.
+type answered struct {
+	id     int64
+	result puff.Value
+}
+
 // answer tells t's sender its result, from by (an address, "" for a
 // client): [:whiff/done id result] in its mailbox if it is a service with
-// an (on (whiff/done id result) ...), else a line in history.
+// an (on (whiff/done id result) ...), else a line in history. Anyone in
+// whiff wait for it gets it too, and so does a wait that comes later.
 func (d *daemon) answer(st *state, t ticket, by string, result puff.Value) {
+	st.answers = append(st.answers, answered{t.id, result})
+	if n := len(st.answers) - historySize; n > 0 {
+		st.answers = slices.Delete(st.answers, 0, n)
+	}
+	for _, w := range st.waiters[t.id] {
+		w <- result
+	}
+	delete(st.waiters, t.id)
 	m := message{from: by, fn: "whiff/done", args: puff.Print(puff.NewVector(puff.Int(t.id), result)), dir: t.dir}
 	if s := st.addrs[t.from]; s != nil {
 		if h, ok := s.fns[m.fn]; ok && !h.ask {
@@ -179,6 +196,60 @@ func (d *daemon) inboxText(addr string) string {
 		}
 	})
 	return b.String()
+}
+
+// wait returns the answer to the message or job id, waiting for it while
+// it is pending, or an (err {:kind :no-id}) if it is neither pending nor
+// among the latest answers. The error is for ctx ending.
+func (d *daemon) wait(ctx context.Context, id int64) (puff.Value, error) {
+	var res puff.Value
+	w := make(chan puff.Value, 1)
+	d.do(func(st *state) {
+		for _, a := range slices.Backward(st.answers) {
+			if a.id == id {
+				res = a.result
+				return
+			}
+		}
+		if st.jobs[id] == nil && !slices.ContainsFunc(st.asked, func(a *asked) bool { return a.id == id }) {
+			res = puff.Errorf("no-id", "no message or job %d is pending or answered lately", id)
+			return
+		}
+		st.waiters[id] = append(st.waiters[id], w)
+	})
+	if res != nil {
+		return res, nil
+	}
+	select {
+	case r := <-w:
+		return r, nil
+	case <-ctx.Done():
+		d.do(func(st *state) {
+			st.waiters[id] = slices.DeleteFunc(st.waiters[id], func(c chan puff.Value) bool { return c == w })
+			if len(st.waiters[id]) == 0 {
+				delete(st.waiters, id)
+			}
+		})
+		return nil, errors.New("cancelled")
+	}
+}
+
+// clientWait is wait for a client; req.Args is the printed vector [id].
+func (d *daemon) clientWait(ctx context.Context, req rpc.Request) rpc.Response {
+	v, err := puff.ReadValue(req.Args)
+	vec, ok := v.(puff.Vector)
+	var id puff.Int
+	if err == nil && ok && vec.Len() == 1 {
+		id, ok = vec.At(0).(puff.Int)
+	}
+	if err != nil || !ok || vec.Len() != 1 {
+		return rpc.Response{Error: fmt.Sprintf("want [id], got %s", req.Args)}
+	}
+	r, err := d.wait(ctx, int64(id))
+	if err != nil {
+		return rpc.Response{Error: err.Error()}
+	}
+	return rpc.Response{Value: puff.Print(r)}
 }
 
 // clientReply answers a message in any inbox for a client; req.Args is
