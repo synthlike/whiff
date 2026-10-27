@@ -54,6 +54,10 @@ type handler struct {
 	body    []*puff.Form
 	ask     bool
 	expires time.Duration // ask: how long a message waits for a reply; 0 for ever
+	// native is a function of whiff's own services, in Go, instead of a
+	// body. Its error replies (err {:kind :bad-call}).
+	native   func(m message, args []puff.Value) (puff.Value, error)
+	optional int // native: how many of the last params can be left out
 }
 
 // loadService reads and evaluates a service file: one (srv name forms...),
@@ -75,6 +79,9 @@ func (d *daemon) loadService(file string) (*service, error) {
 	name := strings.TrimSuffix(filepath.Base(file), ".puff")
 	if len(srv.Items) < 2 || srv.Items[1].Kind != puff.FormSymbol || srv.Items[1].Name != name {
 		return nil, &puff.Error{Pos: srv.Pos, Msg: fmt.Sprintf("srv wants its name, %s, as in its file name", name)}
+	}
+	if name == "jobs" {
+		return nil, &puff.Error{Pos: srv.Pos, Msg: ":jobs is whiff's own service; rename the file"}
 	}
 	body := srv.Items[2:]
 	if len(body) > 0 && body[0].Kind == puff.FormLiteral {
@@ -307,8 +314,9 @@ func (s *service) handle(ctx context.Context, m message) (reply string, faulted 
 		return puff.Print(puff.Errorf(kind, format, args...)), false
 	}
 	var f puff.Value
+	var native func(message, []puff.Value) (puff.Value, error)
 	var pos puff.Pos
-	var n int
+	var n, optional int
 	what := ":" + m.to(s.name)
 	if m.topic != "" {
 		sub, ok := s.subs[m.topic]
@@ -323,20 +331,33 @@ func (s *service) handle(ctx context.Context, m message) (reply string, faulted 
 			// reload turned an on into an ask.
 			return fail("no-function", ":%s has no function %s", s.name, m.fn)
 		}
-		f, _ = s.env.Lookup(m.fn)
-		pos, n = h.pos, len(h.params)
+		if native = h.native; native == nil {
+			f, _ = s.env.Lookup(m.fn)
+		}
+		pos, n, optional = h.pos, len(h.params), h.optional
 	}
 	v, err := puff.ReadValue(m.args)
 	if err != nil {
 		return fail("bad-call", "%v", err)
 	}
 	vec := v.(puff.Vector)
-	if vec.Len() != n {
-		return fail("bad-call", "%s takes %d arguments, got %d", what, n, vec.Len())
+	if l := vec.Len(); l > n || l < n-optional {
+		want := fmt.Sprint(n)
+		if optional > 0 {
+			want = fmt.Sprintf("%d to %d", n-optional, n)
+		}
+		return fail("bad-call", "%s takes %s arguments, got %d", what, want, l)
 	}
 	args := make([]puff.Value, vec.Len())
 	for i := range args {
 		args[i] = vec.At(i)
+	}
+	if native != nil {
+		r, err := native(m, args)
+		if err != nil {
+			return fail("bad-call", "%s: %v", what, err)
+		}
+		return puff.Print(r), false
 	}
 	if m.ctx == nil {
 		var cancel context.CancelFunc

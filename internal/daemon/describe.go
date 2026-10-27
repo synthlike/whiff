@@ -208,7 +208,11 @@ func (mk *marker) ls() string {
 		fmt.Fprintf(tw, ":%s\n", addr)
 		for _, fn := range slices.Sorted(maps.Keys(s.fns)) {
 			h := s.fns[fn]
-			sig := "(" + strings.Join(append([]string{fn}, h.params...), " ") + ")"
+			params := slices.Clone(h.params)
+			for i := len(params) - h.optional; i < len(params); i++ {
+				params[i] = "[" + params[i] + "]"
+			}
+			sig := "(" + strings.Join(append([]string{fn}, params...), " ") + ")"
 			if h.ask {
 				sig = "ask " + sig
 			}

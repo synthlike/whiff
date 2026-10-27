@@ -83,6 +83,9 @@ func Run(ctx context.Context, dir, services string) error {
 		log: os.Stderr, callTimeout: defaultCallTimeout}
 	d.base = d.newEnv(io.Discard, &caller{})
 	d.wg.Go(d.route)
+	jobs := d.jobsService()
+	d.do(func(st *state) { st.addrs[jobs.name] = jobs })
+	d.wg.Go(func() { jobs.run(ctx) })
 	// Clients wait in the listen queue until the services are loaded.
 	sv := d.newSupervisor(services)
 	sv.scan()

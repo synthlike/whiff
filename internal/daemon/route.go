@@ -67,12 +67,13 @@ type state struct {
 	addrs   map[string]*service
 	history []entry  // oldest first
 	asked   []*asked // every service's inbox, oldest first
-	nextID  int64    // the last id given to a message answered later
+	jobs    map[int64]*job
+	nextID  int64 // the last id given to a message answered later, or a job
 }
 
 // route owns the state until the daemon stops; others reach it through do.
 func (d *daemon) route() {
-	st := &state{addrs: map[string]*service{}}
+	st := &state{addrs: map[string]*service{}, jobs: map[int64]*job{}}
 	for {
 		select {
 		case op := <-d.ops:
