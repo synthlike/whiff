@@ -21,14 +21,17 @@ const usage = `usage:
   whiff call address/fn args...   call a function and print its value
   whiff send address/fn args...   send a message without waiting
   whiff pub topic value           publish value to the topic's subscribers
+  whiff inbox address             list the messages waiting for a reply
+  whiff reply id value            answer a message waiting for a reply
   whiff eval code                 evaluate puff code in the daemon and print its value
   whiff history                   print every message, newest first
   whiff ls                        list every address's functions and their marks
   whiff stop                      stop the daemon
   whiff daemon                    run the daemon in the foreground
 
-Each arg of call, send and pub is read as a puff value, or taken as a
-string if it doesn't read as one: 12 is 12, ann is "ann", '"12"' is "12".
+Each arg of call, send, pub and reply is read as a puff value, or taken as
+a string if it doesn't read as one: 12 is 12, ann is "ann", '"12"' is "12".
+A reply that isn't (ok v) or (err e) is sent as (ok value).
 `
 
 func main() {
@@ -49,6 +52,11 @@ func run(args []string, dir, services string, stdout, stderr io.Writer) int {
 		return message(dir, args[0], args[1], args[2:], stdout, stderr)
 	case len(args) == 3 && args[0] == "pub":
 		return message(dir, args[0], args[1], args[2:], stdout, stderr)
+	case len(args) == 3 && args[0] == "reply":
+		return message(dir, args[0], "", args[1:], stdout, stderr)
+	case len(args) == 2 && args[0] == "inbox":
+		inbox := func(c *rpc.Client) (string, error) { return c.Inbox(args[1]) }
+		return text(dir, inbox, stdout, stderr)
 	case len(args) == 2 && args[0] == "eval":
 		return eval(dir, args[1], stdout, stderr)
 	case len(args) == 1 && args[0] == "history":
@@ -84,12 +92,18 @@ func connect(dir string, stderr io.Writer) *rpc.Client {
 	return c
 }
 
-// message calls or sends (op) target. A call prints the value of (ok v), a
-// string as it is; (err e) prints e and exits 1. A send prints nothing.
+// message calls, sends, publishes or replies (op). A call prints the value
+// of (ok v), a string as it is; (err e) prints e and exits 1. The others
+// print nothing.
 func message(dir, op, target string, args []string, stdout, stderr io.Writer) int {
 	vals := make([]puff.Value, len(args))
 	for i, a := range args {
 		vals[i] = shellArg(a)
+	}
+	if op == "reply" {
+		if r, ok := vals[1].(puff.Tag); !ok || r.Len() != 1 || r.Name() != "ok" && r.Name() != "err" {
+			vals[1] = puff.Ok(vals[1])
+		}
 	}
 	wd, err := os.Getwd()
 	if err != nil {

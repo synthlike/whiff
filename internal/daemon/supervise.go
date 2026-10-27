@@ -115,9 +115,16 @@ func (sv *supervisor) load(file string, w *watched) {
 }
 
 // remove takes s's address away and stops it. Calls waiting in its mailbox
-// get (err {:kind :no-address}).
+// get (err {:kind :no-address}), and so do the senders of the messages in
+// its inbox, as [:whiff/done id result].
 func (sv *supervisor) remove(s *service) {
-	sv.d.do(func(st *state) { delete(st.addrs, s.name) })
+	sv.d.do(func(st *state) {
+		delete(st.addrs, s.name)
+		for _, a := range st.inbox(s.name) {
+			st.take(s.name, a.id)
+			sv.d.answer(st, a.ticket, s.name, puff.Errorf("no-address", "no address :%s", s.name))
+		}
+	})
 	sv.stop(s)
 	for {
 		select {

@@ -34,11 +34,13 @@ type message struct {
 	reply chan string
 }
 
-// kind is "call", "send" or "pub".
+// kind is "call", "send", "pub" or "done", for a [:whiff/done id result].
 func (m message) kind() string {
 	switch {
 	case m.topic != "":
 		return "pub"
+	case m.fn == "whiff/done":
+		return "done"
 	case m.reply != nil:
 		return "call"
 	}
@@ -63,7 +65,9 @@ type caller struct {
 // state is what the route goroutine owns.
 type state struct {
 	addrs   map[string]*service
-	history []entry // oldest first
+	history []entry  // oldest first
+	asked   []*asked // every service's inbox, oldest first
+	nextID  int64    // the last id given to a message answered later
 }
 
 // route owns the state until the daemon stops; others reach it through do.
@@ -92,27 +96,34 @@ func (d *daemon) do(op func(st *state)) bool {
 	return true
 }
 
-// deliver puts m in addr's mailbox, or returns the (err e) for its sender
-// and records it in history.
+// deliver puts m in addr's mailbox, or its inbox for an ask function, or
+// returns the (err e) for its sender and records it in history.
 func (d *daemon) deliver(addr string, m message) puff.Value {
 	var res puff.Value
-	ok := d.do(func(st *state) {
-		s := st.addrs[addr]
-		if s == nil {
-			res = puff.Errorf("no-address", "no address :%s", addr)
-		} else {
-			select {
-			case s.mailbox <- m:
-				return
-			default:
-				res = puff.Errorf("full", ":%s's mailbox is full", addr)
-			}
-		}
-		st.record(entry{at: time.Now(), kind: m.kind(), from: m.from, to: m.to(addr), args: m.args, reply: puff.Print(res)})
-	})
-	if !ok {
+	if !d.do(func(st *state) { res = d.put(st, addr, m) }) {
 		return puff.Errorf("no-address", "whiff is stopping")
 	}
+	return res
+}
+
+// put is deliver on the route goroutine. A message to an ask function
+// goes to the inbox and is answered (err {:kind :pending :id n}) at once.
+func (d *daemon) put(st *state, addr string, m message) puff.Value {
+	var res puff.Value
+	switch s := st.addrs[addr]; {
+	case s == nil:
+		res = puff.Errorf("no-address", "no address :%s", addr)
+	case m.topic == "" && s.fns[m.fn].ask:
+		res = d.ask(st, s, m)
+	default:
+		select {
+		case s.mailbox <- m:
+			return nil
+		default:
+			res = puff.Errorf("full", ":%s's mailbox is full", addr)
+		}
+	}
+	st.record(entry{at: time.Now(), kind: m.kind(), from: m.from, to: m.to(addr), args: m.args, reply: puff.Print(res)})
 	return res
 }
 
@@ -147,6 +158,34 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 					return nil, fmt.Errorf("want an address like :gh, got %s", puff.Print(args[0]))
 				}
 				return d.marker().describe(string(addr)), nil
+			}},
+		{Name: "inbox", Args: "[fn]", Mark: puff.MarkRead,
+			Doc: "This service's messages waiting for a reply, oldest first, each {:id :fn :args :from :cwd}; only fn's, a keyword, if given.",
+			Fn: func(_ *puff.Call, args []puff.Value) (puff.Value, error) {
+				if cur.addr == "" {
+					return nil, errors.New("only a service has an inbox")
+				}
+				var fn puff.Keyword
+				if len(args) > 0 {
+					var ok bool
+					if fn, ok = args[0].(puff.Keyword); !ok {
+						return nil, fmt.Errorf("want a function name like :suggest, got %s", puff.Print(args[0]))
+					}
+				}
+				var items []puff.Value
+				d.do(func(st *state) {
+					for _, a := range st.inbox(cur.addr) {
+						if fn == "" || a.fn == string(fn) {
+							items = append(items, a.value())
+						}
+					}
+				})
+				return puff.NewVector(items...), nil
+			}},
+		{Name: "reply", Args: "id result", Mark: puff.MarkWrite,
+			Doc: "Answer the message id in this service's inbox with result: its sender gets [:whiff/done id result]. (err {:kind :no-id}) if it isn't there.",
+			Fn: func(_ *puff.Call, args []puff.Value) (puff.Value, error) {
+				return d.reply(cur.addr, args[0], args[1])
 			}},
 		{Name: "publish", Args: "topic v", Mark: puff.MarkWrite,
 			Doc: "Send v to every service subscribed to topic, a keyword: :done at once.",

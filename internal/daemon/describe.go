@@ -175,12 +175,16 @@ func (mk *marker) describe(addr string) puff.Value {
 		for i, p := range h.params {
 			params[i] = puff.Keyword(p)
 		}
+		form := "on"
+		if h.ask {
+			form = "ask"
+		}
 		m, _ := puff.NewMap(
 			puff.Entry{Key: puff.Keyword("fn"), Val: puff.Keyword(fn)},
 			puff.Entry{Key: puff.Keyword("params"), Val: puff.NewVector(params...)},
 			puff.Entry{Key: puff.Keyword("doc"), Val: puff.String(h.doc)},
 			puff.Entry{Key: puff.Keyword("mark"), Val: puff.Keyword(strings.TrimPrefix(mk.mark(s, fn).String(), ":"))},
-			puff.Entry{Key: puff.Keyword("form"), Val: puff.Keyword("on")},
+			puff.Entry{Key: puff.Keyword("form"), Val: puff.Keyword(form)},
 		)
 		fns = append(fns, m)
 	}
@@ -192,6 +196,7 @@ func (mk *marker) describe(addr string) puff.Value {
 //
 //	:greet
 //	  (hello name)        :read  Greets name.
+//	  ask (approve text)  :read  Waits for a person.
 //	  on :git/changed (v) :read
 //	warning: greet.puff:4:11: :nobody/x doesn't exist
 func (mk *marker) ls() string {
@@ -203,8 +208,11 @@ func (mk *marker) ls() string {
 		fmt.Fprintf(tw, ":%s\n", addr)
 		for _, fn := range slices.Sorted(maps.Keys(s.fns)) {
 			h := s.fns[fn]
-			sig := strings.Join(append([]string{fn}, h.params...), " ")
-			fmt.Fprintf(tw, "  (%s)\t%s\t%s\n", sig, mk.mark(s, fn), h.doc)
+			sig := "(" + strings.Join(append([]string{fn}, h.params...), " ") + ")"
+			if h.ask {
+				sig = "ask " + sig
+			}
+			fmt.Fprintf(tw, "  %s\t%s\t%s\n", sig, mk.mark(s, fn), h.doc)
 		}
 		for _, topic := range slices.Sorted(maps.Keys(s.subs)) {
 			sub := s.subs[topic]

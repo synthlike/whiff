@@ -16,15 +16,15 @@ import (
 
 // Version is the protocol version. Bump it when a message changes; hello and
 // stop must stay readable by every version, so an old daemon can be stopped.
-const Version = 4
+const Version = 5
 
 // Request is a client's message to the daemon.
 type Request struct {
-	Op      string `json:"op"`                // "hello", "eval", "call", "send", "pub", "history", "ls" or "stop"
+	Op      string `json:"op"`                // "hello", "eval", "call", "send", "pub", "inbox", "reply", "history", "ls" or "stop"
 	Version int    `json:"version,omitempty"` // hello: the client's protocol
 	Src     string `json:"src,omitempty"`     // eval: puff code
-	Target  string `json:"target,omitempty"`  // call, send: address/fn; pub: the topic
-	Args    string `json:"args,omitempty"`    // call, send, pub: a printed puff vector, of one value for pub
+	Target  string `json:"target,omitempty"`  // call, send: address/fn; pub: the topic; inbox: the address
+	Args    string `json:"args,omitempty"`    // call, send, pub: a printed puff vector, of one value for pub; reply: [id result]
 	Dir     string `json:"dir,omitempty"`     // eval, call, send, pub: the client's working directory
 }
 
@@ -142,7 +142,9 @@ func (c *Client) Eval(src, dir string) (Response, error) {
 }
 
 // Message calls or sends (op) target, address/fn, with args, a printed puff
-// vector, from dir. The Response's Value is the printed Result.
+// vector, from dir; publishes args's one value to the topic target (op
+// "pub"); or answers a message in an inbox, with args [id result] (op
+// "reply"). The Response's Value is the printed Result.
 func (c *Client) Message(op, target, args, dir string) (Response, error) {
 	var resp Response
 	err := c.roundTrip(Request{Op: op, Target: target, Args: args, Dir: dir}, &resp)
@@ -153,6 +155,13 @@ func (c *Client) Message(op, target, args, dir string) (Response, error) {
 func (c *Client) History() (string, error) {
 	var resp Response
 	err := c.roundTrip(Request{Op: "history"}, &resp)
+	return resp.Out, err
+}
+
+// Inbox is the messages waiting in addr's inbox, oldest first, a line each.
+func (c *Client) Inbox(addr string) (string, error) {
+	var resp Response
+	err := c.roundTrip(Request{Op: "inbox", Target: addr}, &resp)
 	return resp.Out, err
 }
 

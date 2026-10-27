@@ -42,14 +42,18 @@ type subscriber struct {
 	fn    puff.Value
 }
 
-// handler is an (on (fn params...) [:read|:write] "doc" body...).
+// handler is an (on (fn params...) [:read|:write] "doc" body...), or an
+// (ask (fn params...) [:read|:write] "doc" [:expires d]), which has no body:
+// its messages wait in the inbox for a reply.
 type handler struct {
-	pos    puff.Pos
-	params []string
-	doc    string
-	mark   puff.Mark // when marked: :read or :write after the parameters
-	marked bool
-	body   []*puff.Form
+	pos     puff.Pos
+	params  []string
+	doc     string
+	mark    puff.Mark // when marked: :read or :write after the parameters
+	marked  bool
+	body    []*puff.Form
+	ask     bool
+	expires time.Duration // ask: how long a message waits for a reply; 0 for ever
 }
 
 // loadService reads and evaluates a service file: one (srv name forms...),
@@ -84,6 +88,14 @@ func (d *daemon) loadService(file string) (*service, error) {
 		quit: make(chan struct{}), done: make(chan struct{})}
 	var loads []*puff.Form
 	fns := map[string]*puff.Form{} // each subscriber's (fn (v) body...)
+	// add adds a handler named at pos, unless the name is taken.
+	add := func(fn string, h handler, pos puff.Pos) error {
+		if other, ok := s.fns[fn]; ok {
+			return &puff.Error{Pos: pos, Msg: fmt.Sprintf("%s is already defined at %s", fn, other.pos)}
+		}
+		s.fns[fn] = h
+		return nil
+	}
 	for _, f := range body {
 		switch {
 		case isList(f, "on") && len(f.Items) > 1 && f.Items[1].Kind == puff.FormLiteral:
@@ -101,9 +113,19 @@ func (d *daemon) loadService(file string) (*service, error) {
 			if err != nil {
 				return nil, err
 			}
-			s.fns[fn] = h
+			if err := add(fn, h, f.Items[1].Items[0].Pos); err != nil {
+				return nil, err
+			}
 			s.code[fn] = h.body
 			loads = append(loads, def)
+		case isList(f, "ask"):
+			fn, h, err := askDef(f)
+			if err != nil {
+				return nil, err
+			}
+			if err := add(fn, h, f.Items[1].Items[0].Pos); err != nil {
+				return nil, err
+			}
 		default:
 			if name, code, ok := defCode(f); ok {
 				s.code[name] = code
@@ -150,15 +172,50 @@ func subscriberDef(f *puff.Form) (string, *puff.Form, subscriber, error) {
 // handlerDef turns (on (fn params...) [:read|:write] "doc" body...) into
 // (def (fn params...) body...).
 func handlerDef(f *puff.Form) (string, *puff.Form, handler, error) {
-	bad := func(msg string) (string, *puff.Form, handler, error) {
-		return "", nil, handler{}, &puff.Error{Pos: f.Pos, Msg: msg}
+	fn, h, body, err := handlerHead(f, "on wants (fn params...), a doc string and a body", 2)
+	if err != nil {
+		return "", nil, handler{}, err
+	}
+	h.body = body
+	items := append([]*puff.Form{{Kind: puff.FormSymbol, Pos: f.Items[0].Pos, Name: "def"}, f.Items[1]}, h.body...)
+	return fn, &puff.Form{Kind: puff.FormList, Pos: f.Pos, Items: items}, h, nil
+}
+
+// askDef reads (ask (fn params...) [:read|:write] "doc" [:expires d]).
+func askDef(f *puff.Form) (string, handler, error) {
+	fn, h, opts, err := handlerHead(f, "ask wants (fn params...) and a doc string", 1)
+	if err != nil {
+		return "", handler{}, err
+	}
+	h.ask = true
+	for len(opts) > 0 {
+		if k, ok := opts[0].Val.(puff.Keyword); opts[0].Kind != puff.FormLiteral || !ok || k != "expires" || len(opts) < 2 {
+			return "", handler{}, &puff.Error{Pos: opts[0].Pos, Msg: "ask takes :expires d after its doc string, got " + opts[0].String()}
+		}
+		d, ok := opts[1].Val.(puff.Duration)
+		if opts[1].Kind != puff.FormLiteral || !ok || d <= 0 {
+			return "", handler{}, &puff.Error{Pos: opts[1].Pos, Msg: "want a positive :expires duration, got " + opts[1].String()}
+		}
+		h.expires = time.Duration(d)
+		opts = opts[2:]
+	}
+	return fn, h, nil
+}
+
+// handlerHead reads what on and ask (f's head) start with: (fn params...)
+// [:read|:write] "doc", and returns the forms after the doc. want is the
+// error for fewer than min forms after the mark, the doc included.
+func handlerHead(f *puff.Form, want string, min int) (string, handler, []*puff.Form, error) {
+	head := f.Items[0].Name
+	bad := func(msg string) (string, handler, []*puff.Form, error) {
+		return "", handler{}, nil, &puff.Error{Pos: f.Pos, Msg: msg}
 	}
 	if len(f.Items) < 2 {
-		return bad(`on wants (fn params...), a doc string and a body`)
+		return bad(want)
 	}
 	sig, rest := f.Items[1], f.Items[2:]
 	if sig.Kind != puff.FormList || len(sig.Items) == 0 || sig.Items[0].Kind != puff.FormSymbol {
-		return bad("on wants (fn params...)")
+		return bad(head + " wants (fn params...)")
 	}
 	h := handler{pos: f.Pos}
 	if len(rest) > 0 && rest[0].Kind == puff.FormLiteral {
@@ -169,29 +226,27 @@ func handlerDef(f *puff.Form) (string, *puff.Form, handler, error) {
 			case "write":
 				h.mark, h.marked = puff.MarkWrite, true
 			default:
-				return bad("on takes :read or :write after (fn params...), got " + rest[0].String())
+				return bad(head + " takes :read or :write after (fn params...), got " + rest[0].String())
 			}
 			rest = rest[1:]
 		}
 	}
-	if len(rest) < 2 {
-		return bad(`on wants (fn params...), a doc string and a body`)
+	if len(rest) < min {
+		return bad(want)
 	}
 	doc := rest[0]
-	h.body = rest[1:]
 	if s, ok := doc.Val.(puff.String); doc.Kind == puff.FormLiteral && ok {
 		h.doc = string(s)
 	} else {
-		return bad("on wants a doc string after (fn params...)")
+		return bad(head + " wants a doc string after (fn params...)")
 	}
 	for _, p := range sig.Items[1:] {
 		if p.Kind != puff.FormSymbol {
-			return bad("on's parameters are names")
+			return bad(head + "'s parameters are names")
 		}
 		h.params = append(h.params, p.Name)
 	}
-	items := append([]*puff.Form{{Kind: puff.FormSymbol, Pos: f.Items[0].Pos, Name: "def"}, sig}, h.body...)
-	return sig.Items[0].Name, &puff.Form{Kind: puff.FormList, Pos: f.Pos, Items: items}, h, nil
+	return sig.Items[0].Name, h, rest[1:], nil
 }
 
 // defCode returns the name a (def name value) or (def (name params...)
@@ -263,7 +318,9 @@ func (s *service) handle(ctx context.Context, m message) (reply string, faulted 
 		f, pos, n = sub.fn, sub.pos, 1
 	} else {
 		h, ok := s.fns[m.fn]
-		if !ok {
+		if !ok || h.ask {
+			// An ask's messages go to the inbox; this one came before a
+			// reload turned an on into an ask.
 			return fail("no-function", ":%s has no function %s", s.name, m.fn)
 		}
 		f, _ = s.env.Lookup(m.fn)

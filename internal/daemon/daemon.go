@@ -33,7 +33,7 @@ type daemon struct {
 	ctx         context.Context
 	ops         chan func(st *state)
 	restarts    chan *service // services that faulted, for the supervisor
-	log         io.Writer // notes, and what services print
+	log         io.Writer     // notes, and what services print
 	callTimeout time.Duration
 	base        *puff.Env // only looked up in, for builtins' marks
 	wg          sync.WaitGroup
@@ -171,6 +171,10 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 			resp.Out = d.historyText()
 		case "ls":
 			resp.Out = d.marker().ls()
+		case "inbox":
+			resp.Out = d.inboxText(strings.TrimPrefix(req.Target, ":"))
+		case "reply":
+			resp = d.clientReply(req)
 		case "stop":
 			conn.Send(resp)
 			stop()
