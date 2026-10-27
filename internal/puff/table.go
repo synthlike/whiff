@@ -35,6 +35,14 @@ func (f *Builtin) print(b *strings.Builder) {
 type Call struct {
 	Ctx context.Context
 	Env *Env
+	t   *thread
+	pos Pos
+}
+
+// Apply calls the function f with args, for builtins that take functions.
+// A fault in f stops the builtin as it is.
+func (c *Call) Apply(f Value, args ...Value) (Value, error) {
+	return c.t.call(c.pos, f, args)
 }
 
 // parseArgs returns the arity Args describes.

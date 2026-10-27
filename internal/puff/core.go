@@ -7,8 +7,8 @@ import (
 	"math"
 )
 
-// base is puff's own table: every Env starts with it.
-var base = []*Builtin{
+// coreFns are the builtins without a module: tags, comparison, arithmetic.
+var coreFns = []*Builtin{
 	{Name: "ok", Args: "v", Doc: "A successful Result.", Fn: tagFn("ok")},
 	{Name: "err", Args: "e", Doc: "A failed Result.", Fn: tagFn("err")},
 	{Name: "some", Args: "v", Doc: "An Option with a value.", Fn: tagFn("some")},

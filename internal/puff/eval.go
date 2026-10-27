@@ -825,8 +825,11 @@ func (t *thread) call(pos Pos, fn Value, args []Value) (Value, error) {
 		if len(args) < fn.min || fn.max >= 0 && len(args) > fn.max {
 			return nil, faultf(pos, "%s", arity(fn.Name, fn.min, fn.max, len(args)))
 		}
-		v, err := fn.Fn(&Call{Ctx: t.ctx, Env: t.env}, args)
+		v, err := fn.Fn(&Call{Ctx: t.ctx, Env: t.env, t: t, pos: pos}, args)
 		if err != nil {
+			if _, ok := err.(*Fault); ok { // from a function it applied
+				return nil, err
+			}
 			return nil, faultf(pos, "%s: %v", fn.Name, err)
 		}
 		return v, nil
