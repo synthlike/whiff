@@ -6,7 +6,8 @@ import (
 )
 
 // base is puff's own table: every Env starts with it.
-var base = slices.Concat(coreFns, stringFns, numberFns, valueFns, vectorFns, mapFns, regexFns, jsonFns)
+var base = slices.Concat(coreFns, stringFns, numberFns, valueFns, vectorFns, mapFns, regexFns, jsonFns,
+	osFns, pathFns, fileFns, procFns, timeFns)
 
 type builtinFn = func(c *Call, args []Value) (Value, error)
 

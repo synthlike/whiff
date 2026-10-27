@@ -1,0 +1,369 @@
+package puff
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"time"
+	_ "time/tzdata" // zones for time/to-string wherever puff runs
+)
+
+// path resolves p against the Env's directory.
+func (c *Call) path(p string) string {
+	if filepath.IsAbs(p) || c.Env.Dir == "" {
+		return p
+	}
+	return filepath.Join(c.Env.Dir, p)
+}
+
+var osFns = []*Builtin{
+	{Name: "io/println", Args: "v ...", Doc: "Print the values separated by spaces, strings as they are, then a newline.", Fn: func(c *Call, args []Value) (Value, error) {
+		parts := make([]string, len(args))
+		for i, v := range args {
+			if s, ok := v.(String); ok {
+				parts[i] = string(s)
+			} else {
+				parts[i] = Print(v)
+			}
+		}
+		fmt.Fprintln(c.Env.Stdout, strings.Join(parts, " "))
+		return Done, nil
+	}},
+	{Name: "env/get", Args: "name", Doc: "(some s): the environment variable name; (none) if it isn't set.", Fn: str1(func(name string) Value {
+		if s, ok := os.LookupEnv(name); ok {
+			return Some(String(s))
+		}
+		return None()
+	})},
+	{Name: "os/cwd", Doc: "The working directory.", Fn: func(c *Call, _ []Value) (Value, error) {
+		if c.Env.Dir != "" {
+			return String(c.Env.Dir), nil
+		}
+		dir, err := os.Getwd()
+		if err != nil {
+			return nil, err
+		}
+		return String(dir), nil
+	}},
+}
+
+var pathFns = []*Builtin{
+	{Name: "path/join", Args: "part ...", Doc: "The parts joined with /, cleaned.", Fn: func(_ *Call, args []Value) (Value, error) {
+		ss, err := strs(args)
+		if err != nil {
+			return nil, err
+		}
+		return String(filepath.Join(ss...)), nil
+	}},
+	{Name: "path/base", Args: "p", Doc: "The last element of p.", Fn: str1(func(p string) Value { return String(filepath.Base(p)) })},
+	{Name: "path/dir", Args: "p", Doc: "p without its last element.", Fn: str1(func(p string) Value { return String(filepath.Dir(p)) })},
+	{Name: "path/ext", Args: "p", Doc: "p's extension, with its dot: \".txt\"; \"\" if it has none.", Fn: str1(func(p string) Value { return String(filepath.Ext(p)) })},
+	{Name: "path/abs", Args: "p", Doc: "p from the root, relative to the working directory.", Fn: func(c *Call, args []Value) (Value, error) {
+		p, err := arg[String](args, 0, "a string")
+		if err != nil {
+			return nil, err
+		}
+		abs, err := filepath.Abs(c.path(string(p)))
+		if err != nil {
+			return nil, err
+		}
+		return String(abs), nil
+	}},
+}
+
+// fileErr is an (err e) for a failed file operation: :not-found,
+// :permission or :io.
+func fileErr(err error) Value {
+	kind := "io"
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		kind = "not-found"
+	case errors.Is(err, fs.ErrPermission):
+		kind = "permission"
+	}
+	return Errorf(kind, "%s", err)
+}
+
+// onPath makes a builtin of a function of a path, resolved, and the rest.
+func onPath(f func(path string, args []Value) (Value, error)) builtinFn {
+	return func(c *Call, args []Value) (Value, error) {
+		p, err := arg[String](args, 0, "a path string")
+		if err != nil {
+			return nil, err
+		}
+		return f(c.path(string(p)), args)
+	}
+}
+
+var fileFns = []*Builtin{
+	{Name: "file/read-text", Args: "path [opts]", Doc: "(ok s): the file's contents.", Fn: onPath(func(path string, args []Value) (Value, error) {
+		if _, err := options(args, 1); err != nil {
+			return nil, err
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return fileErr(err), nil
+		}
+		return Ok(String(b)), nil
+	})},
+	{Name: "file/write", Args: "path s", Mark: MarkWrite, Doc: "Write s to the file, replacing what it held.", Fn: onPath(func(path string, args []Value) (Value, error) {
+		s, err := arg[String](args, 1, "a string")
+		if err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(path, []byte(s), 0o644); err != nil {
+			return fileErr(err), nil
+		}
+		return Done, nil
+	})},
+	{Name: "file/write-atomic", Args: "path s", Mark: MarkWrite, Doc: "Write s to the file so a reader sees either the old contents or all of s.", Fn: onPath(func(path string, args []Value) (Value, error) {
+		s, err := arg[String](args, 1, "a string")
+		if err != nil {
+			return nil, err
+		}
+		if err := writeAtomic(path, []byte(s)); err != nil {
+			return fileErr(err), nil
+		}
+		return Done, nil
+	})},
+	{Name: "file/exists?", Args: "path", Doc: "Whether there is a file or directory at path.", Fn: onPath(func(path string, _ []Value) (Value, error) {
+		_, err := os.Stat(path)
+		return Bool(err == nil), nil
+	})},
+	{Name: "file/list", Args: "dir", Doc: "(ok names): the names in dir, sorted.", Fn: onPath(func(path string, _ []Value) (Value, error) {
+		entries, err := os.ReadDir(path)
+		if err != nil {
+			return fileErr(err), nil
+		}
+		names := make([]string, len(entries))
+		for i, e := range entries {
+			names[i] = e.Name()
+		}
+		return Ok(strVec(names)), nil
+	})},
+}
+
+// writeAtomic writes data to a temporary file next to path and renames it
+// over path.
+func writeAtomic(path string, data []byte) error {
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name()) // fails harmlessly after the rename
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(f.Name(), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), path)
+}
+
+// maxOutput bounds what proc/run keeps of each stream.
+const maxOutput = 16 << 20
+
+// capped is a buffer that refuses to grow past maxOutput.
+type capped struct {
+	b    bytes.Buffer
+	over bool
+}
+
+func (w *capped) Write(p []byte) (int, error) {
+	if w.b.Len()+len(p) > maxOutput {
+		w.over = true
+		return 0, errors.New("output too big")
+	}
+	return w.b.Write(p)
+}
+
+var procFns = []*Builtin{
+	{Name: "proc/run", Args: "cmd [opts]", Mark: MarkWrite, Doc: "Run cmd, a vector of the program and its arguments, without a shell: (ok {:exit :stdout :stderr}), whatever the exit code. Options: :stdin, a string; :dir; :timeout, a duration.", Fn: procRun},
+}
+
+func procRun(c *Call, args []Value) (Value, error) {
+	v, err := arg[Vector](args, 0, "a vector")
+	if err != nil {
+		return nil, err
+	}
+	argv, err := strs(v.items)
+	if err != nil {
+		return nil, err
+	}
+	if len(argv) == 0 {
+		return nil, errors.New("want a command and its arguments, got []")
+	}
+	opts, err := options(args, 1, "stdin", "dir", "timeout")
+	if err != nil {
+		return nil, err
+	}
+	ctx := c.Ctx
+	var timeout Duration
+	if t, ok := opts.Get(Keyword("timeout")); ok {
+		if timeout, ok = t.(Duration); !ok || timeout <= 0 {
+			return nil, fmt.Errorf("want a positive :timeout duration, got %s", Print(t))
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(timeout))
+		defer cancel()
+	}
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Dir = c.Env.Dir
+	if d, ok := opts.Get(Keyword("dir")); ok {
+		s, ok := d.(String)
+		if !ok {
+			return nil, fmt.Errorf("want a :dir string, got %s", Print(d))
+		}
+		cmd.Dir = c.path(string(s))
+	}
+	if in, ok := opts.Get(Keyword("stdin")); ok {
+		s, ok := in.(String)
+		if !ok {
+			return nil, fmt.Errorf("want a :stdin string, got %s", Print(in))
+		}
+		cmd.Stdin = strings.NewReader(string(s))
+	}
+	var stdout, stderr capped
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	// Its own process group, so a timeout or cancel kills what it started too.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = time.Second
+	err = cmd.Run()
+	var exitErr *exec.ExitError
+	switch {
+	case c.Ctx.Err() != nil:
+		return nil, errors.New("cancelled")
+	case ctx.Err() != nil:
+		return Errorf("timeout", "%s took longer than %s", argv[0], Print(timeout)), nil
+	case stdout.over || stderr.over:
+		return Errorf("too-big", "%s wrote more than %d bytes", argv[0], maxOutput), nil
+	case err == nil, errors.As(err, &exitErr):
+	case errors.Is(err, exec.ErrNotFound):
+		return Errorf("not-found", "%s", err), nil
+	default:
+		return Errorf("io", "%s", err), nil
+	}
+	m, _ := NewMap(
+		Entry{Keyword("exit"), Int(cmd.ProcessState.ExitCode())},
+		Entry{Keyword("stdout"), String(stdout.b.String())},
+		Entry{Keyword("stderr"), String(stderr.b.String())},
+	)
+	return Ok(m), nil
+}
+
+// timeLayout is how a time is kept in its tag: UTC, to the millisecond, so
+// equal times are equal values and sort as strings.
+const timeLayout = "2006-01-02T15:04:05.000Z"
+
+func timeValue(t time.Time) Value {
+	return NewTag("time", String(t.UTC().Format(timeLayout)))
+}
+
+func timeArg(args []Value, i int) (time.Time, error) {
+	if tg, ok := args[i].(Tag); ok && tg.name == "time" && len(tg.args) == 1 {
+		if s, ok := tg.args[0].(String); ok {
+			if t, err := time.Parse(time.RFC3339Nano, string(s)); err == nil {
+				return t, nil
+			}
+		}
+	}
+	return time.Time{}, fmt.Errorf("want a time, got %s", Print(args[i]))
+}
+
+func time2(f func(a, b time.Time) Value) builtinFn {
+	return func(_ *Call, args []Value) (Value, error) {
+		a, err := timeArg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		b, err := timeArg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		return f(a, b), nil
+	}
+}
+
+var timeFns = []*Builtin{
+	{Name: "time/now", Doc: "The time now: (time \"2026-10-27T18:25:00.123Z\").", Fn: func(*Call, []Value) (Value, error) {
+		return timeValue(time.Now()), nil
+	}},
+	{Name: "time/from-string", Args: "s", Doc: "(ok t): s read as an RFC 3339 time, with any offset.", Fn: str1(func(s string) Value {
+		t, err := time.Parse(time.RFC3339Nano, s)
+		if err != nil {
+			return Errorf("parse", "not an RFC 3339 time: %q", s)
+		}
+		return Ok(timeValue(t))
+	})},
+	{Name: "time/to-string", Args: "t [opts]", Doc: "t in RFC 3339, in UTC or in {:zone \"Europe/Warsaw\"}.", Fn: func(_ *Call, args []Value) (Value, error) {
+		t, err := timeArg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		opts, err := options(args, 1, "zone")
+		if err != nil {
+			return nil, err
+		}
+		loc := time.UTC
+		if z, ok := opts.Get(Keyword("zone")); ok {
+			name, ok := z.(String)
+			if !ok {
+				return nil, fmt.Errorf("want a :zone string, got %s", Print(z))
+			}
+			if loc, err = time.LoadLocation(string(name)); err != nil {
+				return nil, fmt.Errorf("unknown time zone %s", name)
+			}
+		}
+		return String(t.In(loc).Format("2006-01-02T15:04:05.999Z07:00")), nil
+	}},
+	{Name: "time/from-unix-ms", Args: "ms", Doc: "The time ms milliseconds after 1970-01-01 UTC.", Fn: func(_ *Call, args []Value) (Value, error) {
+		ms, err := arg[Int](args, 0, "an int")
+		if err != nil {
+			return nil, err
+		}
+		return timeValue(time.UnixMilli(int64(ms))), nil
+	}},
+	{Name: "time/to-unix-ms", Args: "t", Doc: "Milliseconds from 1970-01-01 UTC to t.", Fn: func(_ *Call, args []Value) (Value, error) {
+		t, err := timeArg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		return Int(t.UnixMilli()), nil
+	}},
+	{Name: "time/add", Args: "t d", Doc: "The time d after t.", Fn: func(_ *Call, args []Value) (Value, error) {
+		t, err := timeArg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		d, err := arg[Duration](args, 1, "a duration")
+		if err != nil {
+			return nil, err
+		}
+		return timeValue(t.Add(time.Duration(d))), nil
+	}},
+	{Name: "time/diff", Args: "a b", Doc: "The duration from b to a.", Fn: time2(func(a, b time.Time) Value { return Duration(a.Sub(b)) })},
+	{Name: "time/before?", Args: "a b", Doc: "Whether a is before b.", Fn: time2(func(a, b time.Time) Value { return Bool(a.Before(b)) })},
+	{Name: "time/since", Args: "t", Doc: "The duration from t to now.", Fn: func(_ *Call, args []Value) (Value, error) {
+		t, err := timeArg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		return Duration(time.Since(t)), nil
+	}},
+}

@@ -49,7 +49,10 @@ func (f *Func) print(b *strings.Builder) {
 // loaded into it. It is not safe for concurrent use.
 type Env struct {
 	// Stdout is where io/println and help write.
-	Stdout  io.Writer
+	Stdout io.Writer
+	// Dir is where relative paths, os/cwd and proc/run start; "" is the
+	// process's working directory.
+	Dir     string
 	globals map[string]*global
 }
 
