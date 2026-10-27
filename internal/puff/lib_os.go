@@ -267,52 +267,23 @@ func procRun(c *Call, args []Value) (Value, error) {
 	return Ok(m), nil
 }
 
-// timeLayout is how a time is kept in its tag: UTC, to the millisecond, so
-// equal times are equal values and sort as strings.
-const timeLayout = "2006-01-02T15:04:05.000Z"
-
-func timeValue(t time.Time) Value {
-	return NewTag("time", String(t.UTC().Format(timeLayout)))
-}
-
-func timeArg(args []Value, i int) (time.Time, error) {
-	if tg, ok := args[i].(Tag); ok && tg.name == "time" && len(tg.args) == 1 {
-		if s, ok := tg.args[0].(String); ok {
-			if t, err := time.Parse(time.RFC3339Nano, string(s)); err == nil {
-				return t, nil
-			}
-		}
-	}
-	return time.Time{}, fmt.Errorf("want a time, got %s", Print(args[i]))
-}
-
-func time2(f func(a, b time.Time) Value) builtinFn {
-	return func(_ *Call, args []Value) (Value, error) {
-		a, err := timeArg(args, 0)
-		if err != nil {
-			return nil, err
-		}
-		b, err := timeArg(args, 1)
-		if err != nil {
-			return nil, err
-		}
-		return f(a, b), nil
-	}
-}
-
+// Arithmetic and comparison on times are +, - and <, as for durations.
 var timeFns = []*Builtin{
-	{Name: "time/now", Doc: "The time now: (time \"2026-10-27T18:25:00.123Z\").", Fn: func(*Call, []Value) (Value, error) {
-		return timeValue(time.Now()), nil
+	{Name: "time/now", Doc: "The time now: 2026-10-27T18:25:00.123456Z.", Fn: func(*Call, []Value) (Value, error) {
+		return NewTime(time.Now()), nil
 	}},
 	{Name: "time/from-string", Args: "s", Doc: "(ok t): s read as an RFC 3339 time, with any offset.", Fn: str1(func(s string) Value {
 		t, err := time.Parse(time.RFC3339Nano, s)
-		if err != nil {
+		switch {
+		case err != nil:
 			return Errorf("parse", "not an RFC 3339 time: %q", s)
+		case !timeFits(t):
+			return Errorf("parse", "%s is out of range: times are from 1678 to 2262", s)
 		}
-		return Ok(timeValue(t))
+		return Ok(NewTime(t))
 	})},
 	{Name: "time/to-string", Args: "t [opts]", Doc: "t in RFC 3339, in UTC or in {:zone \"Europe/Warsaw\"}.", Fn: func(_ *Call, args []Value) (Value, error) {
-		t, err := timeArg(args, 0)
+		t, err := arg[Time](args, 0, "a time")
 		if err != nil {
 			return nil, err
 		}
@@ -330,40 +301,31 @@ var timeFns = []*Builtin{
 				return nil, fmt.Errorf("unknown time zone %s", name)
 			}
 		}
-		return String(t.In(loc).Format("2006-01-02T15:04:05.999Z07:00")), nil
+		return String(t.Go().In(loc).Format("2006-01-02T15:04:05.999999999Z07:00")), nil
 	}},
 	{Name: "time/from-unix-ms", Args: "ms", Doc: "The time ms milliseconds after 1970-01-01 UTC.", Fn: func(_ *Call, args []Value) (Value, error) {
 		ms, err := arg[Int](args, 0, "an int")
 		if err != nil {
 			return nil, err
 		}
-		return timeValue(time.UnixMilli(int64(ms))), nil
+		t := time.UnixMilli(int64(ms))
+		if !timeFits(t) {
+			return nil, fmt.Errorf("%d ms is out of range: times are from 1678 to 2262", ms)
+		}
+		return NewTime(t), nil
 	}},
 	{Name: "time/to-unix-ms", Args: "t", Doc: "Milliseconds from 1970-01-01 UTC to t.", Fn: func(_ *Call, args []Value) (Value, error) {
-		t, err := timeArg(args, 0)
+		t, err := arg[Time](args, 0, "a time")
 		if err != nil {
 			return nil, err
 		}
-		return Int(t.UnixMilli()), nil
+		return Int(t.Go().UnixMilli()), nil
 	}},
-	{Name: "time/add", Args: "t d", Doc: "The time d after t.", Fn: func(_ *Call, args []Value) (Value, error) {
-		t, err := timeArg(args, 0)
-		if err != nil {
-			return nil, err
-		}
-		d, err := arg[Duration](args, 1, "a duration")
-		if err != nil {
-			return nil, err
-		}
-		return timeValue(t.Add(time.Duration(d))), nil
-	}},
-	{Name: "time/diff", Args: "a b", Doc: "The duration from b to a.", Fn: time2(func(a, b time.Time) Value { return Duration(a.Sub(b)) })},
-	{Name: "time/before?", Args: "a b", Doc: "Whether a is before b.", Fn: time2(func(a, b time.Time) Value { return Bool(a.Before(b)) })},
 	{Name: "time/since", Args: "t", Doc: "The duration from t to now.", Fn: func(_ *Call, args []Value) (Value, error) {
-		t, err := timeArg(args, 0)
+		t, err := arg[Time](args, 0, "a time")
 		if err != nil {
 			return nil, err
 		}
-		return Duration(time.Since(t)), nil
+		return Duration(time.Since(t.Go())), nil
 	}},
 }

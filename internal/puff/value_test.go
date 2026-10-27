@@ -37,6 +37,8 @@ func TestPrint(t *testing.T) {
 		{Duration(48 * time.Hour), "2d"},
 		{Duration(1500 * time.Microsecond), "1500us"},
 		{Duration(-5 * time.Second), "-5s"},
+		{NewTime(time.Date(2026, 10, 27, 10, 0, 0, 0, time.UTC)), "2026-10-27T10:00:00Z"},
+		{NewTime(time.Date(2026, 10, 27, 12, 0, 0, 5e8, time.FixedZone("CEST", 2*3600))), "2026-10-27T10:00:00.5Z"},
 		{NewVector(), "[]"},
 		{NewVector(Int(1), String("a"), NewVector()), `[1 "a" []]`},
 		{mustMap(t), "{}"},
@@ -75,6 +77,7 @@ func TestNewMapErrors(t *testing.T) {
 		{"duplicate", []Entry{{Int(1), Int(1)}, {Keyword("a"), Int(2)}, {Int(1), Int(3)}}},
 		{"float key", []Entry{{Float(1), Int(1)}}},
 		{"duration key", []Entry{{Duration(time.Second), Int(1)}}},
+		{"time key", []Entry{{Time{0}, Int(1)}}},
 		{"vector key", []Entry{{NewVector(), Int(1)}}},
 	}
 	for _, tt := range tests {
@@ -114,6 +117,8 @@ func TestEqual(t *testing.T) {
 		{Int(1), Float(1), false},
 		{String("a"), Keyword("a"), false},
 		{Duration(time.Minute), Duration(60 * time.Second), true},
+		{NewTime(time.Date(2026, 10, 27, 12, 0, 0, 0, time.FixedZone("CEST", 2*3600))), NewTime(time.Date(2026, 10, 27, 10, 0, 0, 0, time.UTC)), true},
+		{Time{0}, Duration(0), false},
 		{NewVector(Int(1), NewVector(Int(2))), NewVector(Int(1), NewVector(Int(2))), true},
 		{NewVector(Int(1)), NewVector(Int(1), Int(2)), false},
 		{NewVector(), NewTag("v"), false},

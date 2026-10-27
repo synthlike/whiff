@@ -50,7 +50,7 @@ const (
 type Form struct {
 	Kind  FormKind
 	Pos   Pos
-	Val   Value   // FormLiteral: a bool, int, float, string, keyword or duration
+	Val   Value   // FormLiteral: a bool, int, float, string, keyword, duration or time
 	Name  string  // FormSymbol
 	Items []*Form // FormList, FormVector, FormMap (keys and values alternating)
 }

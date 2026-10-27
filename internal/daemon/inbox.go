@@ -28,6 +28,7 @@ type asked struct {
 	addr string // the service whose inbox it is in
 	fn   string
 	args puff.Vector
+	at   time.Time // when it arrived
 }
 
 // pending is the (err {:kind :pending :id id}) a sender gets for a message
@@ -55,7 +56,7 @@ func (d *daemon) ask(st *state, s *service, m message) puff.Value {
 		return puff.Errorf("full", ":%s's inbox is full", s.name)
 	}
 	st.nextID++
-	a := &asked{ticket: ticket{id: st.nextID, from: m.from, dir: m.dir}, addr: s.name, fn: m.fn, args: args}
+	a := &asked{ticket: ticket{id: st.nextID, from: m.from, dir: m.dir}, addr: s.name, fn: m.fn, args: args, at: time.Now()}
 	st.asked = append(st.asked, a)
 	if h.expires > 0 {
 		time.AfterFunc(h.expires, func() {
@@ -142,13 +143,15 @@ func (d *daemon) reply(by string, idv, result puff.Value) (puff.Value, error) {
 }
 
 // value is a as (inbox) shows it: {:id 7 :fn :suggest :args ["write docs"]
-// :from :agent/1 :cwd "..."}, without :from for a client.
+// :from :agent/1 :cwd "..." :at 2026-10-27T10:00:00Z}, without :from for a
+// client.
 func (a *asked) value() puff.Value {
 	es := []puff.Entry{
 		{Key: puff.Keyword("id"), Val: puff.Int(a.id)},
 		{Key: puff.Keyword("fn"), Val: puff.Keyword(a.fn)},
 		{Key: puff.Keyword("args"), Val: a.args},
 		{Key: puff.Keyword("cwd"), Val: puff.String(a.dir)},
+		{Key: puff.Keyword("at"), Val: puff.NewTime(a.at)},
 	}
 	if a.from != "" {
 		es = append(es, puff.Entry{Key: puff.Keyword("from"), Val: puff.Keyword(a.from)})

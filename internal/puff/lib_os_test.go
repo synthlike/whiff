@@ -102,17 +102,17 @@ func TestProcLib(t *testing.T) {
 
 func TestTimeLib(t *testing.T) {
 	testLib(t, []struct{ src, want string }{
-		{`(time/from-unix-ms 0)`, `(time "1970-01-01T00:00:00.000Z")`},
-		{`(time/from-string "2026-10-27T20:25:00+02:00")`, `(ok (time "2026-10-27T18:25:00.000Z"))`},
+		{`(time/from-unix-ms 0)`, `1970-01-01T00:00:00Z`},
+		{`(time/from-string "2026-10-27T20:25:00+02:00")`, `(ok 2026-10-27T18:25:00Z)`},
 		{`(time/to-unix-ms (time/from-unix-ms 1500))`, `1500`},
-		{`[(time/to-string (time/from-unix-ms 0)) (time/to-string (time/from-unix-ms 1500))]`, `["1970-01-01T00:00:00Z" "1970-01-01T00:00:01.5Z"]`},
+		{`[(time/to-string (time/from-unix-ms 0)) (time/to-string 1970-01-01T00:00:01.000000005Z)]`, `["1970-01-01T00:00:00Z" "1970-01-01T00:00:01.000000005Z"]`},
 		{`(-> (time/from-unix-ms 0) (time/to-string {:zone "Europe/Warsaw"}))`, `"1970-01-01T01:00:00+01:00"`},
-		{`(time/add (time/from-unix-ms 0) 90s)`, `(time "1970-01-01T00:01:30.000Z")`},
-		{`(time/diff (time/from-unix-ms 2000) (time/from-unix-ms 500))`, `1500ms`},
-		{`(time/before? (time/from-unix-ms 1) (time/from-unix-ms 2))`, `#t`},
-		{`[(time/before? (time/from-unix-ms 0) (time/now)) (> (time/since (time/from-unix-ms 0)) 0s)]`, `[#t #t]`},
+		{`[(< (time/from-unix-ms 0) (time/now)) (> (time/since (time/from-unix-ms 0)) 0s)]`, `[#t #t]`},
+		{`(time/from-string "3000-01-01T00:00:00Z")`, `(err {:kind :parse :message "3000-01-01T00:00:00Z is out of range: times are from 1678 to 2262"})`},
 
 		{`(time/to-unix-ms 5)`, "1:1: time/to-unix-ms: want a time, got 5"},
+		{`(match (value/from-string "(time \"1970-01-01T00:00:00.000Z\")") [(ok v) (time/to-unix-ms v)])`, `1:74: time/to-unix-ms: want a time, got (time "1970-01-01T00:00:00.000Z")`},
+		{`(time/from-unix-ms 9223372036854775807)`, "1:1: time/from-unix-ms: 9223372036854775807 ms is out of range: times are from 1678 to 2262"},
 		{`(time/to-string (time/now) {:zone "Mars/Base"})`, "1:1: time/to-string: unknown time zone Mars/Base"},
 	})
 	if got := load(NewEnv(), `(time/from-string "yesterday")`); !strings.HasPrefix(got, "(err {:kind :parse") {

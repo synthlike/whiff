@@ -16,8 +16,11 @@ func TestInbox(t *testing.T) {
 		"todo": `(srv todo
   (ask (suggest text) "Suggests a todo.")
   (ask (quick) "Waits a moment." :expires 50ms)
-  (on (items) "The inbox." (ok (inbox)))
-  (on (suggested) "Only the suggestions." (ok (inbox :suggest)))
+  (def (timeless items) (vector/map items (fn (a) (map/delete a :at))))
+  (on (items) "The inbox, without times." (ok (timeless (inbox))))
+  (on (suggested) "Only the suggestions." (ok (timeless (inbox :suggest))))
+  (on (recent) "Whether each message came in the last minute."
+    (ok (vector/map (inbox) (fn (a) (match a [{:at t} (< (time/since t) 1m)])))))
   (on (answer id v) "Answers id." (reply id (ok v))))`,
 		"asker": `(srv asker
   (on (ask text) "Asks todo." (call :todo/suggest text))
@@ -40,6 +43,7 @@ func TestInbox(t *testing.T) {
 		{pending(`(call :todo/suggest)`), `:bad-call`},
 		{`(call :todo/items)`, `(ok [{:args ["docs"] :cwd "/tmp/w" :fn :suggest :id 1} {:args ["tests"] :cwd "/tmp/w" :fn :suggest :from :asker :id 2} {:args [] :cwd "/tmp/w" :fn :quick :id 3}])`},
 		{`(call :todo/suggested)`, `(ok [{:args ["docs"] :cwd "/tmp/w" :fn :suggest :id 1} {:args ["tests"] :cwd "/tmp/w" :fn :suggest :from :asker :id 2}])`},
+		{`(call :todo/recent)`, `(ok [#t #t #t])`},
 		{`(call :todo/answer 2 "done tests")`, `(ok :done)`},
 		{`(call :todo/answer 2 "again")`, `(err {:kind :no-id :message "no message 2 waits in :todo's inbox"})`},
 	}

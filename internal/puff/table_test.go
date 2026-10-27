@@ -40,7 +40,7 @@ func TestErrorf(t *testing.T) {
 
 func TestHelp(t *testing.T) {
 	tests := []struct{ src, want string }{
-		{"(help +)", "(+ a b ...) :read\n  The sum of ints, floats or durations.\n"},
+		{"(help +)", "(+ a b ...) :read\n  The sum of ints, floats or durations, or a time plus durations.\n"},
 		{"(help none)", "(none) :read\n  An empty Option.\n"},
 		{"(def (sq n) (* n n)) (help sq)", "(sq n) :read\n"},
 		{"(help (fn (x y) x))", "(fn x y) :read\n"},

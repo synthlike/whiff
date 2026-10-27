@@ -19,12 +19,12 @@ var coreFns = []*Builtin{
 		return Bool(Equal(args[0], args[1])), nil
 	}},
 	{Name: "not", Args: "b", Doc: "The other bool.", Fn: not},
-	{Name: "<", Args: "a b", Doc: "Whether a is less than b: ints, floats, strings or durations.", Fn: compareFn(func(c int) bool { return c < 0 })},
+	{Name: "<", Args: "a b", Doc: "Whether a is less than b: ints, floats, strings, durations or times.", Fn: compareFn(func(c int) bool { return c < 0 })},
 	{Name: "<=", Args: "a b", Doc: "Whether a is at most b.", Fn: compareFn(func(c int) bool { return c <= 0 })},
 	{Name: ">", Args: "a b", Doc: "Whether a is greater than b.", Fn: compareFn(func(c int) bool { return c > 0 })},
 	{Name: ">=", Args: "a b", Doc: "Whether a is at least b.", Fn: compareFn(func(c int) bool { return c >= 0 })},
-	{Name: "+", Args: "a b ...", Doc: "The sum of ints, floats or durations.", Fn: add},
-	{Name: "-", Args: "a [b]", Doc: "a minus b, or minus a.", Fn: sub},
+	{Name: "+", Args: "a b ...", Doc: "The sum of ints, floats or durations, or a time plus durations.", Fn: add},
+	{Name: "-", Args: "a [b]", Doc: "a minus b, or minus a. A time minus a duration is a time, minus a time a duration.", Fn: sub},
 	{Name: "*", Args: "a b ...", Doc: "The product of ints or floats.", Fn: mul},
 }
 
@@ -57,7 +57,8 @@ func compareFn(ok func(int) bool) func(*Call, []Value) (Value, error) {
 	}
 }
 
-// compare orders two ints, floats, strings or durations of the same type.
+// compare orders two ints, floats, strings, durations or times of the same
+// type.
 func compare(a, b Value) (int, error) {
 	switch a := a.(type) {
 	case Int:
@@ -76,6 +77,10 @@ func compare(a, b Value) (int, error) {
 		if b, ok := b.(Duration); ok {
 			return cmp.Compare(a, b), nil
 		}
+	case Time:
+		if b, ok := b.(Time); ok {
+			return cmp.Compare(a.ns, b.ns), nil
+		}
 	}
 	return 0, fmt.Errorf("can't compare %s and %s", typeName(a), typeName(b))
 }
@@ -84,7 +89,12 @@ func add(_ *Call, args []Value) (Value, error) {
 	acc := args[0]
 	for _, v := range args[1:] {
 		var err error
-		if acc, err = arith("add", acc, v, addInt, func(x, y float64) float64 { return x + y }, true); err != nil {
+		if t, ok := acc.(Time); ok {
+			acc, err = shift("add", t, v, addInt)
+		} else {
+			acc, err = arith("add", acc, v, addInt, func(x, y float64) float64 { return x + y }, true)
+		}
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -93,6 +103,16 @@ func add(_ *Call, args []Value) (Value, error) {
 
 func sub(_ *Call, args []Value) (Value, error) {
 	if len(args) == 2 {
+		if t, ok := args[0].(Time); ok {
+			if u, ok := args[1].(Time); ok {
+				d, ok := subInt(t.ns, u.ns)
+				if !ok {
+					return nil, errors.New("duration overflow")
+				}
+				return Duration(d), nil
+			}
+			return shift("subtract", t, args[1], subInt)
+		}
 		return arith("subtract", args[0], args[1], subInt, func(x, y float64) float64 { return x - y }, true)
 	}
 	switch a := args[0].(type) {
@@ -150,6 +170,18 @@ func arith(verb string, a, b Value, ints func(x, y int64) (int64, bool), floats 
 	return nil, fmt.Errorf("can't %s %s and %s", verb, typeName(a), typeName(b))
 }
 
+// shift moves t by d, a duration, with ints: addInt or subInt.
+func shift(verb string, t Time, d Value, ints func(x, y int64) (int64, bool)) (Value, error) {
+	if d, ok := d.(Duration); ok {
+		ns, ok := ints(t.ns, int64(d))
+		if !ok {
+			return nil, errors.New("time overflow")
+		}
+		return Time{ns}, nil
+	}
+	return nil, fmt.Errorf("can't %s %s and %s", verb, typeName(t), typeName(d))
+}
+
 func addInt(a, b int64) (int64, bool) {
 	c := a + b
 	return c, !(b > 0 && c < a || b < 0 && c > a)
@@ -182,6 +214,8 @@ func typeName(v Value) string {
 		return "keyword"
 	case Duration:
 		return "duration"
+	case Time:
+		return "time"
 	case Vector:
 		return "vector"
 	case Map:

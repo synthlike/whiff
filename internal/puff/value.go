@@ -25,6 +25,20 @@ type (
 	Duration time.Duration
 )
 
+// Time is a point in time, as durations are spans: 2026-10-27T10:00:00Z. It
+// is kept as UTC nanoseconds since 1970, so equal times are equal values;
+// that covers the years 1678 to 2262.
+type Time struct{ ns int64 }
+
+// NewTime returns t as a puff time; t must be within timeFits's range.
+func NewTime(t time.Time) Time { return Time{t.UnixNano()} }
+
+// Go returns v as a Go time, in UTC.
+func (v Time) Go() time.Time { return time.Unix(0, v.ns).UTC() }
+
+// timeFits reports whether t is within the range a Time holds.
+func timeFits(t time.Time) bool { return time.Unix(0, t.UnixNano()).Equal(t) }
+
 // Vector is an immutable sequence: [1 2 3].
 type Vector struct{ items []Value }
 

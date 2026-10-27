@@ -216,11 +216,26 @@ var (
 	intRe      = regexp.MustCompile(`^[+-]?[0-9]+$`)
 	floatRe    = regexp.MustCompile(`^[+-]?[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?$`)
 	durationRe = regexp.MustCompile(`^([+-]?[0-9]+)([a-z]+)$`)
+	timeRe     = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,9})?(Z|[+-][0-9]{2}:[0-9]{2})$`)
 )
 
-// number reads an int, float or duration token. Durations are whole numbers
-// of one unit: 500ms, not 0.5s.
+// number reads an int, float, duration or time token. Durations are whole
+// numbers of one unit: 500ms, not 0.5s. Times are RFC 3339 in UTC, ending
+// in Z, so a time prints as it is written (but for trailing zeros).
 func number(tok string) (Value, error) {
+	if m := timeRe.FindStringSubmatch(tok); m != nil {
+		if m[2] != "Z" {
+			return nil, fmt.Errorf("time %s: write it in UTC, ending in Z", tok)
+		}
+		t, err := time.Parse(time.RFC3339Nano, tok)
+		switch {
+		case err != nil:
+			return nil, fmt.Errorf("bad time %s", tok)
+		case !timeFits(t):
+			return nil, fmt.Errorf("time %s out of range", tok)
+		}
+		return NewTime(t), nil
+	}
 	switch {
 	case intRe.MatchString(tok):
 		n, err := strconv.ParseInt(tok, 10, 64)

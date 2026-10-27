@@ -72,6 +72,10 @@ func (v Duration) print(b *strings.Builder) {
 	}
 }
 
+// Times print in RFC 3339 in UTC, with the fractional digits they need:
+// 2026-10-27T10:00:00Z, 2026-10-27T10:00:00.5Z.
+func (v Time) print(b *strings.Builder) { b.WriteString(v.Go().Format(time.RFC3339Nano)) }
+
 func (v Vector) print(b *strings.Builder) {
 	b.WriteByte('[')
 	printSeq(b, v.items)

@@ -161,7 +161,7 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 				return d.marker().describe(string(addr)), nil
 			}},
 		{Name: "inbox", Args: "[fn]", Mark: puff.MarkRead,
-			Doc: "This service's messages waiting for a reply, oldest first, each {:id :fn :args :from :cwd}; only fn's, a keyword, if given.",
+			Doc: "This service's messages waiting for a reply, oldest first, each {:id :fn :args :from :cwd :at}; only fn's, a keyword, if given.",
 			Fn: func(_ *puff.Call, args []puff.Value) (puff.Value, error) {
 				if cur.addr == "" {
 					return nil, errors.New("only a service has an inbox")
