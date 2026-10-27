@@ -21,6 +21,7 @@ const usage = `usage:
   whiff call address/fn args...   call a function and print its value
   whiff send address/fn args...   send a message without waiting
   whiff pub topic value           publish value to the topic's subscribers
+  whiff sub [topic...]            print what is published to the topics, every topic by default, until stopped
   whiff try file.puff fn args...  load a service file, call its function once and unload it
   whiff inbox [address]           list the messages waiting for a reply: yours, :me's, by default
   whiff reply id value            answer a message waiting for a reply
@@ -52,6 +53,8 @@ func run(args []string, dir, services string, stdout, stderr io.Writer) int {
 	switch {
 	case len(args) >= 2 && (args[0] == "call" || args[0] == "send"):
 		return message(dir, args[0], args[1], args[2:], stdout, stderr)
+	case len(args) >= 1 && args[0] == "sub":
+		return sub(dir, args[1:], stdout, stderr)
 	case len(args) >= 3 && args[0] == "try":
 		return try(dir, args[1], args[2], args[3:], stdout, stderr)
 	case len(args) == 3 && args[0] == "pub":
@@ -191,6 +194,30 @@ func result(op string, resp rpc.Response, stdout, stderr io.Writer) int {
 		} else {
 			fmt.Fprintln(stdout, puff.Print(r.At(0)))
 		}
+	}
+	return 0
+}
+
+// sub prints each value published to topics, every topic if there are
+// none, a line each, until the daemon stops:
+//
+//	09:00:40.788  :jobs/done  user   :jobs  {:id 3 ...}
+func sub(dir string, topics []string, stdout, stderr io.Writer) int {
+	c := connect(dir, stderr)
+	if c == nil {
+		return 1
+	}
+	defer c.Close()
+	if _, err := c.Sub(topics...); err != nil {
+		fmt.Fprintf(stderr, "whiff: %v\n", err)
+		return 1
+	}
+	for e := range c.Events() {
+		from := "client"
+		if e.From != "" {
+			from = ":" + e.From
+		}
+		fmt.Fprintf(stdout, "%s  :%s  %-5s  %s  %s\n", e.At.Local().Format("15:04:05.000"), e.Topic, e.Origin, from, e.Value)
 	}
 	return 0
 }

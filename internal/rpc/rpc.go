@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -17,17 +18,17 @@ import (
 
 // Version is the protocol version. Bump it when a message changes; hello and
 // stop must stay readable by every version, so an old daemon can be stopped.
-const Version = 9
+const Version = 10
 
 // Request is a client's message to the daemon. The daemon answers each with
 // a Response, in order, except an answer, which has none.
 type Request struct {
-	Op      string `json:"op"`                // "hello", "eval", "call", "send", "pub", "try", "inbox", "reply", "wait", "claim", "answer", "history", "ls" or "stop"
+	Op      string `json:"op"`                // "hello", "eval", "call", "send", "pub", "sub", "try", "inbox", "reply", "wait", "claim", "answer", "history", "ls" or "stop"
 	Version int    `json:"version,omitempty"` // hello: the client's protocol
 	Src     string `json:"src,omitempty"`     // eval: puff code; claim: the interface, (on ...) and (ask ...) forms without bodies; try: the service file
 	File    string `json:"file,omitempty"`    // try: the service file's name, for its errors
 	Target  string `json:"target,omitempty"`  // call, send: address/fn; pub: the topic; inbox, claim: the address; try: the fn
-	Args    string `json:"args,omitempty"`    // call, send, pub, try: a printed puff vector, of one value for pub; reply: [id result]; wait: [id]; answer: the printed Result
+	Args    string `json:"args,omitempty"`    // call, send, pub, try: a printed puff vector, of one value for pub; reply: [id result]; wait: [id]; answer: the printed Result; sub: the topics, a printed vector of keywords, [] for every topic
 	Dir     string `json:"dir,omitempty"`     // eval, call, send, pub, try: the client's working directory
 	ID      int64  `json:"id,omitempty"`      // answer: the Delivery's ID
 	// Agent says the client acts for an agent: its messages' origin is
@@ -35,8 +36,9 @@ type Request struct {
 	Agent bool `json:"agent,omitempty"`
 }
 
-// Response is the daemon's answer to one Request, or, with Delivery set, a
-// message for the address the client holds.
+// Response is the daemon's answer to one Request; or, with Delivery set, a
+// message for the address the client holds; or, with Event set, a value
+// published to a topic the client subscribed to.
 type Response struct {
 	Version  int       `json:"version,omitempty"` // hello: the daemon's protocol
 	Value    string    `json:"value,omitempty"`   // eval: the printed value; others: the printed Result
@@ -44,6 +46,16 @@ type Response struct {
 	Error    string    `json:"error,omitempty"`
 	Fault    bool      `json:"fault,omitempty"` // eval: Error is a fault
 	Delivery *Delivery `json:"delivery,omitempty"`
+	Event    *Event    `json:"event,omitempty"`
+}
+
+// Event is a value published to a topic a client subscribed to.
+type Event struct {
+	At     time.Time `json:"at"`
+	Topic  string    `json:"topic"`
+	Value  string    `json:"value"`          // the printed value
+	From   string    `json:"from,omitempty"` // the publisher's address; "" for a client
+	Origin string    `json:"origin"`         // "user" or "agent"
 }
 
 // Delivery is a message to a function of the address a client holds. The
@@ -121,6 +133,7 @@ type Client struct {
 	mu         sync.Mutex // held for a request and its response
 	resps      chan Response
 	deliveries chan Delivery
+	events     chan Event    // closed when the connection ends
 	done       chan struct{} // closed when the connection ends
 	err        error         // why it ended, set before done is closed
 }
@@ -149,7 +162,7 @@ func Dial(dir string, start func() error) (*Client, error) {
 		return nil, err
 	}
 	c := &Client{conn: NewConn(nc), resps: make(chan Response),
-		deliveries: make(chan Delivery, 100), done: make(chan struct{})}
+		deliveries: make(chan Delivery, 100), events: make(chan Event, 100), done: make(chan struct{})}
 	go c.read()
 	var resp Response
 	if err := c.roundTrip(Request{Op: "hello", Version: Version}, &resp); err != nil {
@@ -229,6 +242,24 @@ func (c *Client) Claim(addr, iface string) (Response, error) {
 	return resp, err
 }
 
+// Sub subscribes this connection to topics, every topic if there are none:
+// what is published to them then comes on Events until the connection
+// closes.
+func (c *Client) Sub(topics ...string) (Response, error) {
+	keys := make([]string, len(topics))
+	for i, t := range topics {
+		keys[i] = ":" + strings.TrimPrefix(t, ":")
+	}
+	var resp Response
+	err := c.roundTrip(Request{Op: "sub", Args: "[" + strings.Join(keys, " ") + "]"}, &resp)
+	return resp, err
+}
+
+// Events are the values published to the topics this connection subscribed
+// to; the channel closes when the connection ends. A client that doesn't
+// keep reading them misses some: the daemon doesn't wait for it.
+func (c *Client) Events() <-chan Event { return c.events }
+
 // Deliveries are the messages to the address this connection holds. A
 // client that claims one keeps reading them: until it does, the responses
 // to its requests wait behind them.
@@ -255,6 +286,7 @@ func (c *Client) Close() error { return c.conn.Close() }
 // read sorts what the daemon sends into responses and deliveries until the
 // connection ends.
 func (c *Client) read() {
+	defer close(c.events)
 	defer close(c.done)
 	for {
 		var r Response
@@ -264,6 +296,13 @@ func (c *Client) read() {
 		}
 		if r.Delivery != nil {
 			c.deliveries <- *r.Delivery
+			continue
+		}
+		if r.Event != nil {
+			select {
+			case c.events <- *r.Event:
+			default: // nobody reads them
+			}
 			continue
 		}
 		c.resps <- r

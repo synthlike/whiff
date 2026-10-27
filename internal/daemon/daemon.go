@@ -126,10 +126,14 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 	conn := rpc.NewConn(nc)
 	l := newLink(conn)
 	var held *service // the address the client holds, if any
+	var sub *watcher  // its subscription, if any
 	defer func() {
 		close(l.gone)
 		if held != nil {
 			d.remove(held)
+		}
+		if sub != nil {
+			d.unsubscribe(sub)
 		}
 	}()
 	defer func() {
@@ -193,6 +197,12 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 			resp = d.message(ctx, from, req)
 		case "try":
 			resp = d.try(ctx, from, req)
+		case "sub":
+			if sub != nil {
+				resp.Error = "this connection is subscribed already"
+				break
+			}
+			sub, resp = d.subscribe(l, req)
 		case "claim":
 			if held != nil {
 				resp.Error = fmt.Sprintf("this connection holds :%s already", held.name)

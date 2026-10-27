@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/synthlike/whiff/internal/puff"
+	"github.com/synthlike/whiff/internal/rpc"
 )
 
 // mailboxSize bounds each address's mailbox.
@@ -89,11 +90,21 @@ type state struct {
 	nextID  int64                       // the last id given to a message answered later, or a job
 	answers []answered                  // the latest answers, oldest first
 	waiters map[int64][]chan puff.Value // whiff waits, by the id they wait for
+	subs    map[*watcher]bool           // clients' subscriptions: whiff sub
+}
+
+// watcher is a client subscribed to topics, every topic if topics is nil.
+// Its events wait in ch for the client's connection; when ch is full they
+// are dropped, so a slow client never holds up a publisher.
+type watcher struct {
+	topics map[string]bool
+	ch     chan rpc.Event
 }
 
 // route owns the state until the daemon stops; others reach it through do.
 func (d *daemon) route() {
-	st := &state{addrs: map[string]*service{}, jobs: map[int64]*job{}, waiters: map[int64][]chan puff.Value{}}
+	st := &state{addrs: map[string]*service{}, jobs: map[int64]*job{}, waiters: map[int64][]chan puff.Value{},
+		subs: map[*watcher]bool{}}
 	for {
 		select {
 		case op := <-d.ops:
@@ -149,9 +160,24 @@ func (d *daemon) put(st *state, addr string, m message) puff.Value {
 }
 
 // publish puts m, for a topic, in the mailbox of every service subscribed to
-// it. A full mailbox is recorded in history; the publisher doesn't wait.
+// it, and sends it to every client that is. A full mailbox is recorded in
+// history; the publisher doesn't wait.
 func (d *daemon) publish(m message) {
+	var e *rpc.Event
 	d.do(func(st *state) {
+		for w := range st.subs {
+			if w.topics != nil && !w.topics[m.topic] {
+				continue
+			}
+			if e == nil {
+				v, _ := puff.ReadValue(m.args)
+				e = &rpc.Event{At: time.Now(), Topic: m.topic, Value: puff.Print(v.(puff.Vector).At(0)), From: m.from, Origin: string(origin(m.user))}
+			}
+			select {
+			case w.ch <- *e:
+			default:
+			}
+		}
 		for addr, s := range st.addrs {
 			if _, ok := s.subs[m.topic]; !ok {
 				continue
