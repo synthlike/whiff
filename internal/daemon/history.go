@@ -14,9 +14,9 @@ const historySize = 1000
 // whiff itself, such as a service that failed to load.
 type entry struct {
 	at    time.Time
-	call  bool   // a call, which waits for its reply; else a send
+	kind  string // "call", "send" or "pub"
 	from  string // the sender's address; "" for a client
-	to    string // address/fn
+	to    string // address/fn, or address on :topic
 	args  string // a printed vector
 	reply string // the printed Result
 	took  time.Duration
@@ -57,10 +57,6 @@ func (e entry) String() string {
 	if e.note != "" {
 		return at + "  note  " + e.note
 	}
-	kind := "send"
-	if e.call {
-		kind = "call"
-	}
 	from := "client"
 	if e.from != "" {
 		from = ":" + e.from
@@ -69,7 +65,7 @@ func (e entry) String() string {
 	if args := e.args[1 : len(e.args)-1]; args != "" {
 		target += " " + args
 	}
-	line := fmt.Sprintf("%s  %s  %s -> %s  %s", at, kind, from, target, e.reply)
+	line := fmt.Sprintf("%s  %-4s  %s -> %s  %s", at, e.kind, from, target, e.reply)
 	if e.took > 0 {
 		line += "  " + e.took.Round(time.Microsecond).String()
 	}

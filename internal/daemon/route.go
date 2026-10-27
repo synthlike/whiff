@@ -14,22 +14,43 @@ import (
 // mailboxSize bounds each address's mailbox.
 const mailboxSize = 100
 
-// message asks an address to run one of its functions. The arguments are a
-// printed puff vector, so nothing but data travels.
+// message asks an address to run one of its functions, or its subscriber to
+// a topic. The arguments are a printed puff vector, so nothing but data
+// travels.
 type message struct {
-	// ctx is the caller's, done when it stops waiting; nil for a send,
-	// which the service bounds itself.
-	ctx  context.Context
-	from string // the sender's address; "" for a client
-	fn   string
-	args string
-	dir  string // the caller's working directory
+	// ctx is the caller's, done when it stops waiting; nil for a send or a
+	// publish, which the service bounds itself.
+	ctx   context.Context
+	from  string // the sender's address; "" for a client
+	fn    string
+	topic string // instead of fn, for a published value
+	args  string
+	dir   string // the caller's working directory
 	// chain is the addresses waiting on calls that led to this one, so a
 	// call back into one of them fails at once instead of timing out.
 	chain []string
 	// reply gets the printed Result, nil for a send. It has room for it, so
 	// the service never waits on a caller that has gone.
 	reply chan string
+}
+
+// kind is "call", "send" or "pub".
+func (m message) kind() string {
+	switch {
+	case m.topic != "":
+		return "pub"
+	case m.reply != nil:
+		return "call"
+	}
+	return "send"
+}
+
+// to is what m is for at addr: addr/fn, or addr on :topic.
+func (m message) to(addr string) string {
+	if m.topic != "" {
+		return addr + " on :" + m.topic
+	}
+	return addr + "/" + m.fn
 }
 
 // caller is who whiff's builtins act for: a service handling a message, or
@@ -87,12 +108,30 @@ func (d *daemon) deliver(addr string, m message) puff.Value {
 				res = puff.Errorf("full", ":%s's mailbox is full", addr)
 			}
 		}
-		st.record(entry{at: time.Now(), call: m.reply != nil, from: m.from, to: addr + "/" + m.fn, args: m.args, reply: puff.Print(res)})
+		st.record(entry{at: time.Now(), kind: m.kind(), from: m.from, to: m.to(addr), args: m.args, reply: puff.Print(res)})
 	})
 	if !ok {
 		return puff.Errorf("no-address", "whiff is stopping")
 	}
 	return res
+}
+
+// publish puts m, for a topic, in the mailbox of every service subscribed to
+// it. A full mailbox is recorded in history; the publisher doesn't wait.
+func (d *daemon) publish(m message) {
+	d.do(func(st *state) {
+		for addr, s := range st.addrs {
+			if _, ok := s.subs[m.topic]; !ok {
+				continue
+			}
+			select {
+			case s.mailbox <- m:
+			default:
+				res := puff.Errorf("full", ":%s's mailbox is full", addr)
+				st.record(entry{at: time.Now(), kind: m.kind(), from: m.from, to: m.to(addr), args: m.args, reply: puff.Print(res)})
+			}
+		}
+	})
 }
 
 // builtins are whiff's functions on top of puff's base table, acting for
@@ -108,6 +147,20 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 					return nil, fmt.Errorf("want an address like :gh, got %s", puff.Print(args[0]))
 				}
 				return d.marker().describe(string(addr)), nil
+			}},
+		{Name: "publish", Args: "topic v", Mark: puff.MarkWrite,
+			Doc: "Send v to every service subscribed to topic, a keyword: :done at once.",
+			Fn: func(c *puff.Call, args []puff.Value) (puff.Value, error) {
+				topic, ok := args[0].(puff.Keyword)
+				if !ok || topic == "" {
+					return nil, fmt.Errorf("want a topic like :git/changed, got %s", puff.Print(args[0]))
+				}
+				msg, err := encode(puff.NewVector(args[1]))
+				if err != nil {
+					return nil, err
+				}
+				d.publish(message{from: cur.addr, topic: string(topic), args: msg, dir: c.Env.Dir})
+				return puff.Done, nil
 			}},
 		{Name: "call", Args: "target [arg] ...", Mark: puff.MarkWrite,
 			Doc: "Send target, :address/fn, a message and wait for its Result; (err {:kind :timeout}) after 5s.",

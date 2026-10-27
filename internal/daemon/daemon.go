@@ -153,7 +153,7 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 			resp.Version = rpc.Version
 		case "eval":
 			resp = d.eval(ctx, req)
-		case "call", "send":
+		case "call", "send", "pub":
 			resp = d.message(ctx, req)
 		case "history":
 			resp.Out = d.historyText()
@@ -173,12 +173,21 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 }
 
 // message calls or sends req.Target, :address/fn, with req.Args, a printed
-// vector, from the client's directory. Its Value is the Result.
+// vector, from the client's directory, or publishes req.Args's one value to
+// the topic req.Target. Its Value is the Result.
 func (d *daemon) message(ctx context.Context, req rpc.Request) rpc.Response {
 	args, err := puff.ReadValue(req.Args)
 	vec, ok := args.(puff.Vector)
 	if err != nil || !ok {
 		return rpc.Response{Error: fmt.Sprintf("want arguments as a vector, got %s", req.Args)}
+	}
+	if req.Op == "pub" {
+		topic := strings.TrimPrefix(req.Target, ":")
+		if topic == "" || vec.Len() != 1 {
+			return rpc.Response{Error: "pub wants a topic and one value"}
+		}
+		d.publish(message{topic: topic, args: puff.Print(vec), dir: req.Dir})
+		return rpc.Response{Value: puff.Print(puff.Done)}
 	}
 	vals := []puff.Value{puff.Keyword(strings.TrimPrefix(req.Target, ":"))}
 	for i := range vec.Len() {

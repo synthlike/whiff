@@ -70,6 +70,13 @@ func (mk *marker) form(s *service, f *puff.Form) puff.Mark {
 			}
 		}
 	case puff.FormList, puff.FormVector, puff.FormMap:
+		if isList(f, "publish") && len(f.Items) > 1 {
+			topic, ok := f.Items[1].Val.(puff.Keyword)
+			if f.Items[1].Kind != puff.FormLiteral || !ok || mk.topic(string(topic)) == puff.MarkWrite {
+				return puff.MarkWrite
+			}
+			return mk.forms(s, f.Items[2:])
+		}
 		i := targetAt(f)
 		if i == 0 {
 			return mk.forms(s, f.Items)
@@ -79,6 +86,22 @@ func (mk *marker) form(s *service, f *puff.Form) puff.Mark {
 			return puff.MarkWrite
 		}
 		return mk.forms(s, slices.Concat(f.Items[1:i], f.Items[i+1:]))
+	}
+	return puff.MarkRead
+}
+
+// topic is :write if any service's subscriber to it reaches :write.
+func (mk *marker) topic(name string) puff.Mark {
+	for _, s := range mk.services {
+		sub, ok := s.subs[name]
+		key := s.name + " on :" + name
+		if !ok || mk.seen[key] {
+			continue
+		}
+		mk.seen[key] = true
+		if mk.forms(s, sub.body) == puff.MarkWrite {
+			return puff.MarkWrite
+		}
 	}
 	return puff.MarkRead
 }
@@ -164,11 +187,12 @@ func (mk *marker) describe(addr string) puff.Value {
 	return puff.Ok(puff.NewVector(fns...))
 }
 
-// ls is every address's functions, then the literal targets that don't
-// exist:
+// ls is every address's functions and subscriptions, then the literal
+// targets that don't exist:
 //
 //	:greet
-//	  (hello name)  :read  Greets name.
+//	  (hello name)        :read  Greets name.
+//	  on :git/changed (v) :read
 //	warning: greet.puff:4:11: :nobody/x doesn't exist
 func (mk *marker) ls() string {
 	var b strings.Builder
@@ -181,6 +205,11 @@ func (mk *marker) ls() string {
 			h := s.fns[fn]
 			sig := strings.Join(append([]string{fn}, h.params...), " ")
 			fmt.Fprintf(tw, "  (%s)\t%s\t%s\n", sig, mk.mark(s, fn), h.doc)
+		}
+		for _, topic := range slices.Sorted(maps.Keys(s.subs)) {
+			sub := s.subs[topic]
+			mk.seen = map[string]bool{}
+			fmt.Fprintf(tw, "  on :%s (%s)\t%s\n", topic, sub.param, mk.forms(s, sub.body))
 		}
 		warnings = append(warnings, mk.missing(s)...)
 	}

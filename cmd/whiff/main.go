@@ -20,14 +20,15 @@ import (
 const usage = `usage:
   whiff call address/fn args...   call a function and print its value
   whiff send address/fn args...   send a message without waiting
+  whiff pub topic value           publish value to the topic's subscribers
   whiff eval code                 evaluate puff code in the daemon and print its value
   whiff history                   print every message, newest first
   whiff ls                        list every address's functions and their marks
   whiff stop                      stop the daemon
   whiff daemon                    run the daemon in the foreground
 
-Each arg of call and send is read as a puff value, or taken as a string if
-it doesn't read as one: 12 is 12, ann is "ann", '"12"' is "12".
+Each arg of call, send and pub is read as a puff value, or taken as a
+string if it doesn't read as one: 12 is 12, ann is "ann", '"12"' is "12".
 `
 
 func main() {
@@ -45,6 +46,8 @@ func main() {
 func run(args []string, dir, services string, stdout, stderr io.Writer) int {
 	switch {
 	case len(args) >= 2 && (args[0] == "call" || args[0] == "send"):
+		return message(dir, args[0], args[1], args[2:], stdout, stderr)
+	case len(args) == 3 && args[0] == "pub":
 		return message(dir, args[0], args[1], args[2:], stdout, stderr)
 	case len(args) == 2 && args[0] == "eval":
 		return eval(dir, args[1], stdout, stderr)

@@ -16,16 +16,16 @@ import (
 
 // Version is the protocol version. Bump it when a message changes; hello and
 // stop must stay readable by every version, so an old daemon can be stopped.
-const Version = 3
+const Version = 4
 
 // Request is a client's message to the daemon.
 type Request struct {
-	Op      string `json:"op"`                // "hello", "eval", "call", "send", "history", "ls" or "stop"
+	Op      string `json:"op"`                // "hello", "eval", "call", "send", "pub", "history", "ls" or "stop"
 	Version int    `json:"version,omitempty"` // hello: the client's protocol
 	Src     string `json:"src,omitempty"`     // eval: puff code
-	Target  string `json:"target,omitempty"`  // call, send: address/fn
-	Args    string `json:"args,omitempty"`    // call, send: a printed puff vector
-	Dir     string `json:"dir,omitempty"`     // eval, call, send: the client's working directory
+	Target  string `json:"target,omitempty"`  // call, send: address/fn; pub: the topic
+	Args    string `json:"args,omitempty"`    // call, send, pub: a printed puff vector, of one value for pub
+	Dir     string `json:"dir,omitempty"`     // eval, call, send, pub: the client's working directory
 }
 
 // Response is the daemon's answer to one Request.
