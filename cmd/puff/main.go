@@ -1,9 +1,9 @@
-// Command puff runs puff code without a whiff daemon. For now it reads code
-// and prints its forms back, normalized; evaluation comes next.
+// Command puff runs puff code without a whiff daemon.
 package main
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -14,9 +14,9 @@ import (
 )
 
 const usage = `usage:
-  puff file.puff   read a file and print its forms
-  puff -e code     read code and print its forms
-  puff             read forms from stdin as they're typed
+  puff file.puff   evaluate a file
+  puff -e code     evaluate code and print its value
+  puff             evaluate forms from stdin as they're typed
 `
 
 func main() {
@@ -35,7 +35,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, interactive b
 		fmt.Fprint(stdout, usage)
 		return 0
 	case args[0] == "-e" && len(args) == 2:
-		return show("-e", args[1], stdout, stderr)
+		return eval(puff.NewEnv(), "-e", args[1], stdout, stderr, true)
 	case strings.HasPrefix(args[0], "-"):
 		fmt.Fprint(stderr, usage)
 		return 2
@@ -45,25 +45,31 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, interactive b
 		fmt.Fprintf(stderr, "puff: %v\n", err)
 		return 1
 	}
-	return show(args[0], string(src), stdout, stderr)
+	return eval(puff.NewEnv(), args[0], string(src), stdout, stderr, false)
 }
 
-// show prints the forms in src, one per line.
-func show(file, src string, stdout, stderr io.Writer) int {
-	forms, err := puff.Read(file, src)
+// eval loads src into env and, if show is set, prints its value. A fault
+// exits 70, any other error 1.
+func eval(env *puff.Env, file, src string, stdout, stderr io.Writer, show bool) int {
+	v, err := env.Load(context.Background(), file, src)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
+		var fault *puff.Fault
+		if errors.As(err, &fault) {
+			return 70
+		}
 		return 1
 	}
-	for _, f := range forms {
-		fmt.Fprintln(stdout, f)
+	if show && v != nil {
+		fmt.Fprintln(stdout, puff.Print(v))
 	}
 	return 0
 }
 
-// repl reads stdin a line at a time and prints the forms read so far; it
-// keeps reading while a form or string is still open.
+// repl reads stdin a line at a time and evaluates what it has read, printing
+// the value; it keeps reading while a form or string is still open.
 func repl(stdin io.Reader, stdout, stderr io.Writer, interactive bool) int {
+	env := puff.NewEnv()
 	sc := bufio.NewScanner(stdin)
 	var buf strings.Builder
 	for {
@@ -79,19 +85,12 @@ func repl(stdin io.Reader, stdout, stderr io.Writer, interactive bool) int {
 		}
 		buf.WriteString(sc.Text())
 		buf.WriteByte('\n')
-		forms, err := puff.Read("", buf.String())
 		var perr *puff.Error
-		if errors.As(err, &perr) && perr.Unclosed {
+		if _, err := puff.Read("", buf.String()); errors.As(err, &perr) && perr.Unclosed {
 			continue
 		}
+		eval(env, "", buf.String(), stdout, stderr, true)
 		buf.Reset()
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			continue
-		}
-		for _, f := range forms {
-			fmt.Fprintln(stdout, f)
-		}
 	}
 	if interactive {
 		fmt.Fprintln(stdout)
@@ -101,8 +100,7 @@ func repl(stdin io.Reader, stdout, stderr io.Writer, interactive bool) int {
 		return 1
 	}
 	if buf.Len() > 0 {
-		_, err := puff.Read("", buf.String())
-		fmt.Fprintln(stderr, err)
+		eval(env, "", buf.String(), stdout, stderr, true)
 	}
 	return 0
 }

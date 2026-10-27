@@ -8,8 +8,13 @@ import (
 )
 
 func TestRun(t *testing.T) {
-	file := filepath.Join(t.TempDir(), "t.puff")
-	if err := os.WriteFile(file, []byte("(def x ; the answer\n  42)\n"), 0o644); err != nil {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "t.puff")
+	if err := os.WriteFile(file, []byte("(def x ; the answer\n  42)\n(+ x 1)\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	faulty := filepath.Join(dir, "fault.puff")
+	if err := os.WriteFile(faulty, []byte("(def x 1)\n(+ x 1.0)\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	tests := []struct {
@@ -21,19 +26,36 @@ func TestRun(t *testing.T) {
 	}{
 		{
 			name:    "-e",
-			args:    []string{"-e", "(ok [1 {:b 2 :a 1}]) 60s"},
-			wantOut: "(ok [1 {:b 2 :a 1}])\n1m\n",
+			args:    []string{"-e", "(def (sq n) (* n n)) [(sq 3) 60s {:b 2 :a 1}]"},
+			wantOut: "[9 1m {:a 1 :b 2}]\n",
 		},
 		{
-			name:    "-e error",
+			name:    "-e read error",
 			args:    []string{"-e", "(a"},
 			code:    1,
 			wantErr: "-e:1:1: no closing ')'\n",
 		},
 		{
-			name:    "file",
-			args:    []string{file},
-			wantOut: "(def x 42)\n",
+			name:    "-e unknown name",
+			args:    []string{"-e", "(nope)"},
+			code:    1,
+			wantErr: "-e:1:2: unknown name nope\n",
+		},
+		{
+			name:    "-e fault",
+			args:    []string{"-e", "(+ 1 1.0)"},
+			code:    70,
+			wantErr: "-e:1:1: +: can't add int and float\n",
+		},
+		{
+			name: "file",
+			args: []string{file},
+		},
+		{
+			name:    "file fault",
+			args:    []string{faulty},
+			code:    70,
+			wantErr: faulty + ":2:1: +: can't add int and float\n",
 		},
 		{
 			name:    "missing file",
@@ -43,9 +65,9 @@ func TestRun(t *testing.T) {
 		},
 		{
 			name:    "stdin",
-			stdin:   "(a\n b) :c\n(x ]\n\"one\ntwo\"\n[1\n",
-			wantOut: "(a b)\n:c\n\"one\\ntwo\"\n",
-			wantErr: "1:4: unexpected ']'\n1:1: no closing ']'\n",
+			stdin:   "(def x\n 2) (* x 3)\n(x ]\n\"one\ntwo\"\n(+ x 1.0)\n[1\n",
+			wantOut: "6\n\"one\\ntwo\"\n",
+			wantErr: "1:4: unexpected ']'\n1:1: +: can't add int and float\n1:1: no closing ']'\n",
 		},
 		{
 			name:    "bad flag",
