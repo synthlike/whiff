@@ -84,7 +84,7 @@ func (e *Env) Load(ctx context.Context, file, src string) (Value, error) {
 		if isDef(f) {
 			steps[i], err = c.def(f)
 		} else {
-			steps[i], err = c.expr(f, nil)
+			steps[i], err = c.expr(f, nil, false)
 		}
 		if err != nil {
 			return nil, err
@@ -117,8 +117,17 @@ type frame struct {
 	parent *frame
 }
 
+type scopeKind int
+
+const (
+	scopeLet  scopeKind = iota // let bindings and match arms
+	scopeFn                    // a function's params: recur doesn't reach past it
+	scopeLoop                  // a loop's bindings, which recur rebinds
+)
+
 // scope mirrors a frame at compile time: the names of its slots.
 type scope struct {
+	kind   scopeKind
 	names  []string
 	parent *scope
 }
@@ -134,8 +143,20 @@ func (s *scope) lookup(name string) (depth, slot int, ok bool) {
 	return 0, 0, false
 }
 
+// loop returns the scope of the loop a recur in s goes back to: the nearest
+// one in the same function.
+func (s *scope) loop() *scope {
+	for ; s != nil && s.kind != scopeFn; s = s.parent {
+		if s.kind == scopeLoop {
+			return s
+		}
+	}
+	return nil
+}
+
 var specialForms = map[string]bool{
 	"def": true, "let": true, "fn": true, "if": true, "cond": true, "do": true, "and": true, "or": true,
+	"match": true, "when": true, "loop": true, "recur": true, "->": true,
 }
 
 // compiler turns forms into exprs, resolving every name.
@@ -197,7 +218,7 @@ func (c *compiler) def(f *Form) (expr, error) {
 	var val expr
 	var err error
 	if f.Items[1].Kind == FormSymbol {
-		val, err = c.expr(f.Items[2], nil)
+		val, err = c.expr(f.Items[2], nil, false)
 	} else {
 		val, err = c.fn(name.Name, f.Pos, f.Items[1].Items[1:], f.Items[2:], nil)
 	}
@@ -215,7 +236,10 @@ func (c *compiler) def(f *Form) (expr, error) {
 	}, nil
 }
 
-func (c *compiler) expr(f *Form, s *scope) (expr, error) {
+// expr compiles f in scope s. tail is set when f's value is the value of
+// the innermost loop body or function around it, the only place a recur
+// can go.
+func (c *compiler) expr(f *Form, s *scope, tail bool) (expr, error) {
 	switch f.Kind {
 	case FormLiteral:
 		v := f.Val
@@ -263,31 +287,42 @@ func (c *compiler) expr(f *Form, s *scope) (expr, error) {
 		case "def":
 			return nil, errorf(f.Pos, "def only at top level")
 		case "let":
-			return c.let(f, s)
+			return c.let(f, s, tail)
 		case "fn":
 			if len(f.Items) < 2 || f.Items[1].Kind != FormList {
 				return nil, errorf(f.Pos, "fn wants (params...) and a body")
 			}
 			return c.fn("", f.Pos, f.Items[1].Items, f.Items[2:], s)
 		case "if":
-			return c.ifForm(f, s)
+			return c.ifForm(f, s, tail)
 		case "cond":
-			return c.cond(f, s)
+			return c.cond(f, s, tail)
 		case "do":
-			return c.body("do", f.Pos, f.Items[1:], s)
+			return c.body("do", f.Pos, f.Items[1:], s, tail)
 		case "and":
 			return c.logic(f, s, false)
 		case "or":
 			return c.logic(f, s, true)
+		case "match":
+			return c.match(f, s, tail)
+		case "when":
+			return nil, errorf(f.Pos, "when only goes in a match arm: [pattern when test body...]")
+		case "loop":
+			return c.loop(f, s)
+		case "recur":
+			return c.recur(f, s, tail)
+		case "->":
+			return c.thread(f, s, tail)
 		}
 	}
 	return c.call(f, s)
 }
 
+// exprs compiles forms that aren't in tail position.
 func (c *compiler) exprs(fs []*Form, s *scope) ([]expr, error) {
 	xs := make([]expr, len(fs))
 	for i, f := range fs {
-		x, err := c.expr(f, s)
+		x, err := c.expr(f, s, false)
 		if err != nil {
 			return nil, err
 		}
@@ -347,69 +382,177 @@ func (c *compiler) binding(f *Form) (string, error) {
 	return f.Name, nil
 }
 
-// body compiles forms evaluated in order for the value of the last.
-func (c *compiler) body(what string, pos Pos, forms []*Form, s *scope) (expr, error) {
+// body compiles forms evaluated in order for the value of the last, which
+// is in tail position if the body is.
+func (c *compiler) body(what string, pos Pos, forms []*Form, s *scope, tail bool) (expr, error) {
 	if len(forms) == 0 {
 		return nil, errorf(pos, "%s needs a body", what)
 	}
-	xs, err := c.exprs(forms, s)
+	xs, err := c.exprs(forms[:len(forms)-1], s)
 	if err != nil {
 		return nil, err
 	}
-	if len(xs) == 1 {
-		return xs[0], nil
+	last, err := c.expr(forms[len(forms)-1], s, tail)
+	if err != nil {
+		return nil, err
+	}
+	if len(xs) == 0 {
+		return last, nil
 	}
 	return func(t *thread, fr *frame) (Value, error) {
-		for _, x := range xs[:len(xs)-1] {
+		for _, x := range xs {
 			if _, err := x(t, fr); err != nil {
 				return nil, err
 			}
 		}
-		return xs[len(xs)-1](t, fr)
+		return last(t, fr)
 	}, nil
 }
 
-// let compiles (let [name value ...] body...); each value sees the names
-// bound before it.
-func (c *compiler) let(f *Form, s *scope) (expr, error) {
+// bindings compiles a let or loop's [name value ...] into scope bs; each
+// value sees the names bound before it.
+func (c *compiler) bindings(f *Form, bs *scope) ([]expr, error) {
 	if len(f.Items) < 2 || f.Items[1].Kind != FormVector || len(f.Items[1].Items)%2 != 0 {
-		return nil, errorf(f.Pos, "let wants [name value ...] bindings and a body")
+		return nil, errorf(f.Pos, "%s wants [name value ...] bindings and a body", f.Items[0].Name)
 	}
-	bs := f.Items[1].Items
-	ls := &scope{parent: s}
-	inits := make([]expr, 0, len(bs)/2)
-	for i := 0; i < len(bs); i += 2 {
-		name, err := c.binding(bs[i])
+	items := f.Items[1].Items
+	inits := make([]expr, 0, len(items)/2)
+	for i := 0; i < len(items); i += 2 {
+		name, err := c.binding(items[i])
 		if err != nil {
 			return nil, err
 		}
-		x, err := c.expr(bs[i+1], ls)
+		x, err := c.expr(items[i+1], bs, false)
 		if err != nil {
 			return nil, err
 		}
 		inits = append(inits, x)
-		ls.names = append(ls.names, name)
+		bs.names = append(bs.names, name)
 	}
-	body, err := c.body("let", f.Pos, f.Items[2:], ls)
+	return inits, nil
+}
+
+// fill evaluates a let or loop's bindings into a new frame.
+func fill(t *thread, fr *frame, inits []expr) (*frame, error) {
+	lf := &frame{vals: make([]Value, len(inits)), parent: fr}
+	for i, x := range inits {
+		v, err := x(t, lf)
+		if err != nil {
+			return nil, err
+		}
+		lf.vals[i] = v
+	}
+	return lf, nil
+}
+
+// let compiles (let [name value ...] body...).
+func (c *compiler) let(f *Form, s *scope, tail bool) (expr, error) {
+	ls := &scope{kind: scopeLet, parent: s}
+	inits, err := c.bindings(f, ls)
+	if err != nil {
+		return nil, err
+	}
+	body, err := c.body("let", f.Pos, f.Items[2:], ls, tail)
 	if err != nil {
 		return nil, err
 	}
 	return func(t *thread, fr *frame) (Value, error) {
-		lf := &frame{vals: make([]Value, len(inits)), parent: fr}
-		for i, x := range inits {
-			v, err := x(t, lf)
-			if err != nil {
-				return nil, err
-			}
-			lf.vals[i] = v
+		lf, err := fill(t, fr, inits)
+		if err != nil {
+			return nil, err
 		}
 		return body(t, lf)
 	}, nil
 }
 
+// recurSignal is how a recur reaches its loop: it travels back as the
+// error of the loop body, through tail positions only.
+type recurSignal struct{ vals []Value }
+
+func (*recurSignal) Error() string { return "recur outside a loop" }
+
+// loop compiles (loop [name value ...] body...): the body runs again with
+// new values each time it ends in (recur values...).
+func (c *compiler) loop(f *Form, s *scope) (expr, error) {
+	ls := &scope{kind: scopeLoop, parent: s}
+	inits, err := c.bindings(f, ls)
+	if err != nil {
+		return nil, err
+	}
+	body, err := c.body("loop", f.Pos, f.Items[2:], ls, true)
+	if err != nil {
+		return nil, err
+	}
+	return func(t *thread, fr *frame) (Value, error) {
+		lf, err := fill(t, fr, inits)
+		if err != nil {
+			return nil, err
+		}
+		for {
+			v, err := body(t, lf)
+			r, ok := err.(*recurSignal)
+			if !ok {
+				return v, err
+			}
+			if t.ctx.Err() != nil {
+				return nil, faultf(f.Pos, "cancelled")
+			}
+			lf = &frame{vals: r.vals, parent: fr}
+		}
+	}, nil
+}
+
+// recur compiles (recur values...), which must be in tail position of a
+// loop in the same function and give a value for each of its bindings.
+func (c *compiler) recur(f *Form, s *scope, tail bool) (expr, error) {
+	l := s.loop()
+	if l == nil {
+		return nil, errorf(f.Pos, "recur outside a loop")
+	}
+	if !tail {
+		return nil, errorf(f.Pos, "recur only in tail position")
+	}
+	if n := len(l.names); len(f.Items)-1 != n {
+		return nil, errorf(f.Pos, "%s", arity("recur", n, n, len(f.Items)-1))
+	}
+	args, err := c.exprs(f.Items[1:], s)
+	if err != nil {
+		return nil, err
+	}
+	return func(t *thread, fr *frame) (Value, error) {
+		vs, err := evalAll(t, fr, args)
+		if err != nil {
+			return nil, err
+		}
+		return nil, &recurSignal{vs}
+	}, nil
+}
+
+// thread compiles (-> value steps...) by rewriting it: each step is a call
+// with the value so far as its first argument, and a bare name is a call
+// with no other arguments.
+func (c *compiler) thread(f *Form, s *scope, tail bool) (expr, error) {
+	if len(f.Items) < 2 {
+		return nil, errorf(f.Pos, "-> wants a value and steps")
+	}
+	acc := f.Items[1]
+	for _, step := range f.Items[2:] {
+		switch {
+		case step.Kind == FormSymbol:
+			acc = &Form{Kind: FormList, Pos: step.Pos, Items: []*Form{step, acc}}
+		case step.Kind == FormList && len(step.Items) > 0:
+			items := append([]*Form{step.Items[0], acc}, step.Items[1:]...)
+			acc = &Form{Kind: FormList, Pos: step.Pos, Items: items}
+		default:
+			return nil, errorf(step.Pos, "-> steps are names or calls, got %s", step)
+		}
+	}
+	return c.expr(acc, s, tail)
+}
+
 // fn compiles a function's params and body; name is "" for an anonymous fn.
 func (c *compiler) fn(name string, pos Pos, params, body []*Form, s *scope) (expr, error) {
-	fs := &scope{parent: s}
+	fs := &scope{kind: scopeFn, parent: s}
 	for _, p := range params {
 		n, err := c.binding(p)
 		if err != nil {
@@ -424,7 +567,7 @@ func (c *compiler) fn(name string, pos Pos, params, body []*Form, s *scope) (exp
 	if what == "" {
 		what = "fn"
 	}
-	b, err := c.body(what, pos, body, fs)
+	b, err := c.body(what, pos, body, fs, true)
 	if err != nil {
 		return nil, err
 	}
@@ -434,15 +577,22 @@ func (c *compiler) fn(name string, pos Pos, params, body []*Form, s *scope) (exp
 	}, nil
 }
 
-func (c *compiler) ifForm(f *Form, s *scope) (expr, error) {
+func (c *compiler) ifForm(f *Form, s *scope, tail bool) (expr, error) {
 	if len(f.Items) != 4 {
 		return nil, errorf(f.Pos, "if takes a condition and two branches")
 	}
-	xs, err := c.exprs(f.Items[1:], s)
+	cond, err := c.expr(f.Items[1], s, false)
 	if err != nil {
 		return nil, err
 	}
-	cond, then, els := xs[0], xs[1], xs[2]
+	then, err := c.expr(f.Items[2], s, tail)
+	if err != nil {
+		return nil, err
+	}
+	els, err := c.expr(f.Items[3], s, tail)
+	if err != nil {
+		return nil, err
+	}
 	condPos := f.Items[1].Pos
 	return func(t *thread, fr *frame) (Value, error) {
 		ok, err := t.test(cond, fr, condPos)
@@ -458,7 +608,7 @@ func (c *compiler) ifForm(f *Form, s *scope) (expr, error) {
 
 // cond compiles (cond [test body...] ...): the first arm whose test is #t
 // runs. No arm matching faults.
-func (c *compiler) cond(f *Form, s *scope) (expr, error) {
+func (c *compiler) cond(f *Form, s *scope, tail bool) (expr, error) {
 	if len(f.Items) < 2 {
 		return nil, errorf(f.Pos, "cond needs arms")
 	}
@@ -472,11 +622,11 @@ func (c *compiler) cond(f *Form, s *scope) (expr, error) {
 		if a.Kind != FormVector || len(a.Items) < 2 {
 			return nil, errorf(a.Pos, "cond arms are [test body...]")
 		}
-		test, err := c.expr(a.Items[0], s)
+		test, err := c.expr(a.Items[0], s, false)
 		if err != nil {
 			return nil, err
 		}
-		body, err := c.body("cond arm", a.Pos, a.Items[1:], s)
+		body, err := c.body("cond arm", a.Pos, a.Items[1:], s, tail)
 		if err != nil {
 			return nil, err
 		}
