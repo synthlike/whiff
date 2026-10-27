@@ -22,6 +22,7 @@ const usage = `usage:
   whiff send address/fn args...   send a message without waiting
   whiff eval code                 evaluate puff code in the daemon and print its value
   whiff history                   print every message, newest first
+  whiff ls                        list every address's functions and their marks
   whiff stop                      stop the daemon
   whiff daemon                    run the daemon in the foreground
 
@@ -48,7 +49,9 @@ func run(args []string, dir, services string, stdout, stderr io.Writer) int {
 	case len(args) == 2 && args[0] == "eval":
 		return eval(dir, args[1], stdout, stderr)
 	case len(args) == 1 && args[0] == "history":
-		return history(dir, stdout, stderr)
+		return text(dir, (*rpc.Client).History, stdout, stderr)
+	case len(args) == 1 && args[0] == "ls":
+		return text(dir, (*rpc.Client).Ls, stdout, stderr)
 	case len(args) == 1 && args[0] == "stop":
 		return stop(dir, stderr)
 	case len(args) == 1 && args[0] == "daemon":
@@ -161,13 +164,14 @@ func eval(dir, src string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func history(dir string, stdout, stderr io.Writer) int {
+// text prints what get asks the daemon for: history or ls.
+func text(dir string, get func(*rpc.Client) (string, error), stdout, stderr io.Writer) int {
 	c := connect(dir, stderr)
 	if c == nil {
 		return 1
 	}
 	defer c.Close()
-	h, err := c.History()
+	h, err := get(c)
 	if err != nil {
 		fmt.Fprintf(stderr, "whiff: %v\n", err)
 		return 1

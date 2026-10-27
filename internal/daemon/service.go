@@ -16,22 +16,28 @@ import (
 // it.
 var loadTimeout = 5 * time.Second
 
-// service is a loaded (srv name ...): its env and functions belong to the
-// goroutine running it.
+// service is a loaded (srv name ...): its env belongs to the goroutine
+// running it. Its name, fns, code and forms don't change after loading, so
+// anyone can read them.
 type service struct {
 	name    string
 	env     *puff.Env
 	fns     map[string]handler
+	code    map[string][]*puff.Form // the body or value of each handler and def
+	forms   []*puff.Form            // srv's body, as written
 	mailbox chan message
 	cur     caller // whiff's builtins in env act for it
 	d       *daemon
 }
 
-// handler is an (on (fn params...) "doc" body...).
+// handler is an (on (fn params...) [:read|:write] "doc" body...).
 type handler struct {
 	pos    puff.Pos
 	params []string
 	doc    string
+	mark   puff.Mark // when marked: :read or :write after the parameters
+	marked bool
+	body   []*puff.Form
 }
 
 // loadServices loads every .puff file in dir and starts its service. One
@@ -76,11 +82,14 @@ func (d *daemon) loadService(file string) (*service, error) {
 		}
 	}
 
-	s := &service{name: name, fns: map[string]handler{}, mailbox: make(chan message, mailboxSize),
-		cur: caller{addr: name}, d: d}
+	s := &service{name: name, fns: map[string]handler{}, code: map[string][]*puff.Form{}, forms: body,
+		mailbox: make(chan message, mailboxSize), cur: caller{addr: name}, d: d}
 	var loads []*puff.Form
 	for _, f := range body {
 		if !isList(f, "on") {
+			if name, code, ok := defCode(f); ok {
+				s.code[name] = code
+			}
 			loads = append(loads, f)
 			continue
 		}
@@ -89,6 +98,7 @@ func (d *daemon) loadService(file string) (*service, error) {
 			return nil, err
 		}
 		s.fns[fn] = h
+		s.code[fn] = h.body
 		loads = append(loads, def)
 	}
 	s.env = d.newEnv(d.log, &s.cur)
@@ -100,20 +110,38 @@ func (d *daemon) loadService(file string) (*service, error) {
 	return s, nil
 }
 
-// handlerDef turns (on (fn params...) "doc" body...) into
+// handlerDef turns (on (fn params...) [:read|:write] "doc" body...) into
 // (def (fn params...) body...).
 func handlerDef(f *puff.Form) (string, *puff.Form, handler, error) {
 	bad := func(msg string) (string, *puff.Form, handler, error) {
 		return "", nil, handler{}, &puff.Error{Pos: f.Pos, Msg: msg}
 	}
-	if len(f.Items) < 4 {
+	if len(f.Items) < 2 {
 		return bad(`on wants (fn params...), a doc string and a body`)
 	}
-	sig, doc := f.Items[1], f.Items[2]
+	sig, rest := f.Items[1], f.Items[2:]
 	if sig.Kind != puff.FormList || len(sig.Items) == 0 || sig.Items[0].Kind != puff.FormSymbol {
 		return bad("on wants (fn params...)")
 	}
 	h := handler{pos: f.Pos}
+	if len(rest) > 0 && rest[0].Kind == puff.FormLiteral {
+		if k, ok := rest[0].Val.(puff.Keyword); ok {
+			switch k {
+			case "read":
+				h.mark, h.marked = puff.MarkRead, true
+			case "write":
+				h.mark, h.marked = puff.MarkWrite, true
+			default:
+				return bad("on takes :read or :write after (fn params...), got " + rest[0].String())
+			}
+			rest = rest[1:]
+		}
+	}
+	if len(rest) < 2 {
+		return bad(`on wants (fn params...), a doc string and a body`)
+	}
+	doc := rest[0]
+	h.body = rest[1:]
 	if s, ok := doc.Val.(puff.String); doc.Kind == puff.FormLiteral && ok {
 		h.doc = string(s)
 	} else {
@@ -125,8 +153,23 @@ func handlerDef(f *puff.Form) (string, *puff.Form, handler, error) {
 		}
 		h.params = append(h.params, p.Name)
 	}
-	items := append([]*puff.Form{{Kind: puff.FormSymbol, Pos: f.Items[0].Pos, Name: "def"}, sig}, f.Items[3:]...)
+	items := append([]*puff.Form{{Kind: puff.FormSymbol, Pos: f.Items[0].Pos, Name: "def"}, sig}, h.body...)
 	return sig.Items[0].Name, &puff.Form{Kind: puff.FormList, Pos: f.Pos, Items: items}, h, nil
+}
+
+// defCode returns the name a (def name value) or (def (name params...)
+// body...) defines, and its value or body.
+func defCode(f *puff.Form) (string, []*puff.Form, bool) {
+	if !isList(f, "def") || len(f.Items) < 3 {
+		return "", nil, false
+	}
+	switch n := f.Items[1]; {
+	case n.Kind == puff.FormSymbol:
+		return n.Name, f.Items[2:], true
+	case n.Kind == puff.FormList && len(n.Items) > 0 && n.Items[0].Kind == puff.FormSymbol:
+		return n.Items[0].Name, f.Items[2:], true
+	}
+	return "", nil, false
 }
 
 func isList(f *puff.Form, head string) bool {

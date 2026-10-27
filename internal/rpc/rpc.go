@@ -16,11 +16,11 @@ import (
 
 // Version is the protocol version. Bump it when a message changes; hello and
 // stop must stay readable by every version, so an old daemon can be stopped.
-const Version = 2
+const Version = 3
 
 // Request is a client's message to the daemon.
 type Request struct {
-	Op      string `json:"op"`                // "hello", "eval", "call", "send", "history" or "stop"
+	Op      string `json:"op"`                // "hello", "eval", "call", "send", "history", "ls" or "stop"
 	Version int    `json:"version,omitempty"` // hello: the client's protocol
 	Src     string `json:"src,omitempty"`     // eval: puff code
 	Target  string `json:"target,omitempty"`  // call, send: address/fn
@@ -153,6 +153,13 @@ func (c *Client) Message(op, target, args, dir string) (Response, error) {
 func (c *Client) History() (string, error) {
 	var resp Response
 	err := c.roundTrip(Request{Op: "history"}, &resp)
+	return resp.Out, err
+}
+
+// Ls is every address's functions and the warnings about them, as text.
+func (c *Client) Ls() (string, error) {
+	var resp Response
+	err := c.roundTrip(Request{Op: "ls"}, &resp)
 	return resp.Out, err
 }
 

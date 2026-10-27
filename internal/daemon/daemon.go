@@ -33,6 +33,7 @@ type daemon struct {
 	ops         chan func(st *state)
 	log         io.Writer // notes, and what services print
 	callTimeout time.Duration
+	base        *puff.Env // only looked up in, for builtins' marks
 	wg          sync.WaitGroup
 }
 
@@ -77,6 +78,7 @@ func Run(ctx context.Context, dir, services string) error {
 	}()
 
 	d := &daemon{ctx: ctx, ops: make(chan func(*state)), log: os.Stderr, callTimeout: defaultCallTimeout}
+	d.base = d.newEnv(io.Discard, &caller{})
 	d.wg.Go(d.route)
 	// Clients wait in the listen queue until the services are loaded.
 	d.loadServices(services)
@@ -155,6 +157,8 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 			resp = d.message(ctx, req)
 		case "history":
 			resp.Out = d.historyText()
+		case "ls":
+			resp.Out = d.marker().ls()
 		case "stop":
 			conn.Send(resp)
 			stop()

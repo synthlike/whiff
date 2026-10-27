@@ -96,9 +96,19 @@ func (d *daemon) deliver(addr string, m message) puff.Value {
 }
 
 // builtins are whiff's functions on top of puff's base table, acting for
-// cur. All three are :write until marks follow the target.
+// cur. call, send and send-after are :write: in a handler, one with a
+// literal target counts as its target's mark instead (see marker).
 func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 	return []*puff.Builtin{
+		{Name: "describe", Args: "address", Mark: puff.MarkRead,
+			Doc: "(ok fns): address's functions, each {:fn :params :doc :mark :form}.",
+			Fn: func(_ *puff.Call, args []puff.Value) (puff.Value, error) {
+				addr, ok := args[0].(puff.Keyword)
+				if !ok {
+					return nil, fmt.Errorf("want an address like :gh, got %s", puff.Print(args[0]))
+				}
+				return d.marker().describe(string(addr)), nil
+			}},
 		{Name: "call", Args: "target [arg] ...", Mark: puff.MarkWrite,
 			Doc: "Send target, :address/fn, a message and wait for its Result; (err {:kind :timeout}) after 5s.",
 			Fn: func(c *puff.Call, args []puff.Value) (puff.Value, error) {
