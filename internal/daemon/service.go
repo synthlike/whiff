@@ -286,7 +286,7 @@ func (s *service) run(ctx context.Context) {
 			r, faulted := s.handle(ctx, m)
 			// Recorded before the reply, so the caller finds it in history.
 			s.d.do(func(st *state) {
-				st.record(entry{at: begin, kind: m.kind(), from: m.from, to: m.to(s.name),
+				st.record(entry{at: begin, kind: m.kind(), user: m.user, from: m.from, to: m.to(s.name),
 					args: m.args, reply: r, took: time.Since(begin)})
 			})
 			if m.reply != nil {
@@ -365,6 +365,7 @@ func (s *service) handle(ctx context.Context, m message) (reply string, faulted 
 		defer cancel()
 	}
 	s.cur.chain = slices.Concat(m.chain, []string{s.name})
+	s.cur.user = m.user
 	s.env.Dir = m.dir
 	r, err := s.env.Call(m.ctx, pos, f, args...)
 	if err != nil {

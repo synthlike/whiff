@@ -49,8 +49,8 @@ func TestJobs(t *testing.T) {
 	}
 
 	id := run(`(call :jobs/run ["sh" "-c" "echo hi; echo oops >&2; exit 3"])`)
-	inHistory(`done  :jobs -> client ` + id + ` (ok {:exit 3 :stderr "oops\n" :stdout "hi\n"})`)
-	inHistory(`pub   :jobs -> :watch on :jobs/done {:cmd ["sh" "-c" "echo hi; echo oops >&2; exit 3"] :cwd "` + dir + `" :id ` + id)
+	inHistory(`done  user   :jobs -> client ` + id + ` (ok {:exit 3 :stderr "oops\n" :stdout "hi\n"})`)
+	inHistory(`pub   user   :jobs -> :watch on :jobs/done {:cmd ["sh" "-c" "echo hi; echo oops >&2; exit 3"] :cwd "` + dir + `" :id ` + id)
 
 	run(`(call :builder/build)`)
 	eventually(t, "builder's answer", func() string { b, _ := os.ReadFile(got); return string(b) }, "in dir")
@@ -64,10 +64,10 @@ func TestJobs(t *testing.T) {
 	if err != nil || resp.Value != "(ok :done)" {
 		t.Errorf("cancel = %s %v", resp.Value, err)
 	}
-	inHistory(`done  :jobs -> client ` + id + ` (err {:kind :cancelled`)
+	inHistory(`done  user   :jobs -> client ` + id + ` (err {:kind :cancelled`)
 
 	id = run(`(call :jobs/run ["sleep" "10"] {:timeout 50ms})`)
-	inHistory(`done  :jobs -> client ` + id + ` (err {:kind :timeout :message "job ` + id + ` took longer than 50ms"})`)
+	inHistory(`done  user   :jobs -> client ` + id + ` (err {:kind :timeout :message "job ` + id + ` took longer than 50ms"})`)
 
 	tests := []struct{ src, want string }{
 		{`(call :jobs/run [])`, `(err {:kind :bad-call :message ":jobs/run: want a command like [\"go\" \"test\"], got []"})`},

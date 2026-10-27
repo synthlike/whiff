@@ -41,8 +41,8 @@ func TestInbox(t *testing.T) {
 		{pending(`(call :asker/ask "tests")`), `[:pending 2]`},
 		{pending(`(call :todo/quick)`), `[:pending 3]`},
 		{pending(`(call :todo/suggest)`), `:bad-call`},
-		{`(call :todo/items)`, `(ok [{:args ["docs"] :cwd "/tmp/w" :fn :suggest :id 1} {:args ["tests"] :cwd "/tmp/w" :fn :suggest :from :asker :id 2} {:args [] :cwd "/tmp/w" :fn :quick :id 3}])`},
-		{`(call :todo/suggested)`, `(ok [{:args ["docs"] :cwd "/tmp/w" :fn :suggest :id 1} {:args ["tests"] :cwd "/tmp/w" :fn :suggest :from :asker :id 2}])`},
+		{`(call :todo/items)`, `(ok [{:args ["docs"] :cwd "/tmp/w" :fn :suggest :id 1 :origin :user} {:args ["tests"] :cwd "/tmp/w" :fn :suggest :from :asker :id 2 :origin :user} {:args [] :cwd "/tmp/w" :fn :quick :id 3 :origin :user}])`},
+		{`(call :todo/suggested)`, `(ok [{:args ["docs"] :cwd "/tmp/w" :fn :suggest :id 1 :origin :user} {:args ["tests"] :cwd "/tmp/w" :fn :suggest :from :asker :id 2 :origin :user}])`},
 		{`(call :todo/recent)`, `(ok [#t #t #t])`},
 		{`(call :todo/answer 2 "done tests")`, `(ok :done)`},
 		{`(call :todo/answer 2 "again")`, `(err {:kind :no-id :message "no message 2 waits in :todo's inbox"})`},
@@ -81,9 +81,9 @@ func TestInbox(t *testing.T) {
 		return h
 	}
 	for _, want := range []string{
-		`done  client -> client 1 (ok "yes")`,
-		`done  :todo -> :asker/whiff/done 2 (ok "done tests")  (ok :done)`,
-		`done  :todo -> client 3 (err {:kind :expired :message ":todo/quick waited longer than 50ms"})`,
+		`done  user   client -> client 1 (ok "yes")`,
+		`done  user   :todo -> :asker/whiff/done 2 (ok "done tests")  (ok :done)`,
+		`done  user   :todo -> client 3 (err {:kind :expired :message ":todo/quick waited longer than 50ms"})`,
 	} {
 		eventually(t, want, func() string {
 			if strings.Contains(history(), want) {

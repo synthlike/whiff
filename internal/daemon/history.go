@@ -15,6 +15,7 @@ const historySize = 1000
 type entry struct {
 	at    time.Time
 	kind  string // "call", "send", "pub" or "done"
+	user  bool   // the origin: whether the chain began with the user
 	from  string // the sender's address; "" for a client
 	to    string // address/fn, or address on :topic; "" for a client
 	args  string // a printed vector
@@ -51,7 +52,7 @@ func (d *daemon) historyText() string {
 
 // String prints e as a line of history:
 //
-//	10:42:01.123  call  client -> :greet/hello "ann"  (ok "hello, ann")  1.2ms
+//	10:42:01.123  call  user   client -> :greet/hello "ann"  (ok "hello, ann")  1.2ms
 func (e entry) String() string {
 	at := e.at.Format("15:04:05.000")
 	if e.note != "" {
@@ -68,7 +69,7 @@ func (e entry) String() string {
 	if args := e.args[1 : len(e.args)-1]; args != "" {
 		target += " " + args
 	}
-	line := fmt.Sprintf("%s  %-4s  %s -> %s", at, e.kind, from, target)
+	line := fmt.Sprintf("%s  %-4s  %-5s  %s -> %s", at, e.kind, origin(e.user), from, target)
 	if e.reply != "" {
 		line += "  " + e.reply
 	}

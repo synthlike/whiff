@@ -28,10 +28,10 @@ func TestHistory(t *testing.T) {
 	at := regexp.MustCompile(`(?m)^\d\d:\d\d:\d\d\.\d{3}  `)
 	took := regexp.MustCompile(`(?m)  [0-9.]+(ns|µs|ms|s)$`)
 	want := strings.Join([]string{
-		`send  :greet -> :greet/hello "bob"  (ok "hello, bob")`,
-		`call  client -> :greet/relay "bob"  (ok :done)`,
-		`send  client -> :nobody/x 1  (err {:kind :no-address :message "no address :nobody"})`,
-		`call  client -> :greet/hello "ann"  (ok "hello, ann")`,
+		`send  user   :greet -> :greet/hello "bob"  (ok "hello, bob")`,
+		`call  user   client -> :greet/relay "bob"  (ok :done)`,
+		`send  user   client -> :nobody/x 1  (err {:kind :no-address :message "no address :nobody"})`,
+		`call  user   client -> :greet/hello "ann"  (ok "hello, ann")`,
 		`note  ` + filepath.Join(dir, "services", "broken.puff") + `:1:1: no closing ')'`,
 	}, "\n") + "\n"
 	// relay's send is handled after relay has replied.

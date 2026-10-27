@@ -29,9 +29,20 @@ type message struct {
 	// chain is the addresses waiting on calls that led to this one, so a
 	// call back into one of them fails at once instead of timing out.
 	chain []string
+	// user is whether the chain m belongs to began with the user; one
+	// without a clear origin is the agent's.
+	user bool
 	// reply gets the printed Result, nil for a send. It has room for it, so
 	// the service never waits on a caller that has gone.
 	reply chan string
+}
+
+// origin is :user or :agent, the origin of the chain a message belongs to.
+func origin(user bool) puff.Keyword {
+	if user {
+		return "user"
+	}
+	return "agent"
 }
 
 // kind is "call", "send", "pub" or "done", for a [:whiff/done id result].
@@ -60,6 +71,7 @@ func (m message) to(addr string) string {
 type caller struct {
 	addr  string
 	chain []string // addresses waiting in the current chain, addr last
+	user  bool     // whether the current chain began with the user
 }
 
 // state is what the route goroutine owns.
@@ -126,7 +138,7 @@ func (d *daemon) put(st *state, addr string, m message) puff.Value {
 			res = puff.Errorf("full", ":%s's mailbox is full", addr)
 		}
 	}
-	st.record(entry{at: time.Now(), kind: m.kind(), from: m.from, to: m.to(addr), args: m.args, reply: puff.Print(res)})
+	st.record(entry{at: time.Now(), kind: m.kind(), user: m.user, from: m.from, to: m.to(addr), args: m.args, reply: puff.Print(res)})
 	return res
 }
 
@@ -142,7 +154,7 @@ func (d *daemon) publish(m message) {
 			case s.mailbox <- m:
 			default:
 				res := puff.Errorf("full", ":%s's mailbox is full", addr)
-				st.record(entry{at: time.Now(), kind: m.kind(), from: m.from, to: m.to(addr), args: m.args, reply: puff.Print(res)})
+				st.record(entry{at: time.Now(), kind: m.kind(), user: m.user, from: m.from, to: m.to(addr), args: m.args, reply: puff.Print(res)})
 			}
 		}
 	})
@@ -201,7 +213,7 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 				if err != nil {
 					return nil, err
 				}
-				d.publish(message{from: cur.addr, topic: string(topic), args: msg, dir: c.Env.Dir})
+				d.publish(message{from: cur.addr, topic: string(topic), args: msg, dir: c.Env.Dir, user: cur.user})
 				return puff.Done, nil
 			}},
 		{Name: "call", Args: "target [arg] ...", Mark: puff.MarkWrite,
@@ -281,7 +293,8 @@ func (d *daemon) request(ctx context.Context, cur *caller, addr string, m messag
 }
 
 // message builds the message args, a target and its arguments, ask for,
-// sent from dir, and returns it with the target's address.
+// sent from dir in cur's chain, and returns it with the target's address.
+// A send-after builds it when it is scheduled, so it keeps that origin.
 func (cur *caller) message(dir string, args []puff.Value) (message, string, error) {
 	addr, fn, err := cur.target(args[0])
 	if err != nil {
@@ -291,7 +304,7 @@ func (cur *caller) message(dir string, args []puff.Value) (message, string, erro
 	if err != nil {
 		return message{}, "", err
 	}
-	return message{from: cur.addr, fn: fn, args: msg, dir: dir}, addr, nil
+	return message{from: cur.addr, fn: fn, args: msg, dir: dir, user: cur.user}, addr, nil
 }
 
 // target splits :address/fn at its last slash: :gh/prs, :agent/1/inbox.

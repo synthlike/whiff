@@ -207,14 +207,14 @@ func (d *daemon) message(ctx context.Context, req rpc.Request) rpc.Response {
 		if topic == "" || vec.Len() != 1 {
 			return rpc.Response{Error: "pub wants a topic and one value"}
 		}
-		d.publish(message{topic: topic, args: puff.Print(vec), dir: req.Dir})
+		d.publish(message{topic: topic, args: puff.Print(vec), dir: req.Dir, user: !req.Agent})
 		return rpc.Response{Value: puff.Print(puff.Done)}
 	}
 	vals := []puff.Value{puff.Keyword(strings.TrimPrefix(req.Target, ":"))}
 	for i := range vec.Len() {
 		vals = append(vals, vec.At(i))
 	}
-	cur := &caller{}
+	cur := &caller{user: !req.Agent}
 	m, addr, err := cur.message(req.Dir, vals)
 	if err != nil {
 		return rpc.Response{Error: err.Error()}
@@ -233,7 +233,7 @@ func (d *daemon) message(ctx context.Context, req rpc.Request) rpc.Response {
 // eval evaluates req.Src in a fresh environment, in the client's directory.
 func (d *daemon) eval(ctx context.Context, req rpc.Request) rpc.Response {
 	var out strings.Builder
-	env := d.newEnv(&out, &caller{})
+	env := d.newEnv(&out, &caller{user: !req.Agent})
 	env.Dir = req.Dir
 	v, err := env.Load(ctx, "eval", req.Src)
 	resp := rpc.Response{Out: out.String()}

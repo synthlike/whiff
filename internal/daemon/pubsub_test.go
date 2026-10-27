@@ -64,9 +64,9 @@ func TestPublish(t *testing.T) {
 
 	// A subscriber records its entry just after it has written its file.
 	wants := []string{
-		`  pub   :mirror -> :log on :note/added "b"  (ok :done)  `,
-		`  pub   client -> :mirror on :note/added "c"  (ok :done)  `,
-		`  pub   client -> :bad on :note/added "a"  (err {:kind :fault :message "` +
+		`  pub   user   :mirror -> :log on :note/added "b"  (ok :done)  `,
+		`  pub   user   client -> :mirror on :note/added "c"  (ok :done)  `,
+		`  pub   user   client -> :bad on :note/added "a"  (err {:kind :fault :message "` +
 			filepath.Join(dir, "services", "bad.puff") + `:2:23: +: can't add int and float"})  `,
 	}
 	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(5 * time.Millisecond) {

@@ -16,7 +16,7 @@ import (
 
 // Version is the protocol version. Bump it when a message changes; hello and
 // stop must stay readable by every version, so an old daemon can be stopped.
-const Version = 6
+const Version = 7
 
 // Request is a client's message to the daemon.
 type Request struct {
@@ -26,6 +26,9 @@ type Request struct {
 	Target  string `json:"target,omitempty"`  // call, send: address/fn; pub: the topic; inbox: the address
 	Args    string `json:"args,omitempty"`    // call, send, pub: a printed puff vector, of one value for pub; reply: [id result]; wait: [id]
 	Dir     string `json:"dir,omitempty"`     // eval, call, send, pub: the client's working directory
+	// Agent says the client acts for an agent: its messages' origin is
+	// :agent, not :user. eval, call, send, pub.
+	Agent bool `json:"agent,omitempty"`
 }
 
 // Response is the daemon's answer to one Request.
@@ -88,6 +91,8 @@ type Client struct {
 	conn *Conn
 	// Daemon is the daemon's protocol version.
 	Daemon int
+	// Agent makes every request act for an agent: see Request.Agent.
+	Agent bool
 }
 
 // Dial connects to the daemon in dir and exchanges protocol versions. If no
@@ -186,6 +191,7 @@ func (c *Client) Stop() error {
 func (c *Client) Close() error { return c.conn.Close() }
 
 func (c *Client) roundTrip(req Request, resp *Response) error {
+	req.Agent = c.Agent
 	if err := c.conn.Send(req); err != nil {
 		return err
 	}

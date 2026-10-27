@@ -16,11 +16,13 @@ import (
 const inboxSize = 100
 
 // ticket is a message answered later, with [:whiff/done id result]: its
-// id, and where the answer goes.
+// id, and where the answer goes. The answer continues the message's chain,
+// whoever gives it.
 type ticket struct {
 	id   int64
 	from string // the sender's address; "" for a client
 	dir  string // the sender's working directory, for the answer
+	user bool   // whether the message's chain began with the user
 }
 
 // asked is a message to an ask function, waiting in its service's inbox
@@ -58,7 +60,7 @@ func (d *daemon) ask(st *state, s *service, m message) puff.Value {
 		return puff.Errorf("full", ":%s's inbox is full", s.name)
 	}
 	st.nextID++
-	a := &asked{ticket: ticket{id: st.nextID, from: m.from, dir: m.dir}, addr: s.name, fn: m.fn, args: args, at: time.Now()}
+	a := &asked{ticket: ticket{id: st.nextID, from: m.from, dir: m.dir, user: m.user}, addr: s.name, fn: m.fn, args: args, at: time.Now()}
 	st.asked = append(st.asked, a)
 	if h.expires > 0 {
 		time.AfterFunc(h.expires, func() {
@@ -117,7 +119,7 @@ func (d *daemon) answer(st *state, t ticket, by string, result puff.Value) {
 		w <- result
 	}
 	delete(st.waiters, t.id)
-	m := message{from: by, fn: "whiff/done", args: puff.Print(puff.NewVector(puff.Int(t.id), result)), dir: t.dir}
+	m := message{from: by, fn: "whiff/done", args: puff.Print(puff.NewVector(puff.Int(t.id), result)), dir: t.dir, user: t.user}
 	if s := st.addrs[t.from]; s != nil {
 		if h, ok := s.fns[m.fn]; ok && !h.ask {
 			d.put(st, t.from, m)
@@ -128,7 +130,7 @@ func (d *daemon) answer(st *state, t ticket, by string, result puff.Value) {
 	if t.from != "" {
 		to = m.to(t.from)
 	}
-	st.record(entry{at: time.Now(), kind: m.kind(), from: by, to: to, args: m.args})
+	st.record(entry{at: time.Now(), kind: m.kind(), user: m.user, from: by, to: to, args: m.args})
 }
 
 // reply answers the message id with result for by, a service that can
@@ -160,13 +162,14 @@ func (d *daemon) reply(by string, idv, result puff.Value) (puff.Value, error) {
 }
 
 // value is a as (inbox) shows it: {:id 7 :fn :suggest :args ["write docs"]
-// :from :agent/1 :cwd "..." :at 2026-10-27T10:00:00Z}, without :from for a
-// client.
+// :from :agent/1 :origin :agent :cwd "..." :at 2026-10-27T10:00:00Z},
+// without :from for a client.
 func (a *asked) value() puff.Value {
 	es := []puff.Entry{
 		{Key: puff.Keyword("id"), Val: puff.Int(a.id)},
 		{Key: puff.Keyword("fn"), Val: puff.Keyword(a.fn)},
 		{Key: puff.Keyword("args"), Val: a.args},
+		{Key: puff.Keyword("origin"), Val: origin(a.user)},
 		{Key: puff.Keyword("cwd"), Val: puff.String(a.dir)},
 		{Key: puff.Keyword("at"), Val: puff.NewTime(a.at)},
 	}
