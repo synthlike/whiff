@@ -7,9 +7,16 @@ complete.
 
 ## Layout
 
-- `cmd/whiff`: entry point (`whiff`, `whiff puff`, `whiff mcp`, ...).
-- `internal/puff`: the language: reader, evaluator and the stdlib table (one entry
-  per function: name, Go wrapper, `:read` or `:write`, one-line doc).
+One module, two binaries: `go install ./cmd/...` installs both.
+
+- `cmd/puff`: runs puff without a daemon (`puff file.puff args...`, `puff -e`,
+  `puff` for a REPL), with the base stdlib only.
+- `cmd/whiff`: the daemon and its clients (`whiff`, `whiff call`, `whiff eval`,
+  `whiff mcp`, ...).
+- `internal/puff`: the language: reader, printer, evaluator and the base stdlib
+  table (one entry per function: name, Go wrapper, `:read` or `:write`, one-line
+  doc). It knows nothing about whiff; `internal/daemon` adds its own functions
+  (`call`, `send`, `inbox`, `reply`, ...) on top of the base table.
 - `internal/daemon`: addresses, mailboxes, services, inboxes, pubsub, history.
   One goroutine owns the routing state; each service runs on its own goroutine and
   holds its own state. Others talk to them over channels and never touch state
