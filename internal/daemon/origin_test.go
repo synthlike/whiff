@@ -19,6 +19,7 @@ func TestOrigin(t *testing.T) {
   (on :t/x (v) (ok v)))`,
 		"todo": `(srv todo
   (ask (suggest text) "Suggests a todo.")
+  (on (answer id) "Answers id." (reply id (ok :from-todo)))
   (on (origins) "Each waiting message's origin." (ok (vector/map (inbox) (fn (a) (match a [{:origin o} o]))))))`,
 	})
 	start(t, dir)
@@ -75,4 +76,19 @@ func TestOrigin(t *testing.T) {
 		t.Fatal(err)
 	}
 	inHistory(`done  agent  client -> :relay/whiff/done ` + id + ` (ok 1)  (ok (ok 1))`)
+
+	// An agent's answer to the user's message is the agent's: by an agent
+	// client, or by a service handling an agent's message.
+	id = run(false, `(match (call :relay/ask) [(err {:kind :pending :id id}) id])`)
+	if _, err := agent.Message("reply", "", "["+id+" (ok 2)]", ""); err != nil {
+		t.Fatal(err)
+	}
+	inHistory(`done  agent  client -> :relay/whiff/done ` + id + ` (ok 2)  (ok (ok 2))`)
+	id = run(false, `(match (call :relay/ask) [(err {:kind :pending :id id}) id])`)
+	run(true, `(call :todo/answer `+id+`)`)
+	inHistory(`done  agent  :todo -> :relay/whiff/done ` + id + ` (ok :from-todo)  (ok (ok :from-todo))`)
+	// The user's answer to the user's message stays the user's.
+	id = run(false, `(match (call :relay/ask) [(err {:kind :pending :id id}) id])`)
+	run(false, `(call :todo/answer `+id+`)`)
+	inHistory(`done  user   :todo -> :relay/whiff/done ` + id + ` (ok :from-todo)  (ok (ok :from-todo))`)
 }

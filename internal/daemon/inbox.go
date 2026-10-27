@@ -17,7 +17,7 @@ const inboxSize = 100
 
 // ticket is a message answered later, with [:whiff/done id result]: its
 // id, and where the answer goes. The answer continues the message's chain,
-// whoever gives it.
+// as :agent's if an agent gave it: see reply.
 type ticket struct {
 	id   int64
 	from string // the sender's address; "" for a client
@@ -134,8 +134,10 @@ func (d *daemon) answer(st *state, t ticket, by string, result puff.Value) {
 }
 
 // reply answers the message id with result for by, a service that can
-// answer only its own inbox, or a client ("") that can answer any.
-func (d *daemon) reply(by string, idv, result puff.Value) (puff.Value, error) {
+// answer only its own inbox, or a client ("") that can answer any. user is
+// the replier's origin: the answer is :user's only if both the message and
+// the reply are, so an agent's answer never runs as the user's.
+func (d *daemon) reply(by string, user bool, idv, result puff.Value) (puff.Value, error) {
 	id, ok := idv.(puff.Int)
 	if !ok {
 		return nil, fmt.Errorf("want a message id, got %s", puff.Print(idv))
@@ -155,7 +157,9 @@ func (d *daemon) reply(by string, idv, result puff.Value) (puff.Value, error) {
 		case a == nil:
 			res = puff.Errorf("no-id", "no message %d waits in :%s's inbox", id, by)
 		default:
-			d.answer(st, a.ticket, by, result)
+			t := a.ticket
+			t.user = t.user && user
+			d.answer(st, t, by, result)
 		}
 	})
 	return res, nil
@@ -263,7 +267,7 @@ func (d *daemon) clientReply(req rpc.Request) rpc.Response {
 	if err != nil || !ok || vec.Len() != 2 {
 		return rpc.Response{Error: fmt.Sprintf("want [id result], got %s", req.Args)}
 	}
-	r, err := d.reply("", vec.At(0), vec.At(1))
+	r, err := d.reply("", !req.Agent, vec.At(0), vec.At(1))
 	if err != nil {
 		return rpc.Response{Error: err.Error()}
 	}

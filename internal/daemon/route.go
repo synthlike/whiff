@@ -203,7 +203,7 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 		{Name: "reply", Args: "id result", Mark: puff.MarkWrite,
 			Doc: "Answer the message id in this service's inbox with result: its sender gets [:whiff/done id result]. (err {:kind :no-id}) if it isn't there.",
 			Fn: func(_ *puff.Call, args []puff.Value) (puff.Value, error) {
-				return d.reply(cur.addr, args[0], args[1])
+				return d.reply(cur.addr, cur.user, args[0], args[1])
 			}},
 		{Name: "publish", Args: "topic v", Mark: puff.MarkWrite,
 			Doc: "Send v to every service subscribed to topic, a keyword: :done at once.",
