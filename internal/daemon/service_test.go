@@ -92,7 +92,9 @@ func TestCall(t *testing.T) {
 
 	faults := []struct{ src, want string }{
 		{`(call :greet/hello (fn (x) x))`, "eval:1:1: call: can't send [#<fn>]: only data travels"},
-		{`(call :greet "ann")`, "eval:1:1: call: want a target :address/fn, got :greet"},
+		{`(call :greet "ann")`, "eval:1:1: call: :greet has no address: only a service can leave it out, want :address/fn"},
+		{`(call :/x)`, "eval:1:1: call: want a target :address/fn, got :/x"},
+		{`(call "greet/hello")`, `eval:1:1: call: want a target :address/fn, got "greet/hello"`},
 	}
 	for _, tt := range faults {
 		got, err := c.Eval(tt.src, "")
@@ -101,6 +103,97 @@ func TestCall(t *testing.T) {
 		}
 		if !got.Fault || got.Error != tt.want {
 			t.Errorf("%s = %+v, want fault %q", tt.src, got, tt.want)
+		}
+	}
+}
+
+func TestSend(t *testing.T) {
+	dir := tempDir(t)
+	out := filepath.Join(dir, "out")
+	writeServices(t, dir, map[string]string{
+		"notes": `(srv notes
+  (on (write path text) "Writes text to path."
+    (file/write path text))
+  (on (now path) "Writes to path through itself."
+    (send :write path "now"))
+  (on (later path) "Writes to path through itself, in a moment."
+    (send-after 20ms :write path "later")))`,
+	})
+	start(t, dir)
+	c := dial(t, dir)
+
+	tests := []struct {
+		src, want, file string
+	}{
+		{`(send :notes/write "` + out + `" "sent")`, "(ok :done)", "sent"},
+		{`(send :notes/now "` + out + `")`, "(ok :done)", "now"},
+		{`(send :notes/later "` + out + `")`, "(ok :done)", "later"},
+		{`(send-after 20ms :notes/write "` + out + `" "after")`, "(ok :done)", "after"},
+		{`(match (send :nobody/write) [(err {:kind k}) k])`, ":no-address", ""},
+	}
+	for _, tt := range tests {
+		got, err := c.Eval(tt.src, "")
+		if err != nil {
+			t.Fatalf("%s: %v", tt.src, err)
+		}
+		if got.Value != tt.want || got.Error != "" {
+			t.Errorf("%s = %s %s, want %s", tt.src, got.Value, got.Error, tt.want)
+		}
+		if tt.file == "" {
+			continue
+		}
+		// The send is done when the file holds what it wrote.
+		for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+			b, _ := os.ReadFile(out)
+			if string(b) == tt.file {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%s: file holds %q, want %q", tt.src, b, tt.file)
+			}
+		}
+	}
+
+	got, err := c.Eval(`(send-after 1 :notes/write)`, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "eval:1:1: send-after: want a duration of 0s or more, got 1"; !got.Fault || got.Error != want {
+		t.Errorf("send-after 1 = %+v, want fault %q", got, want)
+	}
+}
+
+func TestCycle(t *testing.T) {
+	dir := tempDir(t)
+	writeServices(t, dir, map[string]string{
+		"a": `(srv a
+  (on (ping) "Calls b, which calls back." (call :b/pong))
+  (on (self) "Calls itself." (call :self))
+  (on (fine) "Answers." (ok :fine)))`,
+		"b": `(srv b
+  (on (pong) "Calls a." (call :a/ping))
+  (on (fine) "Calls a, which isn't waiting." (call :a/fine)))`,
+	})
+	start(t, dir)
+	c := dial(t, dir)
+
+	// The default 5s timeout stays: a cycle must fail at once, not time out.
+	tests := []struct{ src, want string }{
+		{`(call :a/ping)`, `(err {:kind :cycle :message ":a/ping would wait for itself: :a -> :b -> :a"})`},
+		{`(call :a/self)`, `(err {:kind :cycle :message ":self would wait for itself: :a -> :a"})`},
+		{`(call :b/fine)`, `(ok :fine)`},
+	}
+	for _, tt := range tests {
+		begin := time.Now()
+		got, err := c.Eval(tt.src, "")
+		if err != nil {
+			t.Fatalf("%s: %v", tt.src, err)
+		}
+		if got.Value != tt.want || got.Error != "" {
+			t.Errorf("%s = %s %s, want %s", tt.src, got.Value, got.Error, tt.want)
+		}
+		if d := time.Since(begin); d > time.Second {
+			t.Errorf("%s took %v", tt.src, d)
 		}
 	}
 }

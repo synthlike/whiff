@@ -3,8 +3,10 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -22,6 +24,9 @@ type service struct {
 	env     *puff.Env
 	fns     map[string]handler
 	mailbox chan message
+	cur     caller        // whiff's builtins in env act for it
+	timeout time.Duration // bounds handling a send, as a call bounds its own
+	log     io.Writer     // where results of sends that fail go
 }
 
 // handler is an (on (fn params...) "doc" body...).
@@ -73,7 +78,8 @@ func (d *daemon) loadService(file string) (*service, error) {
 		}
 	}
 
-	s := &service{name: name, fns: map[string]handler{}, mailbox: make(chan message, mailboxSize)}
+	s := &service{name: name, fns: map[string]handler{}, mailbox: make(chan message, mailboxSize),
+		cur: caller{addr: name}, timeout: d.callTimeout, log: d.log}
 	var loads []*puff.Form
 	for _, f := range body {
 		if !isList(f, "on") {
@@ -87,7 +93,7 @@ func (d *daemon) loadService(file string) (*service, error) {
 		s.fns[fn] = h
 		loads = append(loads, def)
 	}
-	s.env = d.newEnv(d.log)
+	s.env = d.newEnv(d.log, &s.cur)
 	ctx, cancel := context.WithTimeout(d.ctx, loadTimeout)
 	defer cancel()
 	if _, err := s.env.LoadForms(ctx, loads); err != nil {
@@ -134,9 +140,14 @@ func (s *service) run(ctx context.Context) {
 	for {
 		select {
 		case m := <-s.mailbox:
-			r := s.handle(m)
-			if m.reply != nil {
+			r := s.handle(ctx, m)
+			switch {
+			case m.reply != nil:
 				m.reply <- r
+			case strings.HasPrefix(r, "(err "):
+				// Nobody waits for a send's Result; until history, a failed one
+				// goes to the log.
+				fmt.Fprintf(s.log, "whiff: :%s/%s: %s\n", s.name, m.fn, r)
 			}
 		case <-ctx.Done():
 			return
@@ -146,7 +157,7 @@ func (s *service) run(ctx context.Context) {
 
 // handle runs the function m names and returns its Result, printed. A fault
 // in it replies (err {:kind :fault}); the service keeps running.
-func (s *service) handle(m message) string {
+func (s *service) handle(ctx context.Context, m message) string {
 	h, ok := s.fns[m.fn]
 	if !ok {
 		return puff.Print(puff.Errorf("no-function", ":%s has no function %s", s.name, m.fn))
@@ -163,7 +174,13 @@ func (s *service) handle(m message) string {
 	for i := range args {
 		args[i] = vec.At(i)
 	}
+	if m.ctx == nil {
+		var cancel context.CancelFunc
+		m.ctx, cancel = context.WithTimeout(ctx, s.timeout)
+		defer cancel()
+	}
 	f, _ := s.env.Lookup(m.fn)
+	s.cur.chain = slices.Concat(m.chain, []string{s.name})
 	s.env.Dir = m.dir
 	r, err := s.env.Call(m.ctx, h.pos, f, args...)
 	if err != nil {

@@ -95,12 +95,12 @@ func Run(ctx context.Context, dir, services string) error {
 	return nil
 }
 
-// newEnv is a fresh puff env with whiff's functions on top of the base
-// table.
-func (d *daemon) newEnv(stdout io.Writer) *puff.Env {
+// newEnv is a fresh puff env with whiff's functions, acting for cur, on top
+// of the base table.
+func (d *daemon) newEnv(stdout io.Writer, cur *caller) *puff.Env {
 	env := puff.NewEnv()
 	env.Stdout = stdout
-	if err := env.Register(d.builtins()...); err != nil {
+	if err := env.Register(d.builtins(cur)...); err != nil {
 		panic(err)
 	}
 	return env
@@ -166,7 +166,7 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 // eval evaluates req.Src in a fresh environment, in the client's directory.
 func (d *daemon) eval(ctx context.Context, req rpc.Request) rpc.Response {
 	var out strings.Builder
-	env := d.newEnv(&out)
+	env := d.newEnv(&out, &caller{})
 	env.Dir = req.Dir
 	v, err := env.Load(ctx, "eval", req.Src)
 	resp := rpc.Response{Out: out.String()}
