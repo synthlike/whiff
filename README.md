@@ -31,7 +31,12 @@ client.
 
 ## Status
 
-Not started yet. First comes puff, runnable on its own with `whiff puff`.
+v0.1: puff runs on its own, without a daemon. `go install ./cmd/...`
+installs `puff`; `puff file.puff args...` runs a file (calling its `main` if
+it defines one), `puff -e '(...)'` evaluates an expression and `puff` alone
+starts a REPL. Try `go run ./cmd/puff examples/hello.puff ann`.
+
+The daemon, `whiff`, comes next.
 
 ## License
 
