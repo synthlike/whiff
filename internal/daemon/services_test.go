@@ -288,6 +288,7 @@ func TestAssistantService(t *testing.T) {
 	fake := `#!/bin/sh
 [ "$1 $2 $3" = "-p --tools " ] || { echo "want no tools, got $*" >&2; exit 9; }
 case "$*" in *--session-id*) mode=new ;; *--resume*) mode=resume ;; esac
+for a; do case "$prev" in --session-id|--resume) echo "$a" > last-id ;; esac; prev=$a; done
 msg=$(cat)
 case "$msg" in slow) sleep 1 ;; fail) echo "it broke" >&2; exit 1 ;; esac
 echo "$mode in $(basename "$PWD"): $msg"
@@ -297,7 +298,15 @@ echo "$mode in $(basename "$PWD"): $msg"
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("HOME", dir)
-	writeServices(t, dir, map[string]string{"assistant": string(src)})
+	// helper is a copy under another name whose home began a conversation
+	// before agents kept a session file: it carries on with that one.
+	helperHome := filepath.Join(dir, ".whiff", "agents", "helper")
+	os.MkdirAll(helperHome, 0o700)
+	os.WriteFile(filepath.Join(helperHome, "started"), []byte("old-id"), 0o600)
+	writeServices(t, dir, map[string]string{
+		"assistant": string(src),
+		"helper":    strings.Replace(string(src), "(srv assistant", "(srv helper", 1),
+	})
 	start(t, dir)
 	c := dial(t, dir)
 
@@ -354,5 +363,27 @@ echo "$mode in $(basename "$PWD"): $msg"
 	// The first was replied to and the second dismissed: slow's and fail's wait.
 	if text, _ := c.Inbox("me"); strings.Count(text, "\n") != 2 {
 		t.Errorf("want two answers waiting:\n%s", text)
+	}
+	// Its turns are the agent's, whoever wrote to it.
+	historyHas(t, c, `  call  agent  :assistant -> :me/tell "new in assistant: hello"`)
+
+	// forget starts a new session, with a new id.
+	home := filepath.Join(dir, ".whiff", "agents", "assistant")
+	old, _ := os.ReadFile(filepath.Join(home, "session"))
+	if resp, err := c.Eval(`(call :assistant/forget)`, ""); err != nil || resp.Value != "(ok :forgotten)" {
+		t.Fatalf("forget = %+v %v", resp, err)
+	}
+	tell("again")
+	inboxed(`"new in assistant: again"`)
+	if now, _ := os.ReadFile(filepath.Join(home, "session")); len(now) == 0 || string(now) == string(old) {
+		t.Errorf("session after forget = %q, before %q: want a new one", now, old)
+	}
+
+	if resp, err := c.Eval(`(call :helper/tell "hi")`, ""); err != nil || resp.Value != "(ok :thinking)" {
+		t.Fatalf("helper/tell = %+v %v", resp, err)
+	}
+	inboxed(`:helper -> :me/tell "resume in helper: hi"`)
+	if id, _ := os.ReadFile(filepath.Join(helperHome, "last-id")); string(id) != "old-id\n" {
+		t.Errorf("helper resumed %q, want old-id", id)
 	}
 }

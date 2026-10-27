@@ -72,6 +72,8 @@ func TestJobs(t *testing.T) {
 
 	id = run(`(call :jobs/run ["cat"] {:stdin "piped"})`)
 	inHistory(`done  user   :jobs -> client ` + id + ` (ok {:exit 0 :stderr "" :stdout "piped"})`)
+	id = run(`(call :jobs/run ["echo" "model"] {:as :text :origin :agent})`)
+	inHistory(`done  agent  :jobs -> client ` + id + ` (ok "model\n")`)
 	id = run(`(call :jobs/run ["pwd"] {:dir "/" :as :text})`)
 	inHistory(`done  user   :jobs -> client ` + id + ` (ok "/\n")`)
 	id = run(`(call :jobs/run ["cat"] {:stdin "as text" :as :text})`)
@@ -129,8 +131,8 @@ func TestJobs(t *testing.T) {
 
 	tests := []struct{ src, want string }{
 		{`(call :jobs/run [])`, `(err {:kind :bad-call :message ":jobs/run: want a command like [\"go\" \"test\"], got []"})`},
-		{`(call :jobs/run ["true"] {:wait 1s})`, `(err {:kind :bad-call :message ":jobs/run: want {:timeout d :stdin s :dir path :as :text}, a positive duration and strings, got {:wait 1s}"})`},
-		{`(call :jobs/run ["true"] {:as :json})`, `(err {:kind :bad-call :message ":jobs/run: want {:timeout d :stdin s :dir path :as :text}, a positive duration and strings, got {:as :json}"})`},
+		{`(call :jobs/run ["true"] {:wait 1s})`, `(err {:kind :bad-call :message ":jobs/run: want {:timeout d :stdin s :dir path :as :text :origin :agent}, a positive duration and strings, got {:wait 1s}"})`},
+		{`(call :jobs/run ["true"] {:as :json})`, `(err {:kind :bad-call :message ":jobs/run: want {:timeout d :stdin s :dir path :as :text :origin :agent}, a positive duration and strings, got {:as :json}"})`},
 		{`(call :jobs/run)`, `(err {:kind :bad-call :message ":jobs/run takes 1 to 2 arguments, got 0"})`},
 		{`(match (call :jobs/run ["no-such-program-whiff"]) [(err {:kind k}) k])`, `:start`},
 		{`(call :jobs/cancel 999)`, `(err {:kind :no-id :message "no job 999 is running"})`},

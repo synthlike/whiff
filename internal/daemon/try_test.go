@@ -59,6 +59,12 @@ func TestTry(t *testing.T) {
 			t.Errorf("try %s = %+v %v, want error %q", tt.src, resp, err, tt.want)
 		}
 	}
+	if resp, err := c.Try("greet.puff", `(srv greet (on (where) "Its address." (ok (self))))`, "where", "[]", ""); err != nil || !strings.HasPrefix(resp.Value, "(ok :try/") || !strings.HasSuffix(resp.Value, "/greet)") {
+		t.Errorf("(self) in a trial = %+v %v", resp, err)
+	}
+	if resp, err := c.Eval("(self)", ""); err != nil || resp.Error != "eval:1:1: self: only a service, or a client that holds an address, has one" {
+		t.Errorf("(self) from a client = %+v %v", resp, err)
+	}
 	if resp, err := c.Try("greet.puff", greet, "hello", "nope", ""); err != nil || resp.Error != "want arguments as a vector, got nope" {
 		t.Errorf("try with bad args = %+v %v", resp, err)
 	}

@@ -7,21 +7,36 @@
 ;   whiff inbox                  ; its answer, from :assistant
 ;   whiff reply 7 "and the docs?"   ; the next message; or :seen to dismiss
 ;
-; Its home, ~/.whiff/agents/assistant, holds the session (Claude keeps
-; sessions per directory) and the ids of the turns it started.
+;   whiff call assistant/forget  ; start a new conversation
+;
+; Its home, ~/.whiff/agents/<its name>, holds its session's id (Claude keeps
+; sessions per directory) and the ids of the turns it started. Its turns
+; are :agent's. Copy the file under another name for another agent.
 
 (srv assistant
-  (def home (path/join (match (env/get "HOME") [(some h) h]) ".whiff" "agents" "assistant"))
-  (def started (path/join home "started")) ; the session has begun
-  (def turns (path/join home "turns"))     ; each turn's job id, a line each
+  (def name (string/slice (value/to-string (self)) 1))
+  (def home (path/join (match (env/get "HOME") [(some h) h]) ".whiff" "agents" name))
+  (def session-file (path/join home "session")) ; the conversation's id
+  (def started (path/join home "started"))      ; the id once it has begun
+  (def turns (path/join home "turns"))          ; each turn's job id, a line each
+  (def system (string/concat "You are " name ", a long-running agent living in whiff, the user's personal message daemon. The user leaves you messages, which arrive as turns of one conversation, sometimes days apart. You have no tools. Answer briefly and plainly: your answer is left in the user's inbox, and their reply to it is their next message."))
 
-  ; session is the conversation's id; a new one starts afresh.
-  (def session "9eebd883-066f-471c-860a-cc5af46fe9bc")
-  (def system "You are assistant, a long-running agent living in whiff, the user's personal message daemon. The user leaves you messages, which arrive as turns of one conversation, sometimes days apart. You have no tools. Answer briefly and plainly: your answer is left in the user's inbox, and their reply to it is their next message.")
+  (def (read-file path) (match (file/read-text path) [(ok s) (string/trim s)] [_ ""]))
 
-  (def (claude)
+  ; session is the conversation's id, made on its first turn.
+  (def (session)
+    (match [(read-file session-file) (read-file started)]
+      [["" ""]
+       (match (try (proc/run ["uuidgen"]))
+         [{:exit 0 :stdout out}
+          (let [id (string/lower (string/trim out))]
+            (do (try (file/write session-file id)) (ok id)))])]
+      [["" s] (ok s)] ; begun before there was a session file
+      [[s _] (ok s)]))
+
+  (def (claude id)
     (vector/concat ["claude" "-p" "--tools" "" "--append-system-prompt" system]
-      (if (file/exists? started) ["--resume" session] ["--session-id" session])))
+      (if (= (read-file started) id) ["--resume" id] ["--session-id" id])))
 
   (def (read-turns) (match (file/read-text turns) [(ok s) (string/lines s)] [_ []]))
 
@@ -35,9 +50,9 @@
   ; turn starts one turn with text: (ok :thinking), or (err {:kind :busy}).
   (def (turn text)
     (if (busy?)
-      (err {:kind :busy :message "assistant is still answering your last message; send it again in a moment"})
+      (err {:kind :busy :message (string/concat name " is still answering your last message; send it again in a moment")})
       (do (try (proc/run ["mkdir" "-p" home]))
-          (match (call :jobs/run (claude) {:stdin text :dir home :as :text :timeout 10m})
+          (match (call :jobs/run (claude (try (session))) {:stdin text :dir home :as :text :timeout 10m :origin :agent})
             [(err {:kind :pending :id id})
              (do (try (file/write turns (string/concat (string/join (vector/append (read-turns) (int/to-string id)) "\n") "\n")))
                  (ok :thinking))]
@@ -46,15 +61,21 @@
   ; answered leaves a turn's answer in your inbox.
   (def (answered r)
     (match r
-      [(ok answer) (do (try (file/write started session)) (call :me/tell (string/trim answer)))]
+      [(ok answer) (do (try (file/write started (try (session)))) (call :me/tell (string/trim answer)))]
       [(err {:kind :exit :stderr e}) when (string/contains? e "already in use")
-       (do (try (file/write started session))
+       (do (try (file/write started (try (session))))
            (call :me/tell "My session had already begun, so that message was lost; please send it again."))]
       [(err e) (call :me/tell (string/concat "I couldn't answer: " (value/to-string e)))]))
 
   (on (tell text)
     "Leaves the assistant a message: (ok :thinking) now, and its answer in your inbox; (err {:kind :busy}) while it answers the last one."
     (turn text))
+
+  (on (forget)
+    "Ends the conversation: the next message starts a new one, which remembers nothing."
+    (do (try (file/write session-file ""))
+        (try (file/write started ""))
+        (ok :forgotten)))
 
   (on (whiff/done id r)
     "A turn's answer goes to your inbox; your reply to one, if it is text, is the next message."

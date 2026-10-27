@@ -167,7 +167,8 @@ func try(dir, file, fn string, args []string, stdout, stderr io.Writer) int {
 }
 
 // result prints resp's Result for op: the value of (ok v) for a call or a
-// wait, a string as it is; (err e) prints e and exits 1.
+// wait, a string as it is; (err e) prints e and exits 1, except a pending
+// call, which prints how to wait for its answer.
 func result(op string, resp rpc.Response, stdout, stderr io.Writer) int {
 	v, err := puff.ReadValue(resp.Value)
 	r, ok := v.(puff.Tag)
@@ -175,7 +176,12 @@ func result(op string, resp rpc.Response, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "whiff: want a Result, got %s\n", resp.Value)
 		return 1
 	}
+	e, _ := r.At(0).(puff.Map)
+	kind, _ := e.Get(puff.Keyword("kind"))
+	id, _ := e.Get(puff.Keyword("id"))
 	switch {
+	case r.Name() == "err" && op == "call" && puff.Equal(kind, puff.Keyword("pending")) && id != nil:
+		fmt.Fprintf(stdout, "pending %s (whiff wait %[1]s)\n", puff.Print(id))
 	case r.Name() == "err":
 		fmt.Fprintf(stderr, "whiff: %s\n", puff.Print(r.At(0)))
 		return 1

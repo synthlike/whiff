@@ -35,7 +35,7 @@ func (d *daemon) jobsService() *service {
 	return &service{name: "jobs", d: d, cur: caller{addr: "jobs"},
 		fns: map[string]handler{
 			"run": {params: []string{"cmd", "opts"}, optional: 1, mark: puff.MarkWrite, marked: true, native: d.runJob,
-				doc: "Run cmd, [program args...], here; pending now, {:exit :stdout :stderr} when done. Options: :timeout (1h); :stdin, a string; :dir, where it runs; :as :text answers (ok stdout), or (err {:kind :exit}) unless it exits 0."},
+				doc: "Run cmd, [program args...], here; pending now, {:exit :stdout :stderr} when done. Options: :timeout (1h); :stdin, a string; :dir, where it runs; :as :text answers (ok stdout), or (err {:kind :exit}) unless it exits 0; :origin :agent, for a job whose output a model writes, answers as :agent's."},
 			"list": {mark: puff.MarkRead, marked: true, native: d.listJobs,
 				doc: "The running jobs, each {:id :cmd :cwd :from}."},
 			"cancel": {params: []string{"id"}, mark: puff.MarkWrite, marked: true, native: d.cancelJob,
@@ -60,6 +60,7 @@ func (d *daemon) runJob(m message, args []puff.Value) (puff.Value, error) {
 	var stdin *string
 	text := false // :as :text
 	dir := m.dir
+	user := m.user // :origin :agent lowers it
 	if len(args) > 1 {
 		opts, ok := args[1].(puff.Map)
 		if !ok {
@@ -79,10 +80,12 @@ func (d *daemon) runJob(m message, args []puff.Value) (puff.Value, error) {
 				if !filepath.IsAbs(dir) {
 					dir = filepath.Join(m.dir, dir)
 				}
+			case puff.Equal(e.Key, puff.Keyword("origin")) && puff.Equal(e.Val, puff.Keyword("agent")):
+				user = false
 			case puff.Equal(e.Key, puff.Keyword("as")) && puff.Equal(e.Val, puff.Keyword("text")):
 				text = true
 			default:
-				return nil, fmt.Errorf("want {:timeout d :stdin s :dir path :as :text}, a positive duration and strings, got %s", puff.Print(opts))
+				return nil, fmt.Errorf("want {:timeout d :stdin s :dir path :as :text :origin :agent}, a positive duration and strings, got %s", puff.Print(opts))
 			}
 		}
 	}
@@ -107,7 +110,7 @@ func (d *daemon) runJob(m message, args []puff.Value) (puff.Value, error) {
 	j := &job{cmd: cmdv, cancel: cancel}
 	d.do(func(st *state) {
 		st.nextID++
-		j.ticket = ticket{id: st.nextID, from: m.from, dir: m.dir, user: m.user}
+		j.ticket = ticket{id: st.nextID, from: m.from, dir: m.dir, user: user}
 		st.jobs[j.id] = j
 	})
 	d.publish(message{from: "jobs", topic: "jobs/started", args: puff.Print(puff.NewVector(j.value())), dir: m.dir, user: m.user})

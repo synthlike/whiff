@@ -73,6 +73,8 @@ func TestRun(t *testing.T) {
 		{name: "try a missing file", args: []string{"try", "nope.puff", "hello"}, code: 1,
 			wantErr: "whiff: open nope.puff: no such file or directory\n"},
 		{name: "your inbox, empty", args: []string{"inbox"}},
+		{name: "call an ask", args: []string{"call", "me/ask", "lunch?"}, outHas: "pending "},
+		{name: "your inbox", args: []string{"inbox"}, outHas: `  client -> :me/ask "lunch?"`},
 		{name: "send", args: []string{"send", "greet/hello", "cat"}},
 		{name: "send err", args: []string{"send", "nobody/x"}, code: 1,
 			wantErr: "whiff: {:kind :no-address :message \"no address :nobody\"}\n"},
