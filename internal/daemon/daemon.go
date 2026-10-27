@@ -27,10 +27,12 @@ var ErrRunning = errors.New("whiff is already running")
 var defaultCallTimeout = 5 * time.Second
 
 // daemon is the state shared by everything Run starts. Routing state
-// belongs to the route goroutine; each service's to its own goroutine.
+// belongs to the route goroutine, starting and stopping services to the
+// supervisor's, and each service's state to its own goroutine.
 type daemon struct {
 	ctx         context.Context
 	ops         chan func(st *state)
+	restarts    chan *service // services that faulted, for the supervisor
 	log         io.Writer // notes, and what services print
 	callTimeout time.Duration
 	base        *puff.Env // only looked up in, for builtins' marks
@@ -77,11 +79,14 @@ func Run(ctx context.Context, dir, services string) error {
 		close(closing)
 	}()
 
-	d := &daemon{ctx: ctx, ops: make(chan func(*state)), log: os.Stderr, callTimeout: defaultCallTimeout}
+	d := &daemon{ctx: ctx, ops: make(chan func(*state)), restarts: make(chan *service, 16),
+		log: os.Stderr, callTimeout: defaultCallTimeout}
 	d.base = d.newEnv(io.Discard, &caller{})
 	d.wg.Go(d.route)
 	// Clients wait in the listen queue until the services are loaded.
-	d.loadServices(services)
+	sv := d.newSupervisor(services)
+	sv.scan()
+	d.wg.Go(sv.run)
 	for {
 		nc, err := ln.Accept()
 		if err != nil {
@@ -113,7 +118,14 @@ func (d *daemon) newEnv(stdout io.Writer, cur *caller) *puff.Env {
 // cancels the evaluation it asked for.
 func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 	conn := rpc.NewConn(nc)
-	defer conn.Close()
+	defer func() {
+		// When whiff stops, a client sees its connection close only once
+		// whiff no longer listens, so it can start the next daemon.
+		if d.ctx.Err() != nil {
+			<-closing
+		}
+		conn.Close()
+	}()
 	ctx, cancel := context.WithCancel(d.ctx)
 	defer cancel()
 	go func() {

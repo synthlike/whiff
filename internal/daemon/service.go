@@ -29,6 +29,8 @@ type service struct {
 	mailbox chan message
 	cur     caller // whiff's builtins in env act for it
 	d       *daemon
+	quit    chan struct{} // closed to stop it after the message it is handling
+	done    chan struct{} // closed when it has stopped
 }
 
 // subscriber is an (on :topic (v) body...): fn runs with each value
@@ -48,21 +50,6 @@ type handler struct {
 	mark   puff.Mark // when marked: :read or :write after the parameters
 	marked bool
 	body   []*puff.Form
-}
-
-// loadServices loads every .puff file in dir and starts its service. One
-// that fails to load is noted in history and left out.
-func (d *daemon) loadServices(dir string) {
-	files, _ := filepath.Glob(filepath.Join(dir, "*.puff"))
-	for _, file := range files {
-		s, err := d.loadService(file)
-		if err != nil {
-			d.note("%v", err)
-			continue
-		}
-		d.do(func(st *state) { st.addrs[s.name] = s })
-		d.wg.Go(func() { s.run(d.ctx) })
-	}
 }
 
 // loadService reads and evaluates a service file: one (srv name forms...),
@@ -93,7 +80,8 @@ func (d *daemon) loadService(file string) (*service, error) {
 	}
 
 	s := &service{name: name, fns: map[string]handler{}, subs: map[string]subscriber{}, code: map[string][]*puff.Form{},
-		forms: body, mailbox: make(chan message, mailboxSize), cur: caller{addr: name}, d: d}
+		forms: body, mailbox: make(chan message, mailboxSize), cur: caller{addr: name}, d: d,
+		quit: make(chan struct{}), done: make(chan struct{})}
 	var loads []*puff.Form
 	fns := map[string]*puff.Form{} // each subscriber's (fn (v) body...)
 	for _, f := range body {
@@ -225,13 +213,15 @@ func isList(f *puff.Form, head string) bool {
 	return f.Kind == puff.FormList && len(f.Items) > 0 && f.Items[0].Kind == puff.FormSymbol && f.Items[0].Name == head
 }
 
-// run handles s's messages one at a time until ctx ends.
+// run handles s's messages one at a time until it is told to quit or ctx
+// ends. After a fault it asks the supervisor to restart it from its file.
 func (s *service) run(ctx context.Context) {
+	defer close(s.done)
 	for {
 		select {
 		case m := <-s.mailbox:
 			begin := time.Now()
-			r := s.handle(ctx, m)
+			r, faulted := s.handle(ctx, m)
 			// Recorded before the reply, so the caller finds it in history.
 			s.d.do(func(st *state) {
 				st.record(entry{at: begin, kind: m.kind(), from: m.from, to: m.to(s.name),
@@ -240,6 +230,14 @@ func (s *service) run(ctx context.Context) {
 			if m.reply != nil {
 				m.reply <- r
 			}
+			if faulted {
+				select {
+				case s.d.restarts <- s:
+				default: // the supervisor has restarts waiting; this one can wait for the next fault
+				}
+			}
+		case <-s.quit:
+			return
 		case <-ctx.Done():
 			return
 		}
@@ -247,9 +245,12 @@ func (s *service) run(ctx context.Context) {
 }
 
 // handle runs the function or subscriber m is for and returns its Result,
-// printed. A fault in it replies (err {:kind :fault}); the service keeps
-// running.
-func (s *service) handle(ctx context.Context, m message) string {
+// printed. A fault in it replies (err {:kind :fault}) and reports faulted,
+// unless it was the caller giving up.
+func (s *service) handle(ctx context.Context, m message) (reply string, faulted bool) {
+	fail := func(kind, format string, args ...any) (string, bool) {
+		return puff.Print(puff.Errorf(kind, format, args...)), false
+	}
 	var f puff.Value
 	var pos puff.Pos
 	var n int
@@ -257,24 +258,24 @@ func (s *service) handle(ctx context.Context, m message) string {
 	if m.topic != "" {
 		sub, ok := s.subs[m.topic]
 		if !ok {
-			return puff.Print(puff.Errorf("no-function", ":%s isn't subscribed to :%s", s.name, m.topic))
+			return fail("no-function", ":%s isn't subscribed to :%s", s.name, m.topic)
 		}
 		f, pos, n = sub.fn, sub.pos, 1
 	} else {
 		h, ok := s.fns[m.fn]
 		if !ok {
-			return puff.Print(puff.Errorf("no-function", ":%s has no function %s", s.name, m.fn))
+			return fail("no-function", ":%s has no function %s", s.name, m.fn)
 		}
 		f, _ = s.env.Lookup(m.fn)
 		pos, n = h.pos, len(h.params)
 	}
 	v, err := puff.ReadValue(m.args)
 	if err != nil {
-		return puff.Print(puff.Errorf("bad-call", "%v", err))
+		return fail("bad-call", "%v", err)
 	}
 	vec := v.(puff.Vector)
 	if vec.Len() != n {
-		return puff.Print(puff.Errorf("bad-call", "%s takes %d arguments, got %d", what, n, vec.Len()))
+		return fail("bad-call", "%s takes %d arguments, got %d", what, n, vec.Len())
 	}
 	args := make([]puff.Value, vec.Len())
 	for i := range args {
@@ -289,14 +290,14 @@ func (s *service) handle(ctx context.Context, m message) string {
 	s.env.Dir = m.dir
 	r, err := s.env.Call(m.ctx, pos, f, args...)
 	if err != nil {
-		return puff.Print(puff.Errorf("fault", "%v", err))
+		return puff.Print(puff.Errorf("fault", "%v", err)), m.ctx.Err() == nil
 	}
 	if t, ok := r.(puff.Tag); !ok || t.Len() != 1 || t.Name() != "ok" && t.Name() != "err" {
-		return puff.Print(puff.Errorf("fault", "%s: %s returned %s, want (ok v) or (err e)", pos, what, puff.Print(r)))
+		return fail("fault", "%s: %s returned %s, want (ok v) or (err e)", pos, what, puff.Print(r))
 	}
-	reply, err := encode(r)
+	reply, err = encode(r)
 	if err != nil {
-		return puff.Print(puff.Errorf("fault", "%s: %s: %v", pos, what, err))
+		return fail("fault", "%s: %s: %v", pos, what, err)
 	}
-	return reply
+	return reply, false
 }
