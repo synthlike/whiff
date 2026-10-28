@@ -113,8 +113,11 @@ func clientInterface(src string, l *link) (map[string]handler, error) {
 		case isList(f, "on"):
 			var rest []*puff.Form
 			fn, h, rest, err = handlerHead(f, "on wants (fn params...) and a doc string", 1)
-			if err == nil && len(rest) > 0 {
+			switch {
+			case err == nil && len(rest) > 0:
 				err = &puff.Error{Pos: rest[0].Pos, Msg: "a client's on has no body"}
+			case err == nil && h.update:
+				err = &puff.Error{Pos: f.Pos, Msg: "a client has no state to :update"}
 			}
 			h.native = l.forward
 		case isList(f, "ask"):

@@ -32,28 +32,39 @@ type service struct {
 	mailbox chan message
 	cur     caller // whiff's builtins in env act for it
 	d       *daemon
-	quit    chan struct{} // closed to stop it after the message it is handling
-	done    chan struct{} // closed when it has stopped
+	// stateful is a service loaded with :state: its handlers take its
+	// state as their first parameter, which callers don't pass. Its
+	// goroutine owns state once it runs.
+	stateful bool
+	state    puff.Value
+	keep     bool          // commit its state; not for whiff try's scratch addresses
+	quit     chan struct{} // closed to stop it after the message it is handling
+	done     chan struct{} // closed when it has stopped
 }
 
-// subscriber is an (on :topic (v) body...): fn runs with each value
+// subscriber is an (on :topic (v) body...), or (on :topic (state v)
+// [:update] body...) in a service with :state: fn runs with each value
 // published to topic.
 type subscriber struct {
-	pos   puff.Pos
-	param string
-	body  []*puff.Form
-	fn    puff.Value
+	pos    puff.Pos
+	param  string
+	update bool
+	body   []*puff.Form
+	fn     puff.Value
 }
 
-// handler is an (on (fn params...) [:read|:write] "doc" body...), or an
-// (ask (fn params...) [:read|:write] "doc" [:expires d]), which has no body:
-// its messages wait in the inbox for a reply.
+// handler is an (on (fn params...) [:read|:write] [:update] "doc"
+// body...), or an (ask (fn params...) [:read|:write] "doc" [:expires d]),
+// which has no body: its messages wait in the inbox for a reply. In a
+// service with :state, an on's first parameter is the state and isn't in
+// params.
 type handler struct {
 	pos     puff.Pos
 	params  []string
 	doc     string
 	mark    puff.Mark // when marked: :read or :write after the parameters
 	marked  bool
+	update  bool // :update: it returns the new state with its reply
 	body    []*puff.Form
 	ask     bool
 	expires time.Duration // ask: how long a message waits for a reply; 0 for ever
@@ -93,31 +104,36 @@ func (d *daemon) loadSource(file, src, addr string) (*service, error) {
 		return nil, &puff.Error{Pos: srv.Pos, Msg: ":" + name + " is whiff's own address; rename the file"}
 	}
 	body := srv.Items[2:]
-	var start *puff.Form
+	var start, init *puff.Form
+	opts := map[puff.Keyword]struct {
+		f    **puff.Form
+		want string
+	}{"start": {&start, ":start wants a function"}, "state": {&init, ":state wants its first state"}}
 	for len(body) > 0 && body[0].Kind == puff.FormLiteral {
 		k, ok := body[0].Val.(puff.Keyword)
+		if !ok {
+			break
+		}
+		opt, ok := opts[k]
 		switch {
 		case !ok:
-		case k != "start":
 			return nil, &puff.Error{Pos: body[0].Pos, Msg: "unknown srv option " + body[0].String()}
-		case start != nil:
-			return nil, &puff.Error{Pos: body[0].Pos, Msg: "srv takes :start once"}
+		case *opt.f != nil:
+			return nil, &puff.Error{Pos: body[0].Pos, Msg: "srv takes " + body[0].String() + " once"}
 		case len(body) < 2:
-			return nil, &puff.Error{Pos: body[0].Pos, Msg: ":start wants a function"}
-		default:
-			start, body = body[1], body[2:]
-			continue
+			return nil, &puff.Error{Pos: body[0].Pos, Msg: opt.want}
 		}
-		break
+		*opt.f, body = body[1], body[2:]
 	}
 
+	keep := addr == ""
 	if addr == "" {
 		addr = name
 	}
 	quit := make(chan struct{})
 	s := &service{name: addr, fns: map[string]handler{}, subs: map[string]subscriber{}, code: map[string][]*puff.Form{},
 		forms: srv.Items[2:], mailbox: make(chan message, mailboxSize), cur: caller{addr: addr, stop: quit}, d: d,
-		quit: quit, done: make(chan struct{})}
+		quit: quit, done: make(chan struct{}), stateful: init != nil, keep: keep}
 	var loads []*puff.Form
 	fns := map[string]*puff.Form{} // each subscriber's (fn (v) body...)
 	// add adds a handler named at pos, unless the name is taken.
@@ -131,7 +147,7 @@ func (d *daemon) loadSource(file, src, addr string) (*service, error) {
 	for _, f := range body {
 		switch {
 		case isList(f, "on") && len(f.Items) > 1 && f.Items[1].Kind == puff.FormLiteral:
-			topic, fn, sub, err := subscriberDef(f)
+			topic, fn, sub, err := subscriberDef(f, s.stateful)
 			if err != nil {
 				return nil, err
 			}
@@ -141,7 +157,7 @@ func (d *daemon) loadSource(file, src, addr string) (*service, error) {
 			s.subs[topic] = sub
 			fns[topic] = fn
 		case isList(f, "on"):
-			fn, def, h, err := handlerDef(f)
+			fn, def, h, err := handlerDef(f, s.stateful)
 			if err != nil {
 				return nil, err
 			}
@@ -180,6 +196,11 @@ func (d *daemon) loadSource(file, src, addr string) (*service, error) {
 		sub.fn = v
 		s.subs[topic] = sub
 	}
+	if init != nil {
+		if err := s.initState(ctx, init); err != nil {
+			return nil, err
+		}
+	}
 	if start != nil {
 		if err := s.start(ctx, start); err != nil {
 			return nil, err
@@ -188,8 +209,69 @@ func (d *daemon) loadSource(file, src, addr string) (*service, error) {
 	return s, nil
 }
 
+// initState gives s its state: the last one committed under its name, else
+// init's value.
+func (s *service) initState(ctx context.Context, init *puff.Form) error {
+	var kept string
+	found := false
+	if s.keep {
+		s.d.do(func(st *state) { kept, found = st.states[s.name] })
+	}
+	if found {
+		v, err := puff.ReadValue(kept)
+		if err != nil {
+			return err
+		}
+		s.state = v
+		return nil
+	}
+	v, err := s.env.LoadForms(ctx, []*puff.Form{init})
+	if err != nil {
+		return err
+	}
+	if v == nil {
+		return &puff.Error{Pos: init.Pos, Msg: ":state wants its first state"}
+	}
+	if err := s.commit(v); err != nil {
+		return &puff.Error{Pos: init.Pos, Msg: ":state: " + err.Error()}
+	}
+	return nil
+}
+
+// commit makes v s's state, once it is kept: only data can be.
+func (s *service) commit(v puff.Value) error {
+	p := puff.Print(v)
+	if _, err := puff.ReadValue(p); err != nil {
+		return fmt.Errorf("can't keep %s as state: only data can be", p)
+	}
+	if s.keep {
+		s.d.do(func(st *state) { st.states[s.name] = p })
+	}
+	s.state = v
+	return nil
+}
+
+// update commits v, what an :update handler returned in its ok, and
+// returns the reply. v is [reply state], or only the state when nobody
+// waits for a reply (a subscriber, whiff/done), which then is (ok :done).
+func (s *service) update(v puff.Value, alone bool) (puff.Value, error) {
+	reply := puff.Done
+	if !alone {
+		vec, ok := v.(puff.Vector)
+		if !ok || vec.Len() != 2 {
+			return nil, fmt.Errorf("an :update handler returns (ok [reply state]) or (err e), got (ok %s)", puff.Print(v))
+		}
+		reply, v = puff.Ok(vec.At(0)), vec.At(1)
+	}
+	if err := s.commit(v); err != nil {
+		return nil, err
+	}
+	return reply, nil
+}
+
 // start runs :start's function, f, as the user, before s takes its
-// address: so a first message to itself goes with send-after. An err, or
+// address: so a first message to itself goes with send-after. In a service
+// with :state it takes the state and returns (ok state). An err, or
 // anything but a Result, fails the load.
 func (s *service) start(ctx context.Context, f *puff.Form) error {
 	fn, err := s.env.LoadForms(ctx, []*puff.Form{f})
@@ -200,19 +282,31 @@ func (s *service) start(ctx context.Context, f *puff.Form) error {
 		return &puff.Error{Pos: f.Pos, Msg: ":start wants a function"}
 	}
 	s.cur.chain, s.cur.user = []string{s.name}, true
-	r, err := s.env.Call(ctx, f.Pos, fn)
+	var args []puff.Value
+	want := "(ok v)"
+	if s.stateful {
+		args, want = []puff.Value{s.state}, "(ok state)"
+	}
+	r, err := s.env.Call(ctx, f.Pos, fn, args...)
 	if err != nil {
 		return err
 	}
-	if t, ok := r.(puff.Tag); !ok || t.Len() != 1 || t.Name() != "ok" {
-		return &puff.Error{Pos: f.Pos, Msg: fmt.Sprintf(":start returned %s, want (ok v)", puff.Print(r))}
+	t, ok := r.(puff.Tag)
+	if !ok || t.Len() != 1 || t.Name() != "ok" {
+		return &puff.Error{Pos: f.Pos, Msg: fmt.Sprintf(":start returned %s, want %s", puff.Print(r), want)}
+	}
+	if s.stateful {
+		if err := s.commit(t.At(0)); err != nil {
+			return &puff.Error{Pos: f.Pos, Msg: ":start: " + err.Error()}
+		}
 	}
 	return nil
 }
 
-// subscriberDef reads (on :topic (v) body...) and returns its topic and
-// body as (fn (v) body...).
-func subscriberDef(f *puff.Form) (string, *puff.Form, subscriber, error) {
+// subscriberDef reads (on :topic (v) body...), or (on :topic (state v)
+// [:update] body...) if stateful, and returns its topic and body as (fn
+// (v) body...).
+func subscriberDef(f *puff.Form, stateful bool) (string, *puff.Form, subscriber, error) {
 	bad := func(msg string) (string, *puff.Form, subscriber, error) {
 		return "", nil, subscriber{}, &puff.Error{Pos: f.Pos, Msg: msg}
 	}
@@ -220,20 +314,47 @@ func subscriberDef(f *puff.Form) (string, *puff.Form, subscriber, error) {
 	if !ok || topic == "" {
 		return bad("on wants :topic or (fn params...), got " + f.Items[1].String())
 	}
-	if len(f.Items) < 4 || f.Items[2].Kind != puff.FormList || len(f.Items[2].Items) != 1 || f.Items[2].Items[0].Kind != puff.FormSymbol {
-		return bad("on :topic wants (v), one parameter for the value, and a body")
+	n, want := 1, "on :topic wants (v), one parameter for the value, and a body"
+	if stateful {
+		n, want = 2, "on :topic in a service with :state wants (state v) and a body"
 	}
-	sub := subscriber{pos: f.Pos, param: f.Items[2].Items[0].Name, body: f.Items[3:]}
+	if len(f.Items) < 4 || f.Items[2].Kind != puff.FormList || len(f.Items[2].Items) != n {
+		return bad(want)
+	}
+	for _, p := range f.Items[2].Items {
+		if p.Kind != puff.FormSymbol {
+			return bad(want)
+		}
+	}
+	sub := subscriber{pos: f.Pos, param: f.Items[2].Items[n-1].Name, body: f.Items[3:]}
+	if k, ok := sub.body[0].Val.(puff.Keyword); sub.body[0].Kind == puff.FormLiteral && ok && k == "update" {
+		if !stateful {
+			return bad(":update needs a service with :state")
+		}
+		sub.update, sub.body = true, sub.body[1:]
+		if len(sub.body) == 0 {
+			return bad(want)
+		}
+	}
 	items := append([]*puff.Form{{Kind: puff.FormSymbol, Pos: f.Items[0].Pos, Name: "fn"}, f.Items[2]}, sub.body...)
 	return string(topic), &puff.Form{Kind: puff.FormList, Pos: f.Pos, Items: items}, sub, nil
 }
 
-// handlerDef turns (on (fn params...) [:read|:write] "doc" body...) into
-// (def (fn params...) body...).
-func handlerDef(f *puff.Form) (string, *puff.Form, handler, error) {
+// handlerDef turns (on (fn params...) [:read|:write] [:update] "doc"
+// body...) into (def (fn params...) body...). If stateful, the first
+// parameter is the state.
+func handlerDef(f *puff.Form, stateful bool) (string, *puff.Form, handler, error) {
 	fn, h, body, err := handlerHead(f, "on wants (fn params...), a doc string and a body", 2)
 	if err != nil {
 		return "", nil, handler{}, err
+	}
+	switch {
+	case h.update && !stateful:
+		return "", nil, handler{}, &puff.Error{Pos: f.Pos, Msg: ":update needs a service with :state"}
+	case stateful && len(h.params) == 0:
+		return "", nil, handler{}, &puff.Error{Pos: f.Pos, Msg: "on in a service with :state wants (fn state params...)"}
+	case stateful:
+		h.params = h.params[1:]
 	}
 	h.body = body
 	items := append([]*puff.Form{{Kind: puff.FormSymbol, Pos: f.Items[0].Pos, Name: "def"}, f.Items[1]}, h.body...)
@@ -245,6 +366,9 @@ func askDef(f *puff.Form) (string, handler, error) {
 	fn, h, opts, err := handlerHead(f, "ask wants (fn params...) and a doc string", 1)
 	if err != nil {
 		return "", handler{}, err
+	}
+	if h.update {
+		return "", handler{}, &puff.Error{Pos: f.Pos, Msg: "an ask has no state to :update"}
 	}
 	h.ask = true
 	for len(opts) > 0 {
@@ -262,8 +386,9 @@ func askDef(f *puff.Form) (string, handler, error) {
 }
 
 // handlerHead reads what on and ask (f's head) start with: (fn params...)
-// [:read|:write] "doc", and returns the forms after the doc. want is the
-// error for fewer than min forms after the mark, the doc included.
+// [:read|:write] [:update] "doc", the marks in any order, and returns the
+// forms after the doc. want is the error for fewer than min forms after the
+// marks, the doc included.
 func handlerHead(f *puff.Form, want string, min int) (string, handler, []*puff.Form, error) {
 	head := f.Items[0].Name
 	bad := func(msg string) (string, handler, []*puff.Form, error) {
@@ -277,18 +402,22 @@ func handlerHead(f *puff.Form, want string, min int) (string, handler, []*puff.F
 		return bad(head + " wants (fn params...)")
 	}
 	h := handler{pos: f.Pos}
-	if len(rest) > 0 && rest[0].Kind == puff.FormLiteral {
-		if k, ok := rest[0].Val.(puff.Keyword); ok {
-			switch k {
-			case "read":
-				h.mark, h.marked = puff.MarkRead, true
-			case "write":
-				h.mark, h.marked = puff.MarkWrite, true
-			default:
-				return bad(head + " takes :read or :write after (fn params...), got " + rest[0].String())
-			}
-			rest = rest[1:]
+	for len(rest) > 0 && rest[0].Kind == puff.FormLiteral {
+		k, ok := rest[0].Val.(puff.Keyword)
+		if !ok {
+			break
 		}
+		switch {
+		case k == "read" && !h.marked:
+			h.mark, h.marked = puff.MarkRead, true
+		case k == "write" && !h.marked:
+			h.mark, h.marked = puff.MarkWrite, true
+		case k == "update" && !h.update:
+			h.update = true
+		default:
+			return bad(head + " takes :read or :write, and :update, after (fn params...), got " + rest[0].String())
+		}
+		rest = rest[1:]
 	}
 	if len(rest) < min {
 		return bad(want)
@@ -369,13 +498,14 @@ func (s *service) handle(ctx context.Context, m message) (reply string, faulted 
 	var native func(message, []puff.Value) (puff.Value, error)
 	var pos puff.Pos
 	var n, optional int
+	var update bool
 	what := ":" + m.to(s.name)
 	if m.topic != "" {
 		sub, ok := s.subs[m.topic]
 		if !ok {
 			return fail("no-function", ":%s isn't subscribed to :%s", s.name, m.topic)
 		}
-		f, pos, n = sub.fn, sub.pos, 1
+		f, pos, n, update = sub.fn, sub.pos, 1, sub.update
 	} else {
 		h, ok := s.fns[m.fn]
 		if !ok || h.ask {
@@ -386,7 +516,7 @@ func (s *service) handle(ctx context.Context, m message) (reply string, faulted 
 		if native = h.native; native == nil {
 			f, _ = s.env.Lookup(m.fn)
 		}
-		pos, n, optional = h.pos, len(h.params), h.optional
+		pos, n, optional, update = h.pos, len(h.params), h.optional, h.update
 	}
 	v, err := puff.ReadValue(m.args)
 	if err != nil {
@@ -426,12 +556,22 @@ func (s *service) handle(ctx context.Context, m message) (reply string, faulted 
 	}
 	defer func() { s.cur.handOn = nil }()
 	s.env.Dir = m.dir
+	if s.stateful {
+		args = append([]puff.Value{s.state}, args...)
+	}
 	r, err := s.env.Call(m.ctx, pos, f, args...)
 	if err != nil {
 		return puff.Print(puff.Errorf("fault", "%v", err)), m.ctx.Err() == nil
 	}
-	if t, ok := r.(puff.Tag); !ok || t.Len() != 1 || t.Name() != "ok" && t.Name() != "err" {
+	t, ok := r.(puff.Tag)
+	if !ok || t.Len() != 1 || t.Name() != "ok" && t.Name() != "err" {
 		return fail("fault", "%s: %s returned %s, want (ok v) or (err e)", pos, what, puff.Print(r))
+	}
+	// An :update handler's state is committed before its reply is sent.
+	if update && t.Name() == "ok" {
+		if r, err = s.update(t.At(0), m.topic != "" || m.fn == "whiff/done"); err != nil {
+			return fail("fault", "%s: %s: %v", pos, what, err)
+		}
 	}
 	reply, err = encode(r)
 	if err != nil {
