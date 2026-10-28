@@ -122,14 +122,14 @@
       (cond
         [(and (passed? checked) approved)
          (do (try (git dir ["commit" "-q" "-m" (subject task) "-m" task]))
-             (finish state n :ready (str "Committed on " branch " in " dir ", after " round " rounds. The last review:\n\n" text)))]
+           (finish state n :ready (str "Committed on " branch " in " dir ", after " round " rounds. The last review:\n\n" text)))]
         [(>= round rounds)
          (finish state n :gave-up (str "Not approved after " round " rounds; the work is in " dir ". The last review:\n\n" text))]
         [_
          (dev (set-run state n {:round (+ round 1)}) n
            (str (if approved "" (str "The reviewer asked for changes:\n\n" text "\n\n"))
-                (if (passed? checked) "" (str "The check " (check-text checked) "\n\n"))
-                "Fix what needs fixing."))])))
+             (if (passed? checked) "" (str "The check " (check-text checked) "\n\n"))
+             "Fix what needs fixing."))])))
 
   ; finish ends run n as status, telling you in your inbox unless it is
   ; quiet, and on :pipeline/done.
@@ -137,8 +137,8 @@
     (let [{:task task :branch branch :dir dir :quiet quiet} (run-of state n)]
       ; :me/tell answers pending, as it waits in your inbox.
       (do (if quiet :quiet (or-else (call :me/tell (str "pipeline " n ", " task ": " (keyword/name status) ". " note)) :told))
-          (publish :pipeline/done {:run n :status status :branch branch :dir dir :note note})
-          (ok (set-run state n {:step status})))))
+        (publish :pipeline/done {:run n :status status :branch branch :dir dir :note note})
+        (ok (set-run state n {:step status})))))
 
   ; step-done takes run n on from the result r of the job it waited for at
   ; step; a run cancelled meanwhile stays as it is.
@@ -178,8 +178,8 @@
         [(ok s) (ok [n s])]
         [(err e)
          (do (or-else (git repo ["worktree" "remove" "--force" dir]) "")
-             (or-else (git repo ["branch" "-D" branch]) "")
-             (err e))])))
+           (or-else (git repo ["branch" "-D" branch]) "")
+           (err e))])))
 
   (on (start state task check) :write :update
     "Starts a run on task in the repository here: a dev Claude makes the change in a worktree of its own, check (a command, like [\"go\" \"test\" \"./...\"]) runs there, and a reviewer Claude reviews the diff, for up to 3 rounds; then it is committed on the run's branch and you hear how it went in your inbox. (ok n), the run's number."
@@ -192,21 +192,21 @@
   (on (runs state) :read
     "Every run, oldest first: {:run :task :step :round :branch :dir}, with :step one of :dev, :check, :review, :ready, :gave-up, :failed or :cancelled."
     (ok (vector/map (map/entries (map/get-or state :runs {}))
-      (fn ([n {:task t :step s :round r :branch b :dir d}]) {:run n :task t :step s :round r :branch b :dir d}))))
+          (fn ([n {:task t :step s :round r :branch b :dir d}]) {:run n :task t :step s :round r :branch b :dir d}))))
 
   (on (view state) :read
     "The runs as a view: picking one still running cancels it."
     (ok (view/items (vector/map (map/entries (map/get-or state :runs {}))
-      (fn ([n {:task t :step s :round r :branch b}])
-        (let [item {:label (str n "  " t) :detail (str (keyword/name s) ", round " r ", " b)}]
-          (if (active? s) (map/set item :action [:pipeline/cancel n]) item)))))))
+                      (fn ([n {:task t :step s :round r :branch b}])
+                        (let [item {:label (str n "  " t) :detail (str (keyword/name s) ", round " r ", " b)}]
+                          (if (active? s) (map/set item :action [:pipeline/cancel n]) item)))))))
 
   (on (cancel state n) :write :update
     "Cancels run n: kills the job it waits for and leaves its worktree as it is. (err {:kind :no-run}) if there is no such run, or it has ended."
     (match (map/get-in state [:runs n])
       [(some {:step s :job id}) when (active? s)
        (do (or-else (call :jobs/cancel id) :gone)
-           (ok [:cancelled (set-run state n {:step :cancelled})]))]
+         (ok [:cancelled (set-run state n {:step :cancelled})]))]
       [_ (err {:kind :no-run :message (str "no run " n " is going")})]))
 
   (on (whiff/done state id r) :update

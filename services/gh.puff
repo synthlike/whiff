@@ -46,8 +46,8 @@
   (test "a pull request from gh's JSON"
     (= (pull {:number 3 :title "t" :author {:login "ann"} :headRefName "b" :isDraft #f
               :reviewDecision "APPROVED" :url "u" :createdAt "2026-10-28T10:00:00+01:00"})
-       {:number 3 :title "t" :author "ann" :branch "b" :draft #f :review :approved :url "u"
-        :created 2026-10-28T09:00:00Z}))
+      {:number 3 :title "t" :author "ann" :branch "b" :draft #f :review :approved :url "u"
+       :created 2026-10-28T09:00:00Z}))
 
   (def (bucket s)
     (match s
@@ -81,7 +81,7 @@
         (match (open-prs dir)
           [(ok ps) when (not (= ps old))
            (do (publish :gh/changed {:dir dir :prs ps})
-               [(vector/append changed dir) (map/set s dir ps)])]
+             [(vector/append changed dir) (map/set s dir ps)])]
           [_ [changed s]]))))
 
   (on (prs state) :read
@@ -119,4 +119,4 @@
   (on (tick state) :read :update
     "Polls, and ticks again in 5 minutes; whiff's own loop: call poll instead."
     (do (send-after every :tick)
-        (ok (look state)))))
+      (ok (look state)))))

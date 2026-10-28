@@ -27,7 +27,7 @@
       (match [(regex/groups line item-re) (regex/groups line heading-re)]
         [[(some [mark text]) _]
          (map/merge next {:in-item #t :items (vector/append items
-           {:line n :done (not (= mark " ")) :text (string/trim text) :section section})})]
+                                               {:line n :done (not (= mark " ")) :text (string/trim text) :section section})})]
         [[_ (some [h])] (map/merge next {:in-item #f :section (string/trim h)})]
         [_ when (and in-item (string/starts-with? line "  ") (not (= (string/trim line) "")))
          (map/set next :items (continue items line))]
@@ -39,9 +39,9 @@
 
   (test "items, their sections and continued lines"
     (= (parse "# Now\n- [ ] a\n  more\n\n* [x] b\n  - [X] c\nnot an item\n")
-       [{:line 2 :done #f :text "a more" :section "Now"}
-        {:line 5 :done #t :text "b" :section "Now"}
-        {:line 6 :done #t :text "c" :section "Now"}]))
+      [{:line 2 :done #f :text "a more" :section "Now"}
+       {:line 5 :done #t :text "b" :section "Now"}
+       {:line 6 :done #t :text "c" :section "Now"}]))
 
   (def (read) (file/read-text file))
 
@@ -55,7 +55,7 @@
 
   (def (write-new new)
     (do (try (file/write-atomic file new))
-        (ok (vector/length (string/lines new)))))
+      (ok (vector/length (string/lines new)))))
 
   (on (items)
     "Every item in TODO.md, in order: {:line :done :text :section}, where :line counts from 1 and :section is the heading it is under, \"\" before any."
@@ -68,8 +68,8 @@
   (on (view)
     "The open items as a view: picking one ticks it."
     (ok (view/items (vector/map (vector/filter (parse (try (read))) (fn ({:done d}) (not d)))
-      (fn ({:line l :text t :section s})
-        {:label t :detail (if (= s "") (str file ":" l) (str file ":" l "  " s)) :action [:todo/done l]})))))
+                      (fn ({:line l :text t :section s})
+                        {:label t :detail (if (= s "") (str file ":" l) (str file ":" l "  " s)) :action [:todo/done l]})))))
 
   (on (add text)
     "Adds \"- [ ] text\" at the end of TODO.md, creating the file if there isn't one; (ok line), the item's line."
@@ -85,4 +85,4 @@
          (let [ticked (string/replace-first (unwrap (vector/get lines (- line 1))) "[ ]" "[x]")
                new (vector/set lines (- line 1) ticked)]
            (do (try (file/write-atomic file (string/concat (string/join new "\n") "\n")))
-               (ok :done)))]))))
+             (ok :done)))]))))

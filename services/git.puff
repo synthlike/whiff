@@ -45,10 +45,10 @@
                        "2 R. N... 100644 100644 100644 abc def R100 new name.go\told.go"
                        "? notes file.txt"]
          {:branch (none) :upstream (none) :ahead 0 :behind 0 :files []} add)
-       {:branch (some "main") :upstream (some "origin/main") :ahead 2 :behind 1
-        :files [{:path "go.mod" :index :none :work :modified}
-                {:path "new name.go" :index :renamed :work :none}
-                {:path "notes file.txt" :index :untracked :work :untracked}]}))
+      {:branch (some "main") :upstream (some "origin/main") :ahead 2 :behind 1
+       :files [{:path "go.mod" :index :none :work :modified}
+               {:path "new name.go" :index :renamed :work :none}
+               {:path "notes file.txt" :index :untracked :work :untracked}]}))
 
   (test "a detached HEAD has no branch"
     (= (add {:branch (none)} "# branch.head (detached)") {:branch (none)}))

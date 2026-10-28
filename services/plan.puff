@@ -47,7 +47,7 @@
 
   (test "an answer that isn't a plan"
     (= (vector/map [(tasks "[]") (tasks "[1, 2]") (tasks "no")] (fn (r) (match r [(err {:kind k}) k])))
-       [:no-tasks :bad-plan :parse]))
+      [:no-tasks :bad-plan :parse]))
 
   ; next-run starts plan n's task i from base, a commit or branch.
   (def (next-run state n i base)
@@ -61,7 +61,7 @@
   (def (finish state n status note)
     (let [{:goal goal} (plan-of state n)]
       (do (or-else (call :me/tell (str "plan " n ", " goal ": " (keyword/name status) ". " note)) :told)
-          (ok (set-plan state n {:step status})))))
+        (ok (set-plan state n {:step status})))))
 
   (on (start state goal check) :write :update
     "Plans goal in the repository here with a planner Claude, then builds its tasks one after another as :pipeline runs, each from the last one's branch, with check (a command, like [\"go\" \"test\" \"./...\"]). (ok n), the plan's number; how it went lands in your inbox."
@@ -79,7 +79,7 @@
   (on (plans state) :read
     "Every plan, oldest first: {:plan :goal :step :tasks :task :run}, with :step one of :planning, :building, :done or :failed, and :task the index of the task :run builds."
     (ok (vector/map (map/entries (map/get-or state :plans {}))
-      (fn ([n p]) (map/set p :plan n)))))
+          (fn ([n p]) (map/set p :plan n)))))
 
   ; The planner's answer: the tasks, and the first one's run.
   (on (whiff/done state id r) :update
