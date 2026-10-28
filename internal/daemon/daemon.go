@@ -42,6 +42,7 @@ type daemon struct {
 	callTimeout time.Duration
 	base        *puff.Env    // only looked up in, for builtins' marks
 	tries       atomic.Int64 // the last whiff try's number, for its scratch address
+	agents      atomic.Int64 // the last agent's number, for its :agent/<n>
 	wg          sync.WaitGroup
 }
 

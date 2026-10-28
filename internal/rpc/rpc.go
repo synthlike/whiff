@@ -18,7 +18,7 @@ import (
 
 // Version is the protocol version. Bump it when a message changes; hello and
 // stop must stay readable by every version, so an old daemon can be stopped.
-const Version = 13
+const Version = 14
 
 // Request is a client's message to the daemon. The daemon answers each with
 // a Response, in order, except an answer or a cancel, which have none.
@@ -27,7 +27,7 @@ type Request struct {
 	Version int    `json:"version,omitempty"` // hello: the client's protocol
 	Src     string `json:"src,omitempty"`     // eval, repl: puff code; claim: the interface, (on ...) and (ask ...) forms without bodies; try: the service file
 	File    string `json:"file,omitempty"`    // try: the service file's name, for its errors
-	Target  string `json:"target,omitempty"`  // call, send: address/fn; pub: the topic; inbox, claim: the address; try: the fn
+	Target  string `json:"target,omitempty"`  // call, send: address/fn; pub: the topic; inbox, claim: the address, or "agent" for an agent's next :agent/<n>; try: the fn
 	Args    string `json:"args,omitempty"`    // call, send, pub, try: a printed puff vector, of one value for pub; reply: [id result]; wait, accept: [id]; reject: [id reason]; answer: the printed Result; sub: the topics, a printed vector of keywords, [] for every topic
 	Dir     string `json:"dir,omitempty"`     // eval, call, send, pub, try: the client's working directory
 	ID      int64  `json:"id,omitempty"`      // answer: the Delivery's ID
@@ -319,8 +319,9 @@ func (c *Client) Ls() (string, error) {
 
 // Claim makes addr this connection's address, with iface, its (on ...) and
 // (ask ...) forms without bodies. The Response's Value is (ok :done), or
-// (err {:kind :taken}) if addr is held or whiff's own. Messages to addr then
-// come on Deliveries until the connection closes.
+// (err {:kind :taken}) if addr is held or whiff's own. An Agent client that
+// claims "agent" gets the next :agent/<n> instead, as (ok :agent/<n>).
+// Messages to addr then come on Deliveries until the connection closes.
 func (c *Client) Claim(addr, iface string) (Response, error) {
 	var resp Response
 	err := c.roundTrip(Request{Op: "claim", Target: addr, Src: iface}, &resp)
@@ -367,6 +368,9 @@ func (c *Client) Stop() error {
 }
 
 func (c *Client) Close() error { return c.conn.Close() }
+
+// Done is closed when the connection ends.
+func (c *Client) Done() <-chan struct{} { return c.done }
 
 // read sorts what the daemon sends into responses and deliveries until the
 // connection ends.

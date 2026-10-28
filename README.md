@@ -52,8 +52,11 @@ the ones in daily use: `git`, `gh` (which watches your pull requests), `todo`,
 inbox. [docs/stdlib.md](docs/stdlib.md) lists every function puff has, and
 whiff's own.
 
-Next, in v0.4: `whiff mcp` for agents, and the review queue for what they ask
-to write.
+Agents connect through `whiff mcp` (`claude mcp add whiff -- whiff mcp`):
+each session gets an address of its own, `:agent/<n>`, every service function
+as a tool, and `eval`, `wait` and `inbox`. What they write waits for your
+review: follow it with `whiff sub review/pending`, list it with `whiff
+pending`, and answer with `whiff accept` or `whiff reject`.
 
 ## License
 

@@ -64,7 +64,8 @@ func (l *link) forward(m message, _ []puff.Value) (puff.Value, error) {
 // claim makes req.Target l's address, with the interface in req.Src. The
 // Response's Value is (ok :done), or (err {:kind :taken}) for an address
 // that is held, or that whiff assigns: :jobs, :me, :review, :agent/* and
-// whiff try's :try/*.
+// whiff try's :try/*. An agent's claim of :agent is given the next
+// :agent/<n>, and its Value is (ok :agent/<n>).
 func (d *daemon) claim(l *link, req rpc.Request) (*service, rpc.Response) {
 	name := strings.TrimPrefix(req.Target, ":")
 	if k, err := puff.ReadValue(":" + name); err != nil || name == "" || !puff.Equal(k, puff.Keyword(name)) {
@@ -73,7 +74,11 @@ func (d *daemon) claim(l *link, req rpc.Request) (*service, rpc.Response) {
 	taken := func(why string) (*service, rpc.Response) {
 		return nil, rpc.Response{Value: puff.Print(puff.Errorf("taken", ":%s %s", name, why))}
 	}
-	if name == "jobs" || name == "me" || name == "review" || name == "agent" || strings.HasPrefix(name, "agent/") ||
+	done := puff.Done
+	if name == "agent" && req.Agent {
+		name = fmt.Sprintf("agent/%d", d.agents.Add(1))
+		done = puff.Ok(puff.Keyword(name))
+	} else if name == "jobs" || name == "me" || name == "review" || name == "agent" || strings.HasPrefix(name, "agent/") ||
 		name == "try" || strings.HasPrefix(name, "try/") {
 		return taken("is assigned by whiff")
 	}
@@ -95,7 +100,7 @@ func (d *daemon) claim(l *link, req rpc.Request) (*service, rpc.Response) {
 		return taken("is held")
 	}
 	d.wg.Go(func() { s.run(d.ctx) })
-	return s, rpc.Response{Value: puff.Print(puff.Done)}
+	return s, rpc.Response{Value: puff.Print(done)}
 }
 
 // clientInterface reads a client's (on (fn params...) [:read|:write] "doc")

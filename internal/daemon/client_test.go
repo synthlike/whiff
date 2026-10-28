@@ -128,3 +128,43 @@ func TestClient(t *testing.T) {
 		t.Errorf("claiming :hiss once it is free = %+v %v", resp, err)
 	}
 }
+
+func TestAgentClaim(t *testing.T) {
+	dir := tempDir(t)
+	start(t, dir)
+	c := dial(t, dir)
+	claim := func(c *rpc.Client, addr string) string {
+		t.Helper()
+		resp, err := c.Claim(addr, `(ask (tell text) "Leaves the agent text.")`)
+		if err != nil {
+			t.Fatalf("claim %s: %v", addr, err)
+		}
+		return resp.Value
+	}
+	if got := claim(dial(t, dir), ":agent"); !strings.Contains(got, ":taken") {
+		t.Errorf("your claim of :agent = %s, want :taken", got)
+	}
+	agent := dial(t, dir)
+	agent.Agent = true
+	if got := claim(agent, ":agent"); got != "(ok :agent/1)" {
+		t.Errorf("an agent's claim of :agent = %s, want (ok :agent/1)", got)
+	}
+	other := dial(t, dir)
+	other.Agent = true
+	if got := claim(other, ":agent/1"); !strings.Contains(got, ":taken") {
+		t.Errorf("an agent's claim of :agent/1 = %s, want :taken", got)
+	}
+	if got := claim(other, "agent"); got != "(ok :agent/2)" {
+		t.Errorf("the second agent's claim = %s, want (ok :agent/2)", got)
+	}
+
+	// A message to the agent waits in its inbox, which its evals see.
+	resp, err := c.Eval(`(call :agent/1/tell "hi")`, "")
+	if err != nil || !strings.Contains(resp.Value, ":pending") {
+		t.Fatalf("tell = %+v %v", resp, err)
+	}
+	resp, err = agent.Eval(`(match (inbox) [[{:fn f :args a}] [f a]])`, "")
+	if err != nil || resp.Value != `[:tell ["hi"]]` {
+		t.Errorf("the agent's inbox = %+v %v", resp, err)
+	}
+}
