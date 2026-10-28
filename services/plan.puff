@@ -63,7 +63,7 @@
   (on (plans state) :read
     "Every plan, oldest first: {:plan :goal :step :tasks :task :run}, with :step one of :planning, :building, :done or :failed, and :task the index of the task :run builds."
     (ok (vector/map (map/entries (map/get-or state :plans {}))
-      (fn (e) (match e [[n p] (map/set p :plan n)])))))
+      (fn ([n p]) (map/set p :plan n)))))
 
   ; The planner's answer: the tasks, and the first one's run.
   (on (whiff/done state id r) :update
@@ -97,7 +97,7 @@
                (finish state n :failed (str "Task " (+ i 1) " of " (vector/length ts) " ended " (keyword/name status) ": " note))]
               [last
                (finish state n :done (str "All " (vector/length ts) " tasks built; " branch " has them all."))]
-              [#t
+              [_
                (match (next-run state n (+ i 1) branch)
                  [(ok s) (ok s)]
                  [(err e) (finish state n :failed (str "Task " (+ i 2) " didn't start: " (value/to-string e)))])]))])])))

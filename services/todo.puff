@@ -54,15 +54,13 @@
 
   (on (open)
     "The items not done yet, as items gives them."
-    (ok (vector/filter (parse (try (read))) (fn (it) (match it [{:done d} (not d)])))))
+    (ok (vector/filter (parse (try (read))) (fn ({:done d}) (not d)))))
 
   (on (view)
     "The open items as a view: picking one ticks it."
-    (ok (view/items (vector/map (vector/filter (parse (try (read))) (fn (it) (match it [{:done d} (not d)])))
-      (fn (it)
-        (match it
-          [{:line l :text t :section s}
-           {:label t :detail (if (= s "") (str file ":" l) (str file ":" l "  " s)) :action [:todo/done l]}]))))))
+    (ok (view/items (vector/map (vector/filter (parse (try (read))) (fn ({:done d}) (not d)))
+      (fn ({:line l :text t :section s})
+        {:label t :detail (if (= s "") (str file ":" l) (str file ":" l "  " s)) :action [:todo/done l]})))))
 
   (on (add text)
     "Adds \"- [ ] text\" at the end of TODO.md, creating the file if there isn't one; (ok line), the item's line."
@@ -75,7 +73,7 @@
     "Ticks the open item at line; (err {:kind :no-item}) if there isn't one there."
     (let [text (try (read))
           lines (string/lines text)]
-      (match (vector/find (parse text) (fn (it) (match it [{:line l :done d} (and (= l line) (not d))])))
+      (match (vector/find (parse text) (fn ({:line l :done d}) (and (= l line) (not d))))
         [(none) (err {:kind :no-item :message (str "no open item at line " line)})]
         [(some _)
          (let [ticked (string/replace-first (unwrap (vector/get lines (- line 1))) "[ ]" "[x]")

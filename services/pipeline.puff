@@ -104,7 +104,7 @@
              (finish state n :ready (str "Committed on " branch " in " dir ", after " round " rounds. The last review:\n\n" text)))]
         [(>= round rounds)
          (finish state n :gave-up (str "Not approved after " round " rounds; the work is in " dir ". The last review:\n\n" text))]
-        [#t
+        [_
          (dev (set-run state n {:round (+ round 1)}) n
            (str (if approved "" (str "The reviewer asked for changes:\n\n" text "\n\n"))
                 (if (passed? checked) "" (str "The check " (check-text checked) "\n\n"))
@@ -133,7 +133,7 @@
          (match r
            [(ok checked) (review state n checked)]
            [(err e) (finish state n :failed (str "The check didn't run: " (value/to-string e)))])]
-        [#t
+        [_
          (match r
            [(ok text) (reviewed state n text)]
            [(err e) (finish state n :failed (str "The reviewer failed: " (value/to-string e)))])])))
@@ -171,18 +171,14 @@
   (on (runs state) :read
     "Every run, oldest first: {:run :task :step :round :branch :dir}, with :step one of :dev, :check, :review, :ready, :gave-up, :failed or :cancelled."
     (ok (vector/map (map/entries (map/get-or state :runs {}))
-      (fn (e)
-        (match e
-          [[n {:task t :step s :round r :branch b :dir d}] {:run n :task t :step s :round r :branch b :dir d}])))))
+      (fn ([n {:task t :step s :round r :branch b :dir d}]) {:run n :task t :step s :round r :branch b :dir d}))))
 
   (on (view state) :read
     "The runs as a view: picking one still running cancels it."
     (ok (view/items (vector/map (map/entries (map/get-or state :runs {}))
-      (fn (e)
-        (match e
-          [[n {:task t :step s :round r :branch b}]
-           (let [item {:label (str n "  " t) :detail (str (keyword/name s) ", round " r ", " b)}]
-             (if (active? s) (map/set item :action [:pipeline/cancel n]) item))]))))))
+      (fn ([n {:task t :step s :round r :branch b}])
+        (let [item {:label (str n "  " t) :detail (str (keyword/name s) ", round " r ", " b)}]
+          (if (active? s) (map/set item :action [:pipeline/cancel n]) item)))))))
 
   (on (cancel state n) :write :update
     "Cancels run n: kills the job it waits for and leaves its worktree as it is. (err {:kind :no-run}) if there is no such run, or it has ended."

@@ -77,6 +77,10 @@ and vectors, `match`, and Results and Options instead of nil and exceptions.
 It has no tasks or channels; concurrency is the daemon's, and a service is
 only ever handling one message.
 
+- **Patterns take values apart,** in `match` arms, `let` bindings and a
+  `fn`'s params: `(fn ([k {:step s}]) ...)` over a map's entries. A `match`
+  with no arm that fits, or a `let` or param that doesn't, faults; `cond`
+  and `match` end in a `_` arm for the rest.
 - **Errors are values.** A failing builtin returns `(err {:kind ...})`;
   `try` passes one up from the function it is in. An err dropped in a `do`
   faults rather than going unnoticed.

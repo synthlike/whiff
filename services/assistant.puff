@@ -42,7 +42,7 @@
   (def (busy?)
     (match [(vector/last (read-turns)) (call :jobs/list)]
       [[(some last) (ok js)]
-       (vector/any? js (fn (j) (match j [{:id i} (= (int/to-string i) last)])))]
+       (vector/any? js (fn ({:id i}) (= (int/to-string i) last)))]
       [_ #f]))
 
   ; turn starts one turn with text: (ok :thinking), or (err {:kind :busy}).
@@ -79,7 +79,7 @@
     "A turn's answer goes to your inbox; your reply to one, if it is text, is the next message."
     (cond
       [(vector/contains? (read-turns) (int/to-string id)) (answered r)]
-      [#t (match r
+      [_ (match r
             [(ok text) when (= (value/type text) :string)
              (match (turn text)
                [(err {:kind :busy}) (call :me/tell "I'm still answering your last message; reply again in a moment.")]

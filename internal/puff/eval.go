@@ -710,17 +710,45 @@ func traced(e Value, pos Pos) Value {
 }
 
 // fn compiles a function's params and body; name is "" for an anonymous fn.
+// A param is a name, or a vector or map pattern that takes its argument
+// apart as let's do: (fn ([k v]) ...). An argument that doesn't match
+// faults.
 func (c *compiler) fn(name string, pos Pos, params, body []*Form, s *scope) (expr, error) {
 	fs := &scope{kind: scopeFn, parent: s}
-	for _, p := range params {
+	// The patterns' names are in a scope of their own, inside the params'.
+	ps := &scope{kind: scopeLet, parent: fs}
+	type destructure struct {
+		param int
+		match matcher
+		pos   Pos
+	}
+	var ds []destructure
+
+	for i, p := range params {
+		if p.Kind == FormVector || p.Kind == FormMap {
+			m, err := c.pattern(p, &ps.names)
+			if err != nil {
+				return nil, err
+			}
+			ds = append(ds, destructure{i, m, p.Pos})
+			fs.names = append(fs.names, p.String()) // no symbol can look it up
+			continue
+		}
 		n, err := c.binding(p)
 		if err != nil {
 			return nil, err
 		}
-		if slices.Contains(fs.names, n) {
-			return nil, errorf(p.Pos, "parameter %s twice", n)
-		}
 		fs.names = append(fs.names, n)
+	}
+	bound := slices.Clone(ps.names) // the patterns have checked their own
+	for i, p := range params {
+		if p.Kind != FormSymbol {
+			continue
+		}
+		if slices.Contains(bound, fs.names[i]) {
+			return nil, errorf(p.Pos, "parameter %s twice", fs.names[i])
+		}
+		bound = append(bound, fs.names[i])
 	}
 	what := name
 	if what == "" {
@@ -728,9 +756,25 @@ func (c *compiler) fn(name string, pos Pos, params, body []*Form, s *scope) (exp
 	}
 	outer := c.refs
 	c.refs = nil
-	b, err := c.body(what, pos, body, fs, true)
+	bs := fs
+	if len(ds) > 0 {
+		bs = ps
+	}
+	b, err := c.body(what, pos, body, bs, true)
 	if err != nil {
 		return nil, err
+	}
+	if len(ds) > 0 {
+		inner, slots := b, len(ps.names)
+		b = func(t *thread, fr *frame) (Value, error) {
+			pf := &frame{vals: make([]Value, slots), parent: fr}
+			for _, d := range ds {
+				if !d.match(fr.vals[d.param], pf.vals) {
+					return nil, faultf(d.pos, "%s: no match for %s", what, Print(fr.vals[d.param]))
+				}
+			}
+			return inner(t, pf)
+		}
 	}
 	refs := c.refs
 	c.refs = append(outer, refs...) // what an inner fn refers to, its outer one does too
@@ -768,8 +812,9 @@ func (c *compiler) ifForm(f *Form, s *scope, tail bool) (expr, error) {
 	}, nil
 }
 
-// cond compiles (cond [test body...] ...): the first arm whose test is #t
-// runs. No arm matching faults.
+// cond compiles (cond [test body...] ... [_ body...]): the first arm whose
+// test is #t runs, and a last arm of _ runs if none does. No arm matching
+// faults.
 func (c *compiler) cond(f *Form, s *scope, tail bool) (expr, error) {
 	if len(f.Items) < 2 {
 		return nil, errorf(f.Pos, "cond needs arms")
@@ -780,13 +825,20 @@ func (c *compiler) cond(f *Form, s *scope, tail bool) (expr, error) {
 		body expr
 	}
 	var arms []arm
-	for _, a := range f.Items[1:] {
+	for i, a := range f.Items[1:] {
 		if a.Kind != FormVector || len(a.Items) < 2 {
 			return nil, errorf(a.Pos, "cond arms are [test body...]")
 		}
-		test, err := c.expr(a.Items[0], s, false)
-		if err != nil {
-			return nil, err
+		var test expr
+		if h := a.Items[0]; h.Kind == FormSymbol && h.Name == "_" {
+			if i != len(f.Items)-2 {
+				return nil, errorf(h.Pos, "cond's _ arm goes last")
+			}
+		} else {
+			var err error
+			if test, err = c.expr(h, s, false); err != nil {
+				return nil, err
+			}
 		}
 		body, err := c.body("cond arm", a.Pos, a.Items[1:], s, tail)
 		if err != nil {
@@ -796,6 +848,9 @@ func (c *compiler) cond(f *Form, s *scope, tail bool) (expr, error) {
 	}
 	return func(t *thread, fr *frame) (Value, error) {
 		for _, a := range arms {
+			if a.test == nil {
+				return a.body(t, fr)
+			}
 			ok, err := t.test(a.test, fr, a.pos)
 			if err != nil {
 				return nil, err

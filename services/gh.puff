@@ -71,14 +71,12 @@
   ; directories. A directory gh fails in keeps what it had.
   (def (look state)
     (vector/reduce (map/entries state) [[] state]
-      (fn (acc e)
-        (let [[changed s] acc
-              [dir old] e]
-          (match (open-prs dir)
-            [(ok ps) when (not (= ps old))
-             (do (publish :gh/changed {:dir dir :prs ps})
-                 [(vector/append changed dir) (map/set s dir ps)])]
-            [_ acc])))))
+      (fn ([changed s] [dir old])
+        (match (open-prs dir)
+          [(ok ps) when (not (= ps old))
+           (do (publish :gh/changed {:dir dir :prs ps})
+               [(vector/append changed dir) (map/set s dir ps)])]
+          [_ [changed s]]))))
 
   (on (prs state) :read
     "The open pull requests, newest first: each {:number :title :author :branch :draft :review :url :created}, with :review one of :approved, :changes-requested, :review-required or :none."
