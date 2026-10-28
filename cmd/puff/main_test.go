@@ -23,6 +23,8 @@ func TestRun(t *testing.T) {
 	errMain := write("err.puff", `(def (main args) (err {:kind :bad}))`)
 	oddMain := write("odd.puff", `(def (main args) 5)`)
 	faultMain := write("faultmain.puff", "(def (main args)\n  (+ 1 1.0))")
+	tested := write("tested.puff", "(def (sq n) (* n n))\n(test \"sq\" (= (sq 3) 9))\n(test \"wrong\" (= (sq 3) 6))\n(test \"fault\" (= (sq \"x\") 1))")
+	passing := write("passing.puff", "(test \"one\" (= 1 1))")
 
 	tests := []struct {
 		name             string
@@ -95,6 +97,24 @@ func TestRun(t *testing.T) {
 			name:    "example",
 			args:    []string{"../../examples/hello.puff", "ann", "bob"},
 			wantOut: "hello, ann\nhello, bob\n",
+		},
+		{
+			name:    "tests",
+			args:    []string{"-t", passing, tested},
+			code:    1,
+			wantOut: "FAIL " + tested + ":3:1 wrong: got 9, want 6\nFAIL " + tested + ":4:1 fault: " + tested + ":1:13: *: can't multiply string and string\n2 passed, 2 failed\n",
+		},
+		{
+			name:    "tests that pass",
+			args:    []string{"-t", passing},
+			wantOut: "1 passed, 0 failed\n",
+		},
+		{
+			name:    "tests of a broken file",
+			args:    []string{"-t", faulty},
+			code:    1,
+			wantOut: "0 passed, 1 failed\n",
+			wantErr: faulty + ":2:1: +: can't add int and float\n",
 		},
 		{
 			name:    "missing file",

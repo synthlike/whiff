@@ -114,6 +114,12 @@ subscribers and private `def`s.
   a saved file reloads, a deleted one unloads, a fault restarts the service
   from its file. `whiff try file.puff fn` loads a file under a scratch
   address, calls it once and unloads it.
+- **Tested in place.** `(test "name" body...)` in a service file passes if
+  its body is `#t`, or for `(= got want)`, if they are equal, and shows both
+  when not. Loading a service skips its tests; `whiff test file.puff` loads
+  it under a scratch address without its `:start` and runs them, as you,
+  and so only from your connections. `puff -t` does the same for a plain
+  puff file.
 - **State.** `(service gh :state {} ...)` gives every handler the state as its
   first parameter. An `:update` handler returns `(ok [reply state])`, or
   `(ok state)` for a subscriber or `whiff/done`, where nobody waits for a

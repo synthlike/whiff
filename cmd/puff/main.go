@@ -18,6 +18,7 @@ import (
 const usage = `usage:
   puff file.puff args...   evaluate a file and call its main with args
   puff -e code             evaluate code and print its value
+  puff -t file.puff...     run the files' tests
   puff                     evaluate forms from stdin as they're typed
 `
 
@@ -43,6 +44,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, interactive b
 		ctx, cancel := cancelOn(interrupts)
 		defer cancel()
 		return eval(ctx, newEnv(stdout), "-e", args[1], stdout, stderr, true)
+	case args[0] == "-t" && len(args) >= 2:
+		ctx, cancel := cancelOn(interrupts)
+		defer cancel()
+		return test(ctx, args[1:], stdout, stderr)
 	case strings.HasPrefix(args[0], "-"):
 		fmt.Fprint(stderr, usage)
 		return 2
@@ -113,6 +118,40 @@ func runFile(ctx context.Context, file string, args []string, stdout, stderr io.
 	}
 	fmt.Fprintf(stderr, "puff: main returned %s, want (ok v) or (err e)\n", puff.Print(v))
 	return 70
+}
+
+// test loads each file and runs its tests, printing each that fails and
+// how many passed: 0 if they all did, 1 if any failed or a file didn't
+// load.
+func test(ctx context.Context, files []string, stdout, stderr io.Writer) int {
+	passed, failed := 0, 0
+	for _, file := range files {
+		src, err := os.ReadFile(file)
+		if err != nil {
+			fmt.Fprintf(stderr, "puff: %v\n", err)
+			failed++
+			continue
+		}
+		env := newEnv(stdout)
+		if _, err := env.Load(ctx, file, string(src)); err != nil {
+			fmt.Fprintln(stderr, err)
+			failed++
+			continue
+		}
+		for _, t := range env.Tests() {
+			if msg := env.RunTest(ctx, t); msg != "" {
+				fmt.Fprintf(stdout, "FAIL %s %s: %s\n", t.Pos, t.Name, msg)
+				failed++
+			} else {
+				passed++
+			}
+		}
+	}
+	fmt.Fprintf(stdout, "%d passed, %d failed\n", passed, failed)
+	if failed > 0 {
+		return 1
+	}
+	return 0
 }
 
 // report prints a read, check or evaluation error and returns its exit

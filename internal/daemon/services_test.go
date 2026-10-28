@@ -698,3 +698,39 @@ esac
 		t.Errorf("plans = %+v %v", resp, err)
 	}
 }
+
+// TestServiceFileTests runs the (test ...)s in every file in services/, as
+// whiff test does.
+func TestServiceFileTests(t *testing.T) {
+	dir := tempDir(t)
+	start(t, dir)
+	c := dial(t, dir)
+	files, err := filepath.Glob(filepath.Join("..", "..", "services", "*.puff"))
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no services: %v", err)
+	}
+	for _, file := range files {
+		src, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := c.Test(file, string(src), t.TempDir())
+		if err != nil || resp.Error != "" {
+			t.Errorf("%s: %+v %v", file, resp, err)
+			continue
+		}
+		v, err := puff.ReadValue(resp.Value)
+		results, ok := v.(puff.Vector)
+		if err != nil || !ok {
+			t.Fatalf("%s: results %s", file, resp.Value)
+		}
+		for i := range results.Len() {
+			r := results.At(i).(puff.Map)
+			if msg, _ := r.Get(puff.Keyword("message")); msg != puff.String("") {
+				at, _ := r.Get(puff.Keyword("at"))
+				name, _ := r.Get(puff.Keyword("test"))
+				t.Errorf("%s %s: %s", at, name, msg)
+			}
+		}
+	}
+}

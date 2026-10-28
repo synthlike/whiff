@@ -39,6 +39,20 @@
         [["?" & _] (with-file st {:path (after f 1) :index :untracked :work :untracked})]
         [_ st])))
 
+  (test "a status: its branch, how far it is from upstream, and its files"
+    (= (vector/reduce ["# branch.oid abc" "# branch.head main" "# branch.upstream origin/main" "# branch.ab +2 -1"
+                       "1 .M N... 100644 100644 100644 abc def go.mod"
+                       "2 R. N... 100644 100644 100644 abc def R100 new name.go\told.go"
+                       "? notes file.txt"]
+         {:branch (none) :upstream (none) :ahead 0 :behind 0 :files []} add)
+       {:branch (some "main") :upstream (some "origin/main") :ahead 2 :behind 1
+        :files [{:path "go.mod" :index :none :work :modified}
+                {:path "new name.go" :index :renamed :work :none}
+                {:path "notes file.txt" :index :untracked :work :untracked}]}))
+
+  (test "a detached HEAD has no branch"
+    (= (add {:branch (none)} "# branch.head (detached)") {:branch (none)}))
+
   (def (status-of)
     (let [out (try (git ["status" "--porcelain=v2" "--branch"]))]
       (ok (vector/reduce (string/lines out) {:branch (none) :upstream (none) :ahead 0 :behind 0 :files []} add))))

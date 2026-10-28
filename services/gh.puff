@@ -43,6 +43,12 @@
        {:number n :title title :author who :branch branch :draft draft :review (review r)
         :url url :created (at created)}]))
 
+  (test "a pull request from gh's JSON"
+    (= (pull {:number 3 :title "t" :author {:login "ann"} :headRefName "b" :isDraft #f
+              :reviewDecision "APPROVED" :url "u" :createdAt "2026-10-28T10:00:00+01:00"})
+       {:number 3 :title "t" :author "ann" :branch "b" :draft #f :review :approved :url "u"
+        :created 2026-10-28T09:00:00Z}))
+
   (def (bucket s)
     (match s
       ["pass" :pass] ["fail" :fail] ["pending" :pending] ["skipping" :skipping]

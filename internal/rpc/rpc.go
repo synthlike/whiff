@@ -18,7 +18,7 @@ import (
 
 // Version is the protocol version. Bump it when a message changes; hello and
 // stop must stay readable by every version, so an old daemon can be stopped.
-const Version = 16
+const Version = 17
 
 // Request is a client's message to the daemon. The daemon answers each with
 // a Response, in order, except an answer or a cancel, which have none.
@@ -377,6 +377,17 @@ func (c *Client) Try(file, src, fn, args, dir string) (Response, error) {
 	return resp, err
 }
 
+// Test loads src, the service file named file, under a scratch address
+// without starting it, runs its tests from dir and unloads it. The
+// Response's Value is a printed vector, a {:test :at :message} for each
+// test, with :message "" if it passed; a file that doesn't load is its
+// Error, at file:line:col.
+func (c *Client) Test(file, src, dir string) (Response, error) {
+	var resp Response
+	err := c.roundTrip(Request{Op: "test", File: file, Src: src, Dir: dir}, &resp)
+	return resp, err
+}
+
 // Mode sets the review gate's mode for the agent session at addr: mode is
 // "gated", "trusted" (with services, the ones whose messages go through)
 // or "free"; for, if not 0, ends it after that long. The Response's Value
@@ -533,7 +544,7 @@ func (c *Client) roundTrip(req Request, resp *Response) error {
 	case <-c.done:
 		return fmt.Errorf("whiff daemon: %w", c.err)
 	}
-	if resp.Error != "" && req.Op != "eval" && req.Op != "repl" && req.Op != "try" {
+	if resp.Error != "" && req.Op != "eval" && req.Op != "repl" && req.Op != "try" && req.Op != "test" {
 		return errors.New(resp.Error)
 	}
 	return nil

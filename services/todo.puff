@@ -37,12 +37,21 @@
     (let [{:items items} (vector/reduce (string/lines text) {:n 0 :section "" :items [] :in-item #f} step)]
       items))
 
+  (test "items, their sections and continued lines"
+    (= (parse "# Now\n- [ ] a\n  more\n\n* [x] b\n  - [X] c\nnot an item\n")
+       [{:line 2 :done #f :text "a more" :section "Now"}
+        {:line 5 :done #t :text "b" :section "Now"}
+        {:line 6 :done #t :text "c" :section "Now"}]))
+
   (def (read) (file/read-text file))
 
   ; append is old, the file's text, with a new item for text at the end.
   (def (append old text)
     (let [sep (if (or (= old "") (string/ends-with? old "\n")) "" "\n")]
       (string/concat old sep "- [ ] " (string/trim text) "\n")))
+
+  (test "append starts a line when the file doesn't end in one"
+    (= [(append "- [ ] a" " b ") (append "" "c")] ["- [ ] a\n- [ ] b\n" "- [ ] c\n"]))
 
   (def (write-new new)
     (do (try (file/write-atomic file new))

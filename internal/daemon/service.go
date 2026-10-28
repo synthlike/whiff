@@ -82,12 +82,13 @@ func (d *daemon) loadService(file string) (*service, error) {
 	if err != nil {
 		return nil, err
 	}
-	return d.loadSource(file, string(src), "")
+	return d.loadSource(file, string(src), "", true)
 }
 
 // loadSource is loadService for src, read from file, at addr: the
-// service's name if addr is "", else a scratch address for whiff try.
-func (d *daemon) loadSource(file, src, addr string) (*service, error) {
+// service's name if addr is "", else a scratch address for whiff try or
+// test. Its :start runs if start is set.
+func (d *daemon) loadSource(file, src, addr string, start bool) (*service, error) {
 	forms, err := puff.Read(file, src)
 	if err != nil {
 		return nil, err
@@ -104,11 +105,11 @@ func (d *daemon) loadSource(file, src, addr string) (*service, error) {
 		return nil, &puff.Error{Pos: srv.Pos, Msg: ":" + name + " is whiff's own address; rename the file"}
 	}
 	body := srv.Items[2:]
-	var start, init *puff.Form
+	var startFn, init *puff.Form
 	opts := map[puff.Keyword]struct {
 		f    **puff.Form
 		want string
-	}{"start": {&start, ":start wants a function"}, "state": {&init, ":state wants its first state"}}
+	}{"start": {&startFn, ":start wants a function"}, "state": {&init, ":state wants its first state"}}
 	for len(body) > 0 && body[0].Kind == puff.FormLiteral {
 		k, ok := body[0].Val.(puff.Keyword)
 		if !ok {
@@ -201,8 +202,8 @@ func (d *daemon) loadSource(file, src, addr string) (*service, error) {
 			return nil, err
 		}
 	}
-	if start != nil {
-		if err := s.start(ctx, start); err != nil {
+	if start && startFn != nil {
+		if err := s.start(ctx, startFn); err != nil {
 			return nil, err
 		}
 	}

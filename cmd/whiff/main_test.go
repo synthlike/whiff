@@ -48,6 +48,10 @@ func TestRun(t *testing.T) {
 	if err := os.WriteFile(broken, []byte("(service greet\n  (on (hello) \"Doc.\" (ok x)))"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	tested := filepath.Join(dir, "x", "tested.puff")
+	if err := os.WriteFile(tested, []byte("(service tested\n  (def (sq n) (* n n))\n  (test \"sq\" (= (sq 3) 9))\n  (test \"wrong\" (= (sq 3) 6)))"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("WHIFF_TEST_DIR", dir)
 	t.Cleanup(func() { run([]string{"stop"}, dir, services, new(strings.Builder), new(strings.Builder)) })
 
@@ -88,6 +92,9 @@ func TestRun(t *testing.T) {
 		{name: "try a broken file", args: []string{"try", broken, "hello"}, code: 1, wantErr: broken + ":2:26: unknown name x\n"},
 		{name: "try a missing file", args: []string{"try", "nope.puff", "hello"}, code: 1,
 			wantErr: "whiff: open nope.puff: no such file or directory\n"},
+		{name: "test", args: []string{"test", trial, tested}, code: 1,
+			wantOut: "FAIL " + tested + ":4:3 wrong: got 9, want 6\n1 passed, 1 failed\n"},
+		{name: "test a broken file", args: []string{"test", broken}, code: 1, wantOut: "0 passed, 1 failed\n", wantErr: broken + ":2:26: unknown name x\n"},
 		{name: "your inbox, empty", args: []string{"inbox"}},
 		{name: "call an ask", args: []string{"call", "me/ask", "lunch?"}, outHas: "pending "},
 		{name: "your inbox", args: []string{"inbox"}, outHas: `  client -> :me/ask "lunch?"`},

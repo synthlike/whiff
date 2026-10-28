@@ -245,6 +245,8 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 			resp = d.message(ctx, from, req)
 		case "try":
 			resp = d.try(ctx, from, req)
+		case "test":
+			resp = d.test(ctx, req)
 		case "sub":
 			if sub != nil {
 				resp.Error = "this connection is subscribed already"

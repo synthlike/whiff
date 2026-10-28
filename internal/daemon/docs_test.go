@@ -53,7 +53,7 @@ Failures a caller should handle are values: ` + "`(err {:kind :message})`" + `, 
 ` + "`(none)`" + ` for a lookup that finds nothing. A wrong argument, such as a string
 where an int goes, is a fault instead and stops the program.
 
-The language's own forms, ` + "`def let fn if cond do and or match when loop recur -> try catch`" + `,
+The language's own forms, ` + "`def let fn if cond do and or match when loop recur -> try catch test`" + `,
 aren't functions and aren't listed here.
 `
 

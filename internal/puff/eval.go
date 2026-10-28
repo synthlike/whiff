@@ -54,6 +54,7 @@ type Env struct {
 	// process's working directory.
 	Dir     string
 	globals map[string]*global
+	tests   []*Test
 }
 
 type global struct {
@@ -127,10 +128,18 @@ func (e *Env) LoadForms(ctx context.Context, forms []*Form) (Value, error) {
 		}
 	}
 	steps := make([]expr, len(forms))
+	var tests []*Test
 	for i, f := range forms {
-		if isDef(f) {
+		switch {
+		case isDef(f):
 			steps[i], err = c.def(f)
-		} else {
+		case isTest(f):
+			var t *Test
+			if t, err = c.test(f); err == nil {
+				tests = append(tests, t)
+				steps[i] = func(*thread, *frame) (Value, error) { return nil, nil }
+			}
+		default:
 			steps[i], err = c.expr(f, nil, false)
 		}
 		if err != nil {
@@ -138,6 +147,7 @@ func (e *Env) LoadForms(ctx context.Context, forms []*Form) (Value, error) {
 		}
 	}
 	maps.Copy(e.globals, c.defined)
+	e.tests = append(e.tests, tests...)
 	t := &thread{ctx: ctx, env: e}
 	var v Value
 	for i, step := range steps {
@@ -207,7 +217,7 @@ func (s *scope) loop() *scope {
 
 var specialForms = map[string]bool{
 	"def": true, "let": true, "fn": true, "if": true, "cond": true, "do": true, "and": true, "or": true,
-	"match": true, "when": true, "loop": true, "recur": true, "->": true, "try": true, "catch": true,
+	"match": true, "when": true, "loop": true, "recur": true, "->": true, "try": true, "catch": true, "test": true,
 }
 
 // compiler turns forms into exprs, resolving every name.
@@ -369,6 +379,8 @@ func (c *compiler) expr(f *Form, s *scope, tail bool) (expr, error) {
 			return c.try(f, s)
 		case "catch":
 			return c.catch(f, s, tail)
+		case "test":
+			return nil, errorf(f.Pos, "test only at top level")
 		}
 	}
 	return c.call(f, s)

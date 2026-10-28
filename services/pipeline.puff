@@ -105,6 +105,16 @@
     (let [first (string/trim-suffix (match (string/split (string/trim task) ". ") [[f & _] f]) ".")]
       (if (> (string/length first) 72) (str (string/slice first 0 71) "…") first)))
 
+  (test "a commit's subject is the task's first sentence"
+    (= [(subject "  Add a flag. Then test it.") (subject "Add a flag.")] ["Add a flag" "Add a flag"]))
+
+  (test "a long subject is cut to 72 characters"
+    (let [long (string/join (vector/map (vector/range 0 30) (fn (i) "word")) " ")]
+      (= (string/length (subject long)) 72)))
+
+  (test "a check's output is cut to its last 4000 characters"
+    (= [(string/length (tail (string/join (vector/map (vector/range 0 5000) (fn (i) "x")) ""))) (tail "abc")] [4000 "abc"]))
+
   (def (reviewed state n text)
     (let [{:round round :checked checked :dir dir :task task :branch branch} (run-of state n)
           state (set-run state n {:review text})

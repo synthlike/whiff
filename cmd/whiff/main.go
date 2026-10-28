@@ -27,6 +27,7 @@ const usage = `usage:
   whiff pub topic value           publish value to the topic's subscribers
   whiff sub [topic...]            print what is published to the topics, every topic by default, until stopped
   whiff try file.puff fn args...  load a service file, call its function once and unload it
+  whiff test file.puff...         run the tests in service files, without starting them
   whiff act [line...]             send the action at the end of each line, an item as call prints it, or of stdin's
   whiff inbox [address]           list the messages waiting for a reply: yours, :me's, by default
   whiff reply id value            answer a message waiting for a reply
@@ -84,6 +85,8 @@ func run(args []string, dir, services string, stdout, stderr io.Writer) int {
 		return sub(dir, args[1:], stdout, stderr)
 	case len(args) >= 3 && args[0] == "try":
 		return try(dir, args[1], args[2], args[3:], stdout, stderr)
+	case len(args) >= 2 && args[0] == "test":
+		return test(dir, args[1:], stdout, stderr)
 	case len(args) == 3 && args[0] == "pub":
 		return message(dir, args[0], args[1], args[2:], stdout, stderr)
 	case len(args) == 3 && args[0] == "reply", len(args) == 2 && args[0] == "wait",
@@ -220,6 +223,66 @@ func try(dir, file, fn string, args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return result("call", resp, stdout, stderr)
+}
+
+// test runs the tests in each service file, from here, printing each that
+// fails and how many passed: 0 if they all did, 1 if any failed or a file
+// didn't load.
+func test(dir string, files []string, stdout, stderr io.Writer) int {
+	wd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(stderr, "whiff: %v\n", err)
+		return 1
+	}
+	c := connect(dir, stderr)
+	if c == nil {
+		return 1
+	}
+	defer c.Close()
+	passed, failed := 0, 0
+	for _, file := range files {
+		src, err := os.ReadFile(file)
+		if err != nil {
+			fmt.Fprintf(stderr, "whiff: %v\n", err)
+			failed++
+			continue
+		}
+		resp, err := c.Test(file, string(src), wd)
+		if err != nil {
+			fmt.Fprintf(stderr, "whiff: %v\n", err)
+			return 1
+		}
+		if resp.Error != "" {
+			fmt.Fprintln(stderr, resp.Error)
+			failed++
+			continue
+		}
+		v, _ := puff.ReadValue(resp.Value)
+		results, ok := v.(puff.Vector)
+		if !ok {
+			fmt.Fprintf(stderr, "whiff: want test results, got %s\n", resp.Value)
+			return 1
+		}
+		for i := range results.Len() {
+			r, _ := results.At(i).(puff.Map)
+			field := func(k string) string {
+				v, _ := r.Get(puff.Keyword(k))
+				s, _ := v.(puff.String)
+				return string(s)
+			}
+			if msg := field("message"); msg != "" {
+				fmt.Fprintf(stdout, "FAIL %s %s: %s\n", field("at"), field("test"), msg)
+				failed++
+			} else {
+				passed++
+			}
+		}
+	}
+	fmt.Fprintf(stdout, "%d passed, %d failed\n", passed, failed)
+	if failed > 0 {
+		return 1
+	}
+	return 0
 }
 
 // result prints resp's Result for op: the value of (ok v) for a call, a

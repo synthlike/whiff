@@ -39,6 +39,16 @@
         [[& _] when (strings? ts) (ok (vector/slice ts 0 (min most (vector/length ts))))]
         [_ (err {:kind :bad-plan :message (str "want a JSON array of tasks, got " text)})])))
 
+  (test "tasks inside a code fence"
+    (= (tasks "Here is the plan:\n```json\n[\"a\", \"b\"]\n```\n") (ok ["a" "b"])))
+
+  (test "at most 4 tasks"
+    (= (tasks "[\"1\", \"2\", \"3\", \"4\", \"5\"]") (ok ["1" "2" "3" "4"])))
+
+  (test "an answer that isn't a plan"
+    (= (vector/map [(tasks "[]") (tasks "[1, 2]") (tasks "no")] (fn (r) (match r [(err {:kind k}) k])))
+       [:no-tasks :bad-plan :parse]))
+
   ; next-run starts plan n's task i from base, a commit or branch.
   (def (next-run state n i base)
     (let [{:repo repo :tasks ts :check check} (plan-of state n)

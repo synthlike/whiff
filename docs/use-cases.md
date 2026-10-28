@@ -236,10 +236,13 @@ The gate covers what reaches whiff: an agent that also has a shell can run
   (on (list state) "The notes."
     (ok state))
   (on (view state) "The notes, as items."
-    (ok (view/items (vector/map state (fn (n) {:label n}))))))
+    (ok (view/items (vector/map state (fn (n) {:label n})))))
+  (test "a note is added at the end"
+    (= (add ["a"] "b") (ok [:added ["a" "b"]]))))
 ```
 
 ```sh
+whiff test notes.puff             # 1 passed, 0 failed
 whiff try notes.puff list         # load it once, call list, unload it
 ln -s "$PWD"/notes.puff ~/.whiff/services/
 whiff call notes/add "buy milk"

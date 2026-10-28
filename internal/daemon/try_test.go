@@ -77,3 +77,41 @@ func TestTry(t *testing.T) {
 		}
 	}
 }
+
+func TestTestOp(t *testing.T) {
+	dir := tempDir(t)
+	start(t, dir)
+	c := dial(t, dir)
+
+	// Its tests reach its defs, its handlers and whiff's builtins; its :start
+	// doesn't run.
+	src := `(service counter :state 0
+  :start (fn (state) (fail "started"))
+  (def (bump n) (+ n 1))
+  (on (add state n) :update "Adds n." (ok [:added (+ state n)]))
+  (test "bump" (= (bump 1) 2))
+  (test "a handler" (= (add 1 2) (ok [:added 3])))
+  (test "its address" (string/starts-with? (value/to-string (self)) ":try/"))
+  (test "where it runs" (= (os/cwd) "/tmp"))
+  (test "wrong" (= (bump 1) 3)))`
+	resp, err := c.Test("counter.puff", src, "/tmp")
+	want := `[{:at "counter.puff:5:3" :message "" :test "bump"} {:at "counter.puff:6:3" :message "" :test "a handler"} ` +
+		`{:at "counter.puff:7:3" :message "" :test "its address"} {:at "counter.puff:8:3" :message "" :test "where it runs"} ` +
+		`{:at "counter.puff:9:3" :message "got 2, want 3" :test "wrong"}]`
+	if err != nil || resp.Error != "" || resp.Value != want {
+		t.Errorf("test = %+v %v, want %s", resp, err, want)
+	}
+	// whiff try runs its :start, which test didn't.
+	if resp, err := c.Try("counter.puff", src, "add", "[2]", ""); err != nil || resp.Error != "counter.puff:2:22: fail: started" {
+		t.Errorf("try = %+v %v", resp, err)
+	}
+
+	if resp, err := c.Test("counter.puff", `(service counter (test "x" (nope)))`, ""); err != nil || resp.Error != "counter.puff:1:29: unknown name nope" {
+		t.Errorf("a broken file = %+v %v", resp, err)
+	}
+	agent := dial(t, dir)
+	agent.Agent = true
+	if resp, err := agent.Test("counter.puff", src, ""); err != nil || resp.Error != "an agent's connection can't run tests" {
+		t.Errorf("an agent's test = %+v %v", resp, err)
+	}
+}
