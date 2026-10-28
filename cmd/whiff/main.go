@@ -29,6 +29,9 @@ const usage = `usage:
   whiff inbox [address]           list the messages waiting for a reply: yours, :me's, by default
   whiff reply id value            answer a message waiting for a reply
   whiff wait id                   print the answer to a pending message or job, waiting for it
+  whiff pending                   list agents' messages that wait for your review
+  whiff accept id                 deliver a message that waits for review, and print its value
+  whiff reject id reason          answer a message that waits for review with (err {:kind :rejected})
   whiff eval code                 evaluate puff code in the daemon and print its value
   whiff repl                      evaluate forms as they're typed, in the daemon, keeping what they define
   whiff history                   print every message, newest first
@@ -68,8 +71,12 @@ func run(args []string, dir, services string, stdout, stderr io.Writer) int {
 		return try(dir, args[1], args[2], args[3:], stdout, stderr)
 	case len(args) == 3 && args[0] == "pub":
 		return message(dir, args[0], args[1], args[2:], stdout, stderr)
-	case len(args) == 3 && args[0] == "reply", len(args) == 2 && args[0] == "wait":
+	case len(args) == 3 && args[0] == "reply", len(args) == 2 && args[0] == "wait",
+		len(args) == 2 && args[0] == "accept", len(args) == 3 && args[0] == "reject":
 		return message(dir, args[0], "", args[1:], stdout, stderr)
+	case len(args) == 1 && args[0] == "pending":
+		pending := func(c *rpc.Client) (string, error) { return c.Inbox("review") }
+		return text(dir, pending, stdout, stderr)
 	case len(args) <= 2 && len(args) >= 1 && args[0] == "inbox":
 		addr := "me"
 		if len(args) == 2 {
@@ -118,13 +125,17 @@ func connect(dir string, stderr io.Writer) *rpc.Client {
 	return c
 }
 
-// message calls, sends, publishes, replies or waits (op). A call or wait
-// prints the value of (ok v), a string as it is; (err e) prints e and exits
-// 1. The others print nothing.
+// message calls, sends, publishes, replies, waits, accepts or rejects (op).
+// A call, wait or accept prints the value of (ok v), a string as it is; (err
+// e) prints e and exits 1. The others print nothing. A reject's reason is
+// a string, whatever it reads as.
 func message(dir, op, target string, args []string, stdout, stderr io.Writer) int {
 	vals := make([]puff.Value, len(args))
 	for i, a := range args {
 		vals[i] = shellArg(a)
+	}
+	if op == "reject" {
+		vals[1] = puff.String(args[1])
 	}
 	if op == "reply" {
 		if r, ok := vals[1].(puff.Tag); !ok || r.Len() != 1 || r.Name() != "ok" && r.Name() != "err" {
@@ -184,8 +195,8 @@ func try(dir, file, fn string, args []string, stdout, stderr io.Writer) int {
 	return result("call", resp, stdout, stderr)
 }
 
-// result prints resp's Result for op: the value of (ok v) for a call or a
-// wait, a string as it is; (err e) prints e and exits 1, except a pending
+// result prints resp's Result for op: the value of (ok v) for a call, a
+// wait or an accept, a string as it is; (err e) prints e and exits 1, except a pending
 // call, which prints how to wait for its answer.
 func result(op string, resp rpc.Response, stdout, stderr io.Writer) int {
 	v, err := puff.ReadValue(resp.Value)
@@ -203,7 +214,7 @@ func result(op string, resp rpc.Response, stdout, stderr io.Writer) int {
 	case r.Name() == "err":
 		fmt.Fprintf(stderr, "whiff: %s\n", puff.Print(r.At(0)))
 		return 1
-	case op == "call" || op == "wait":
+	case op == "call" || op == "wait" || op == "accept":
 		if s, ok := r.At(0).(puff.String); ok {
 			fmt.Fprintln(stdout, string(s))
 		} else {

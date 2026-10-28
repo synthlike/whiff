@@ -33,6 +33,9 @@ type message struct {
 	// user is whether the chain m belongs to began with the user; one
 	// without a clear origin is the agent's.
 	user bool
+	// reviewed is whether you accepted m, or a message earlier in its
+	// chain, at the review gate, which lets it through.
+	reviewed bool
 	// reply gets the printed Result, nil for a send. It has room for it, so
 	// the service never waits on a caller that has gone.
 	reply chan string
@@ -73,6 +76,9 @@ type caller struct {
 	addr  string
 	chain []string // addresses waiting in the current chain, addr last
 	user  bool     // whether the current chain began with the user
+	// reviewed is whether you accepted a message of the current chain at
+	// the review gate.
+	reviewed bool
 	// stop is closed when the service version acting stops; nil for a
 	// client.
 	stop <-chan struct{}
@@ -139,13 +145,16 @@ func (d *daemon) deliver(addr string, m message) puff.Value {
 	return res
 }
 
-// put is deliver on the route goroutine. A message to an ask function
-// goes to the inbox and is answered (err {:kind :pending :id n}) at once.
+// put is deliver on the route goroutine. A message to an ask function,
+// or one the review gate holds, goes to an inbox and is answered (err
+// {:kind :pending :id n}) at once.
 func (d *daemon) put(st *state, addr string, m message) puff.Value {
 	var res puff.Value
 	switch s := st.addrs[addr]; {
 	case s == nil:
 		res = puff.Errorf("no-address", "no address :%s", addr)
+	case d.gated(st, s, m):
+		res = d.hold(st, addr, m)
 	case m.topic == "" && s.fns[m.fn].ask:
 		res = d.ask(st, s, m)
 	default:
@@ -164,33 +173,36 @@ func (d *daemon) put(st *state, addr string, m message) puff.Value {
 // it, and sends it to every client that is. A full mailbox is recorded in
 // history; the publisher doesn't wait.
 func (d *daemon) publish(m message) {
+	d.do(func(st *state) { st.publish(m) })
+}
+
+// publish is the daemon's publish on the route goroutine.
+func (st *state) publish(m message) {
 	var e *rpc.Event
-	d.do(func(st *state) {
-		for w := range st.subs {
-			if w.topics != nil && !w.topics[m.topic] {
-				continue
-			}
-			if e == nil {
-				v, _ := puff.ReadValue(m.args)
-				e = &rpc.Event{At: time.Now(), Topic: m.topic, Value: puff.Print(v.(puff.Vector).At(0)), From: m.from, Origin: string(origin(m.user))}
-			}
-			select {
-			case w.ch <- *e:
-			default:
-			}
+	for w := range st.subs {
+		if w.topics != nil && !w.topics[m.topic] {
+			continue
 		}
-		for addr, s := range st.addrs {
-			if _, ok := s.subs[m.topic]; !ok {
-				continue
-			}
-			select {
-			case s.mailbox <- m:
-			default:
-				res := puff.Errorf("full", ":%s's mailbox is full", addr)
-				st.record(entry{at: time.Now(), kind: m.kind(), user: m.user, from: m.from, to: m.to(addr), args: m.args, reply: puff.Print(res)})
-			}
+		if e == nil {
+			v, _ := puff.ReadValue(m.args)
+			e = &rpc.Event{At: time.Now(), Topic: m.topic, Value: puff.Print(v.(puff.Vector).At(0)), From: m.from, Origin: string(origin(m.user))}
 		}
-	})
+		select {
+		case w.ch <- *e:
+		default:
+		}
+	}
+	for addr, s := range st.addrs {
+		if _, ok := s.subs[m.topic]; !ok {
+			continue
+		}
+		select {
+		case s.mailbox <- m:
+		default:
+			res := puff.Errorf("full", ":%s's mailbox is full", addr)
+			st.record(entry{at: time.Now(), kind: m.kind(), user: m.user, from: m.from, to: m.to(addr), args: m.args, reply: puff.Print(res)})
+		}
+	}
 }
 
 // builtins are whiff's functions on top of puff's base table, acting for
@@ -406,7 +418,7 @@ func (cur *caller) message(dir string, args []puff.Value) (message, string, erro
 	if err != nil {
 		return message{}, "", err
 	}
-	return message{from: cur.addr, fn: fn, args: msg, dir: dir, user: cur.user}, addr, nil
+	return message{from: cur.addr, fn: fn, args: msg, dir: dir, user: cur.user, reviewed: cur.reviewed}, addr, nil
 }
 
 // readOnly is an error if ctx runs under a :read mark and addr's fn is

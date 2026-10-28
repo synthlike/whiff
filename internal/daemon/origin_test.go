@@ -84,8 +84,17 @@ func TestOrigin(t *testing.T) {
 		t.Fatal(err)
 	}
 	inHistory(`done  agent  client -> :relay/whiff/done ` + id + ` (ok 2)  (ok (ok 2))`)
+	// todo/answer replies, which is :write: the gate holds the agent's call
+	// until you accept it.
+	reviewer := dial(t, dir)
+	if _, err := reviewer.Sub("review/pending"); err != nil {
+		t.Fatal(err)
+	}
 	id = run(false, `(match (call :relay/ask) [(err {:kind :pending :id id}) id])`)
-	run(true, `(call :todo/answer `+id+`)`)
+	held := run(true, `(match (call :todo/answer `+id+`) [(err {:kind :pending :id id}) id])`)
+	if _, err := user.Message("accept", "", "["+held+"]", ""); err != nil {
+		t.Fatal(err)
+	}
 	inHistory(`done  agent  :todo -> :relay/whiff/done ` + id + ` (ok :from-todo)  (ok (ok :from-todo))`)
 	// The user's answer to the user's message stays the user's.
 	id = run(false, `(match (call :relay/ask) [(err {:kind :pending :id id}) id])`)

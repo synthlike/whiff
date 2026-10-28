@@ -18,17 +18,17 @@ import (
 
 // Version is the protocol version. Bump it when a message changes; hello and
 // stop must stay readable by every version, so an old daemon can be stopped.
-const Version = 12
+const Version = 13
 
 // Request is a client's message to the daemon. The daemon answers each with
 // a Response, in order, except an answer or a cancel, which have none.
 type Request struct {
-	Op      string `json:"op"`                // "hello", "eval", "repl", "cancel", "call", "send", "pub", "sub", "try", "inbox", "reply", "wait", "claim", "answer", "history", "trace", "ls" or "stop"
+	Op      string `json:"op"`                // "hello", "eval", "repl", "cancel", "call", "send", "pub", "sub", "try", "inbox", "reply", "accept", "reject", "wait", "claim", "answer", "history", "trace", "ls" or "stop"
 	Version int    `json:"version,omitempty"` // hello: the client's protocol
 	Src     string `json:"src,omitempty"`     // eval, repl: puff code; claim: the interface, (on ...) and (ask ...) forms without bodies; try: the service file
 	File    string `json:"file,omitempty"`    // try: the service file's name, for its errors
 	Target  string `json:"target,omitempty"`  // call, send: address/fn; pub: the topic; inbox, claim: the address; try: the fn
-	Args    string `json:"args,omitempty"`    // call, send, pub, try: a printed puff vector, of one value for pub; reply: [id result]; wait: [id]; answer: the printed Result; sub: the topics, a printed vector of keywords, [] for every topic
+	Args    string `json:"args,omitempty"`    // call, send, pub, try: a printed puff vector, of one value for pub; reply: [id result]; wait, accept: [id]; reject: [id reason]; answer: the printed Result; sub: the topics, a printed vector of keywords, [] for every topic
 	Dir     string `json:"dir,omitempty"`     // eval, call, send, pub, try: the client's working directory
 	ID      int64  `json:"id,omitempty"`      // answer: the Delivery's ID
 	// Agent says the client acts for an agent: its messages' origin is
@@ -263,8 +263,10 @@ func (c *Client) Cancel() error { return c.conn.Send(Request{Op: "cancel"}) }
 
 // Message calls or sends (op) target, address/fn, with args, a printed puff
 // vector, from dir; publishes args's one value to the topic target (op
-// "pub"); or answers a message in an inbox, with args [id result] (op
-// "reply"). The Response's Value is the printed Result.
+// "pub"); answers a message in an inbox, with args [id result] (op
+// "reply"); or accepts or rejects a message that waits for review, with
+// args [id] (op "accept") or [id reason] (op "reject"). The Response's
+// Value is the printed Result.
 func (c *Client) Message(op, target, args, dir string) (Response, error) {
 	var resp Response
 	err := c.roundTrip(Request{Op: op, Target: target, Args: args, Dir: dir}, &resp)

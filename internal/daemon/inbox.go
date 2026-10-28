@@ -23,16 +23,22 @@ type ticket struct {
 	from string // the sender's address; "" for a client
 	dir  string // the sender's working directory, for the answer
 	user bool   // whether the message's chain began with the user
+	// reviewed is whether you gave the answer, so what it leads to passes
+	// the review gate, as for a message you accepted.
+	reviewed bool
 }
 
 // asked is a message to an ask function, waiting in its service's inbox
-// for a reply.
+// for a reply; or, in :review's, a message the review gate holds.
 type asked struct {
 	ticket
 	addr string // the service whose inbox it is in
 	fn   string
 	args puff.Vector
 	at   time.Time // when it arrived
+	// held is the message :review holds, for to's fn, as it was sent.
+	held *message
+	to   string
 }
 
 // pending is the (err {:kind :pending :id id}) a sender gets for a message
@@ -121,7 +127,7 @@ func (d *daemon) answer(st *state, t ticket, by string, result puff.Value) {
 		w <- result
 	}
 	delete(st.waiters, t.id)
-	m := message{from: by, fn: "whiff/done", args: puff.Print(puff.NewVector(puff.Int(t.id), result)), dir: t.dir, user: t.user}
+	m := message{from: by, fn: "whiff/done", args: puff.Print(puff.NewVector(puff.Int(t.id), result)), dir: t.dir, user: t.user, reviewed: t.reviewed}
 	if s := st.addrs[t.from]; s != nil {
 		if h, ok := s.fns[m.fn]; ok && !h.ask {
 			d.put(st, t.from, m)
@@ -189,7 +195,8 @@ func pendingID(r puff.Value) (int64, bool) {
 // reply answers the message id with result for by, a service that can
 // answer only its own inbox, or a client ("") that can answer any. user is
 // the replier's origin: the answer is :user's only if both the message and
-// the reply are, so an agent's answer never runs as the user's.
+// the reply are, so an agent's answer never runs as the user's. Yours
+// passes the review gate all the same: you gave it.
 func (d *daemon) reply(by string, user bool, idv, result puff.Value) (puff.Value, error) {
 	id, ok := idv.(puff.Int)
 	if !ok {
@@ -203,6 +210,10 @@ func (d *daemon) reply(by string, user bool, idv, result puff.Value) (puff.Value
 	}
 	res := puff.Done
 	d.do(func(st *state) {
+		if slices.ContainsFunc(st.inbox("review"), func(a *asked) bool { return a.id == int64(id) }) {
+			res = puff.Errorf("bad-call", "message %d waits for review: accept or reject it", id)
+			return
+		}
 		a := st.take(by, int64(id))
 		switch {
 		case a == nil && by == "":
@@ -211,7 +222,7 @@ func (d *daemon) reply(by string, user bool, idv, result puff.Value) (puff.Value
 			res = puff.Errorf("no-id", "no message %d waits in :%s's inbox", id, by)
 		default:
 			t := a.ticket
-			t.user = t.user && user
+			t.user, t.reviewed = t.user && user, user
 			d.answer(st, t, by, result)
 		}
 	})
@@ -220,7 +231,8 @@ func (d *daemon) reply(by string, user bool, idv, result puff.Value) (puff.Value
 
 // value is a as (inbox) shows it: {:id 7 :fn :suggest :args ["write docs"]
 // :from :agent/1 :origin :agent :cwd "..." :at 2026-10-27T10:00:00Z},
-// without :from for a client.
+// without :from for a client, and with :to, the address it is for, for a
+// message the review gate holds.
 func (a *asked) value() puff.Value {
 	es := []puff.Entry{
 		{Key: puff.Keyword("id"), Val: puff.Int(a.id)},
@@ -232,6 +244,9 @@ func (a *asked) value() puff.Value {
 	}
 	if a.from != "" {
 		es = append(es, puff.Entry{Key: puff.Keyword("from"), Val: puff.Keyword(a.from)})
+	}
+	if a.held != nil {
+		es = append(es, puff.Entry{Key: puff.Keyword("to"), Val: puff.Keyword(a.to)})
 	}
 	m, _ := puff.NewMap(es...)
 	return m
@@ -249,6 +264,9 @@ func (d *daemon) inboxText(addr string) string {
 				from = ":" + a.from
 			}
 			target := ":" + addr + "/" + a.fn
+			if a.held != nil {
+				target = ":" + a.to + "/" + a.fn
+			}
 			if args := puff.Print(a.args); args != "[]" {
 				target += " " + args[1:len(args)-1]
 			}
