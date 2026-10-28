@@ -239,6 +239,15 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 				}
 				return <-r.done, nil
 			}},
+		{Name: "state", Args: "service", Mark: puff.MarkRead,
+			Doc: "(ok state): service's state as it last committed it; (err {:kind :stateless}) for a service without :state, (err {:kind :no-address}) if there is none.",
+			Fn: func(_ *puff.Call, args []puff.Value) (puff.Value, error) {
+				addr, ok := args[0].(puff.Keyword)
+				if !ok {
+					return nil, fmt.Errorf("want a service like :gh, got %s", puff.Print(args[0]))
+				}
+				return d.stateOf(string(addr))
+			}},
 		{Name: "inbox", Args: "[fn]", Mark: puff.MarkRead,
 			Doc: "This service's messages waiting for a reply, oldest first, each {:id :fn :args :from :cwd :at}; only fn's, a keyword, if given.",
 			Fn: func(_ *puff.Call, args []puff.Value) (puff.Value, error) {

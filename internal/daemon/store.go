@@ -1,11 +1,14 @@
 package daemon
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
 
 	"go.etcd.io/bbolt"
+
+	"github.com/synthlike/whiff/internal/puff"
 )
 
 // storeTimeout is how long openStore waits for a daemon that is stopping
@@ -47,6 +50,33 @@ func (d *daemon) storedState(name string) (p string, found bool, err error) {
 		return nil
 	})
 	return p, found, err
+}
+
+// stateOf is (ok state) for the service name, as it last committed it, read
+// from whiff.db, not from the service, which may be handling a message.
+func (d *daemon) stateOf(name string) (puff.Value, error) {
+	var s *service
+	d.do(func(st *state) { s = st.addrs[name] })
+	switch {
+	case s == nil || s.client:
+		return puff.Errorf("no-address", "no service :%s", name), nil
+	case !s.stateful:
+		return puff.Errorf("stateless", ":%s has no state", name), nil
+	case !s.keep:
+		return puff.Errorf("stateless", ":%s is a trial, whose state isn't kept", name), nil
+	}
+	p, found, err := d.storedState(name)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return puff.Errorf("stateless", ":%s has no state stored", name), nil
+	}
+	v, err := puff.ReadValue(p)
+	if err != nil {
+		return nil, fmt.Errorf(":%s's stored state: %v", name, err)
+	}
+	return puff.Ok(v), nil
 }
 
 // storeState commits p as name's state.

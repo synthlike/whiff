@@ -37,6 +37,7 @@ const usage = `usage:
   whiff history                   print every message, newest first
   whiff history -f                print the last 10, oldest first, then each new one until stopped
   whiff ls                        list every address's functions and their marks, then the :read overrides
+  whiff state service             print a service's state, as it last committed it
   whiff reset service             forget a service's stored state, so it starts from its :state again
   whiff stop                      stop the daemon
   whiff daemon                    run the daemon in the foreground
@@ -94,8 +95,8 @@ func run(args []string, dir, services string, stdout, stderr io.Writer) int {
 		return history(dir, true, stdout, stderr)
 	case len(args) == 1 && args[0] == "ls":
 		return text(dir, (*rpc.Client).Ls, stdout, stderr)
-	case len(args) == 2 && args[0] == "reset":
-		return resetService(dir, args[1], stdout, stderr)
+	case len(args) == 2 && (args[0] == "reset" || args[0] == "state"):
+		return serviceOp(dir, args[0], args[1], stdout, stderr)
 	case len(args) == 1 && args[0] == "stop":
 		return stop(dir, stderr)
 	case len(args) == 1 && args[0] == "daemon":
@@ -214,7 +215,7 @@ func result(op string, resp rpc.Response, stdout, stderr io.Writer) int {
 	case r.Name() == "err":
 		fmt.Fprintf(stderr, "whiff: %s\n", puff.Print(r.At(0)))
 		return 1
-	case op == "call" || op == "wait" || op == "accept":
+	case op == "call" || op == "wait" || op == "accept" || op == "state":
 		if s, ok := r.At(0).(puff.String); ok {
 			fmt.Fprintln(stdout, string(s))
 		} else {
@@ -224,15 +225,16 @@ func result(op string, resp rpc.Response, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// resetService has the daemon forget service's stored state and reload it.
-// It prints nothing, or (err e)'s e and exits 1.
-func resetService(dir, service string, stdout, stderr io.Writer) int {
+// serviceOp evaluates (op :service), reset or state: reset has the daemon
+// forget service's stored state and reload it, and prints nothing; state
+// prints its state. (err e) prints e and exits 1.
+func serviceOp(dir, op, service string, stdout, stderr io.Writer) int {
 	c := connect(dir, stderr)
 	if c == nil {
 		return 1
 	}
 	defer c.Close()
-	resp, err := c.Eval("(reset "+puff.Print(puff.Keyword(strings.TrimPrefix(service, ":")))+")", "")
+	resp, err := c.Eval("("+op+" "+puff.Print(puff.Keyword(strings.TrimPrefix(service, ":")))+")", "")
 	switch {
 	case err != nil:
 		fmt.Fprintf(stderr, "whiff: %v\n", err)
@@ -241,7 +243,7 @@ func resetService(dir, service string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, resp.Error)
 		return 1
 	}
-	return result("reset", resp, stdout, stderr)
+	return result(op, resp, stdout, stderr)
 }
 
 // sub prints each value published to topics, every topic if there are

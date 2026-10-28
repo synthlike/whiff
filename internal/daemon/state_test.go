@@ -129,3 +129,39 @@ func TestState(t *testing.T) {
 	becomes(get, `(ok 101)`)
 	becomes(`(call :started/get)`, `(ok [:started :again :again])`)
 }
+
+func TestStateOf(t *testing.T) {
+	dir := tempDir(t)
+	writeServices(t, dir, map[string]string{
+		"counter": `(srv counter :state {:n 0}
+  (on (add s k) :update "Adds k." (ok [:done {:n (+ (map/get-or s :n 0) k)}])))`,
+		"plain": `(srv plain (on (f) "Answers." (ok 1)))`,
+	})
+	start(t, dir)
+	c := dial(t, dir)
+	hiss := dial(t, dir)
+	if _, err := hiss.Claim(":hiss", `(on (toast text) "Shows text.")`); err != nil {
+		t.Fatal(err)
+	}
+	agent := dial(t, dir)
+	agent.Agent = true
+
+	tests := []struct{ src, want string }{
+		{`(state :counter)`, `(ok {:n 0})`},
+		{`(call :counter/add 2)`, `(ok :done)`},
+		{`(state :counter)`, `(ok {:n 2})`},
+		{`(match (state :plain) [(err {:kind k}) k])`, `:stateless`},
+		{`(match (state :hiss) [(err {:kind k}) k])`, `:no-address`},
+		{`(match (state :nobody) [(err {:kind k}) k])`, `:no-address`},
+	}
+	for _, tt := range tests {
+		resp, err := c.Eval(tt.src, "")
+		if err != nil || resp.Value != tt.want {
+			t.Errorf("%s = %+v %v, want %s", tt.src, resp, err, tt.want)
+		}
+	}
+	// It only reads: an agent's runs without review.
+	if resp, err := agent.Eval(`(state :counter)`, ""); err != nil || resp.Value != `(ok {:n 2})` {
+		t.Errorf("agent's state = %+v %v", resp, err)
+	}
+}
