@@ -35,7 +35,8 @@ v0.3. `go install ./cmd/...` installs two binaries:
 
 - `puff` runs puff without a daemon: `puff file.puff args...` runs a file
   (calling its `main` if it defines one), `puff -e '(...)'` evaluates an
-  expression, `puff -t file.puff` runs its tests and `puff` alone starts a
+  expression, `puff -t file.puff` runs its tests, `puff -f file.puff`
+  formats it (`-l` names the files that aren't) and `puff` alone starts a
   REPL. Try `go run ./cmd/puff
   examples/hello.puff ann`.
 - `whiff` is the daemon and its CLI. The first command starts the daemon,

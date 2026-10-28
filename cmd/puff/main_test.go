@@ -151,6 +151,39 @@ func TestRun(t *testing.T) {
 	}
 }
 
+func TestFormat(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, src string) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	messy := write("messy.puff", "(def (f x)\n(g x)\n)\n")
+	tidy := write("tidy.puff", "(def (f x)\n  (g x))\n")
+	broken := write("broken.puff", "(def x")
+	puff := func(args ...string) (int, string, string) {
+		var out, errOut strings.Builder
+		code := run(args, strings.NewReader(""), &out, &errOut, false, nil)
+		return code, out.String(), errOut.String()
+	}
+
+	// -l names what -f would change, and changes nothing.
+	if code, out, errOut := puff("-l", messy, tidy, broken); code != 1 || out != messy+"\n" || errOut != broken+":1:1: no closing ')'\n" {
+		t.Errorf("-l = %d %q %q", code, out, errOut)
+	}
+	if code, out, errOut := puff("-f", messy, tidy); code != 0 || out != messy+"\n" || errOut != "" {
+		t.Errorf("-f = %d %q %q", code, out, errOut)
+	}
+	if b, _ := os.ReadFile(messy); string(b) != "(def (f x)\n  (g x))\n" {
+		t.Errorf("messy.puff after -f = %q", b)
+	}
+	if code, out, _ := puff("-l", messy, tidy); code != 0 || out != "" {
+		t.Errorf("-l after -f = %d %q", code, out)
+	}
+}
+
 func TestInterrupt(t *testing.T) {
 	interrupts := make(chan os.Signal, 1)
 	interrupts <- os.Interrupt

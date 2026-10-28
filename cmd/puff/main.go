@@ -19,6 +19,8 @@ const usage = `usage:
   puff file.puff args...   evaluate a file and call its main with args
   puff -e code             evaluate code and print its value
   puff -t file.puff...     run the files' tests
+  puff -f file.puff...     format the files in place, naming each it changes
+  puff -l file.puff...     name the files that aren't formatted
   puff                     evaluate forms from stdin as they're typed
 `
 
@@ -48,6 +50,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, interactive b
 		ctx, cancel := cancelOn(interrupts)
 		defer cancel()
 		return test(ctx, args[1:], stdout, stderr)
+	case (args[0] == "-f" || args[0] == "-l") && len(args) >= 2:
+		return format(args[1:], args[0] == "-f", stdout, stderr)
 	case strings.HasPrefix(args[0], "-"):
 		fmt.Fprint(stderr, usage)
 		return 2
@@ -152,6 +156,40 @@ func test(ctx context.Context, files []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// format formats files, puff.Format's way, and names each that wasn't
+// formatted; write rewrites them, else it is 1 if any wasn't. A file that
+// doesn't read is an error and left as it is.
+func format(files []string, write bool, stdout, stderr io.Writer) int {
+	code := 0
+	for _, file := range files {
+		src, err := os.ReadFile(file)
+		if err != nil {
+			fmt.Fprintf(stderr, "puff: %v\n", err)
+			code = 1
+			continue
+		}
+		out, err := puff.Format(file, string(src))
+		switch {
+		case err != nil:
+			fmt.Fprintln(stderr, err)
+			code = 1
+			continue
+		case out == string(src):
+			continue
+		case !write:
+			code = 1
+		default:
+			if err := os.WriteFile(file, []byte(out), 0o644); err != nil {
+				fmt.Fprintf(stderr, "puff: %v\n", err)
+				code = 1
+				continue
+			}
+		}
+		fmt.Fprintln(stdout, file)
+	}
+	return code
 }
 
 // report prints a read, check or evaluation error and returns its exit
