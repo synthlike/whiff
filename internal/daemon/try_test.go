@@ -114,4 +114,7 @@ func TestTestOp(t *testing.T) {
 	if resp, err := agent.Test("counter.puff", src, ""); err != nil || resp.Error != "an agent's connection can't run tests" {
 		t.Errorf("an agent's test = %+v %v", resp, err)
 	}
+	if resp, err := agent.Try("counter.puff", src, "add", "[2]", ""); err != nil || resp.Error != "an agent's connection can't try files" {
+		t.Errorf("an agent's try = %+v %v", resp, err)
+	}
 }

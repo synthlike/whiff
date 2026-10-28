@@ -14,8 +14,12 @@ import (
 // try loads req.Src, the service file req.File, at a scratch address,
 // :try/<n>/<name>, calls its function req.Target with req.Args, a printed
 // vector, for from, and unloads it. The Response's Value is the call's
-// Result; a file that doesn't load is its Error, at file:line:col.
+// Result; a file that doesn't load is its Error, at file:line:col. Only
+// your connections try files: loading one runs its defs and :start as you.
 func (d *daemon) try(ctx context.Context, from string, req rpc.Request) rpc.Response {
+	if req.Agent {
+		return rpc.Response{Error: "an agent's connection can't try files"}
+	}
 	name := strings.TrimSuffix(filepath.Base(req.File), ".puff")
 	addr := fmt.Sprintf("try/%d/%s", d.tries.Add(1), name)
 	s, err := d.loadSource(req.File, req.Src, addr, true)
