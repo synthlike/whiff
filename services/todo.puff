@@ -14,10 +14,9 @@
 
   ; continue adds line to the text of the last item.
   (def (continue items line)
-    (match (vector/last items)
-      [(some it)
-       (vector/append (vector/slice items 0 (- (vector/length items) 1))
-         (match it [{:text t} (map/set it :text (string/concat t " " (string/trim line)))]))]))
+    (let [i (- (vector/length items) 1)]
+      (vector/set items i
+        (map/update (unwrap (vector/get items i)) :text (fn (t) (string/concat t " " (string/trim line)))))))
 
   ; step reads the next line into st: {:n :section :items :in-item}.
   (def (step st line)
@@ -69,11 +68,11 @@
     (let [text (try (read))
           lines (string/lines text)]
       (match (vector/find (parse text) (fn (it) (match it [{:line l :done d} (and (= l line) (not d))])))
-        [(none) (err {:kind :no-item :message (string/concat "no open item at line " (value/to-string line))})]
+        [(none) (err {:kind :no-item :message (str "no open item at line " line)})]
         [(some _)
          (let [l (unwrap (vector/get lines (- line 1)))
                i (unwrap (string/index l "[ ]"))
                ticked (string/concat (string/slice l 0 i) "[x]" (string/slice l (+ i 3)))
-               new (vector/concat (vector/slice lines 0 (- line 1)) [ticked] (vector/slice lines line))]
+               new (vector/set lines (- line 1) ticked)]
            (do (try (file/write-atomic file (string/concat (string/join new "\n") "\n")))
                (ok :done)))]))))

@@ -21,8 +21,7 @@
 
   (def (number s) (unwrap (int/from-string (string/slice s 1))))
 
-  (def (with-file st f)
-    (match st [{:files fs} (map/set st :files (vector/append fs f))]))
+  (def (with-file st f) (map/update st :files (fn (fs) (vector/append fs f))))
 
   ; add adds one line of git status --porcelain=v2 --branch to st.
   (def (add st line)

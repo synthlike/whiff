@@ -50,7 +50,13 @@ func TestFileLib(t *testing.T) {
 		{fmt.Sprintf(`(file/read-text %q {})`, a), `(ok "new")`},
 		{fmt.Sprintf(`[(file/exists? %q) (file/exists? %q)]`, a, filepath.Join(dir, "b.txt")), "[#t #f]"},
 		{fmt.Sprintf(`(file/list %q)`, dir), `(ok ["a.txt"])`},
+		{fmt.Sprintf(`[(file/append %q "1\n") (file/append %[1]q "2\n") (file/read-text %[1]q)]`, filepath.Join(dir, "log")),
+			`[(ok :done) (ok :done) (ok "1\n2\n")]`},
+		{fmt.Sprintf(`[(file/mkdir %q) (file/mkdir %[1]q) (file/exists? %[1]q)]`, filepath.Join(dir, "x", "y")), "[(ok :done) (ok :done) #t]"},
 	})
+	if got := load(NewEnv(), fmt.Sprintf(`(file/mkdir %q)`, filepath.Join(a, "sub"))); !strings.HasPrefix(got, "(err {:kind :io") {
+		t.Errorf("a directory under a file: %s", got)
+	}
 	if got := load(NewEnv(), fmt.Sprintf(`(file/read-text %q)`, filepath.Join(dir, "none.txt"))); !strings.HasPrefix(got, "(err {:kind :not-found") {
 		t.Errorf("reading a missing file: %s", got)
 	}
@@ -128,6 +134,7 @@ func TestTimeLib(t *testing.T) {
 func TestEffectMarks(t *testing.T) {
 	for name, want := range map[string]Mark{
 		"file/write": MarkWrite, "file/write-atomic": MarkWrite, "proc/run": MarkWrite, "proc/output": MarkWrite,
+		"file/append": MarkWrite, "file/mkdir": MarkWrite,
 		"file/read-text": MarkRead, "io/println": MarkRead, "time/now": MarkRead,
 	} {
 		if got := markOf(t, NewEnv(), name); got != want {

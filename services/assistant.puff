@@ -49,10 +49,10 @@
   (def (turn text)
     (if (busy?)
       (err {:kind :busy :message (string/concat name " is still answering your last message; send it again in a moment")})
-      (do (try (proc/output ["mkdir" "-p" home]))
+      (do (try (file/mkdir home))
           (match (call :jobs/run (claude (try (session))) {:stdin text :dir home :as :text :timeout 10m :origin :agent})
             [(err {:kind :pending :id id})
-             (do (try (file/write turns (string/concat (string/join (vector/append (read-turns) (int/to-string id)) "\n") "\n")))
+             (do (try (file/append turns (str id "\n")))
                  (ok :thinking))]
             [e e]))))
 

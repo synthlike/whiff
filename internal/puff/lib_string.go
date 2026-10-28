@@ -63,6 +63,13 @@ var stringFns = []*Builtin{
 		}
 		return String(strings.Join(ss, "")), nil
 	}},
+	{Name: "str", Args: "v ...", Doc: "The values joined together, strings as they are and the rest printed: (str \"line \" 12) is \"line 12\".", Fn: func(_ *Call, args []Value) (Value, error) {
+		var b strings.Builder
+		for _, v := range args {
+			b.WriteString(display(v))
+		}
+		return String(b.String()), nil
+	}},
 	{Name: "string/split", Args: "s sep", Doc: "The parts of s around each sep.", Fn: str2(func(s, sep string) Value {
 		return strVec(strings.Split(s, sep))
 	})},
@@ -242,4 +249,13 @@ var valueFns = []*Builtin{
 	{Name: "value/type", Args: "v", Doc: "v's type: :bool, :int, :float, :string, :keyword, :duration, :vector, :map, :tag or :function.", Fn: func(_ *Call, args []Value) (Value, error) {
 		return Keyword(typeName(args[0])), nil
 	}},
+}
+
+// display is v as str and io/println show it: a string as it is, anything
+// else printed.
+func display(v Value) string {
+	if s, ok := v.(String); ok {
+		return string(s)
+	}
+	return Print(v)
 }

@@ -40,6 +40,7 @@ In `puff` and in whiff alike. Names without a namespace are under core.
 - `(+ a b ...)`: The sum of ints, floats or durations, or a time plus durations.
 - `(- a [b])`: a minus b, or minus a. A time minus a duration is a time, minus a time a duration.
 - `(* a b ...)`: The product of ints or floats.
+- `(str v ...)`: The values joined together, strings as they are and the rest printed: (str "line " 12) is "line 12".
 
 ### string
 
@@ -91,6 +92,7 @@ In `puff` and in whiff alike. Names without a namespace are under core.
 - `(vector/last v)`: (some x): the last item; (none) if v is empty.
 - `(vector/append v x ...)`: v with the xs added at the end.
 - `(vector/concat v ...)`: The items of every v, in order.
+- `(vector/set v i x)`: v with the item at i, from 0, replaced by x.
 - `(vector/slice v start [end])`: The items from start up to end, or to the end of v.
 - `(vector/reverse v)`: v's items in reverse order.
 - `(vector/contains? v x)`: Whether an item of v equals x.
@@ -108,6 +110,7 @@ In `puff` and in whiff alike. Names without a namespace are under core.
 - `(map/get-or m key default)`: The value under key, or default.
 - `(map/has? m key)`: Whether m has key.
 - `(map/set m key v)`: m with key set to v.
+- `(map/update m key f)`: m with key's value v replaced by (f v); a key m doesn't have faults.
 - `(map/delete m key)`: m without key.
 - `(map/merge m ...)`: The maps' entries together; a later map's value wins.
 - `(map/keys m)`: m's keys, in print order.
@@ -157,6 +160,8 @@ In `puff` and in whiff alike. Names without a namespace are under core.
 - `(file/read-text path [opts])`: (ok s): the file's contents.
 - `(file/write path s)` `:write`: Write s to the file, replacing what it held.
 - `(file/write-atomic path s)` `:write`: Write s to the file so a reader sees either the old contents or all of s.
+- `(file/append path s)` `:write`: Add s to the end of the file, creating it if there isn't one.
+- `(file/mkdir path)` `:write`: Make the directory at path, and any parents it needs; :done if it is already there.
 - `(file/exists? path)`: Whether there is a file or directory at path.
 - `(file/list dir)`: (ok names): the names in dir, sorted.
 

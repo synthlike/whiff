@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -60,6 +61,9 @@ func TestGitService(t *testing.T) {
 		}
 		return resp.Value
 	}
+	// trace is where branch's try passes git's error up, as file:line:col.
+	before, _, _ := strings.Cut(string(src), `(try (git ["branch"`)
+	trace := fmt.Sprintf("git.puff:%d:%d", strings.Count(before, "\n")+1, len(before)-strings.LastIndex(before, "\n"))
 	tests := []struct{ fn, dir, want string }{
 		{"branch", repo, `(ok "main")`},
 		{"status", repo, `(ok {:ahead 0 :behind 0 :branch (some "main") :files [` +
@@ -67,7 +71,7 @@ func TestGitService(t *testing.T) {
 			`{:index :renamed :path "new name.txt" :work :none} ` +
 			`{:index :added :path "new.txt" :work :none} ` +
 			`{:index :untracked :path "loose file.txt" :work :untracked}] :upstream (none)})`},
-		{"branch", dir, `(err {:exit 128 :kind :exit :message "git exited 128: fatal: not a git repository (or any of the parent directories): .git" :stderr "fatal: not a git repository (or any of the parent directories): .git\n" :stdout "" :trace ["git.puff:49:25"]})`},
+		{"branch", dir, `(err {:exit 128 :kind :exit :message "git exited 128: fatal: not a git repository (or any of the parent directories): .git" :stderr "fatal: not a git repository (or any of the parent directories): .git\n" :stdout "" :trace ["` + trace + `"]})`},
 	}
 	for _, tt := range tests {
 		if got := call(tt.fn, tt.dir); got != tt.want {

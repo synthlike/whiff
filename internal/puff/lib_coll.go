@@ -72,6 +72,18 @@ var vectorFns = []*Builtin{
 		}
 		return Vector{items}, nil
 	}},
+	{Name: "vector/set", Args: "v i x", Doc: "v with the item at i, from 0, replaced by x.", Fn: vec1(func(v Vector, args []Value) (Value, error) {
+		i, err := arg[Int](args, 1, "an int")
+		if err != nil {
+			return nil, err
+		}
+		if i < 0 || int(i) >= len(v.items) {
+			return nil, fmt.Errorf("%d is out of range for length %d", i, len(v.items))
+		}
+		items := slices.Clone(v.items)
+		items[i] = args[2]
+		return Vector{items}, nil
+	})},
 	{Name: "vector/slice", Args: "v start [end]", Doc: "The items from start up to end, or to the end of v.", Fn: vec1(func(v Vector, args []Value) (Value, error) {
 		start, end, err := span(args, 1, len(v.items))
 		if err != nil {
@@ -223,6 +235,20 @@ var mapFns = []*Builtin{
 	{Name: "map/set", Args: "m key v", Doc: "m with key set to v.", Fn: map1(func(m Map, args []Value) (Value, error) {
 		return m.With(args[1], args[2])
 	})},
+	{Name: "map/update", Args: "m key f", Doc: "m with key's value v replaced by (f v); a key m doesn't have faults.", Fn: func(c *Call, args []Value) (Value, error) {
+		m, err := arg[Map](args, 0, "a map")
+		if err != nil {
+			return nil, err
+		}
+		v, ok := m.Get(args[1])
+		if !ok {
+			return nil, fmt.Errorf("no key %s", Print(args[1]))
+		}
+		if v, err = c.Apply(args[2], v); err != nil {
+			return nil, err
+		}
+		return m.With(args[1], v)
+	}},
 	{Name: "map/delete", Args: "m key", Doc: "m without key.", Fn: map1(func(m Map, args []Value) (Value, error) {
 		if _, ok := m.Get(args[1]); !ok {
 			return m, nil

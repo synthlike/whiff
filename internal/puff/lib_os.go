@@ -27,11 +27,7 @@ var osFns = []*Builtin{
 	{Name: "io/println", Args: "v ...", Doc: "Print the values separated by spaces, strings as they are, then a newline.", Fn: func(c *Call, args []Value) (Value, error) {
 		parts := make([]string, len(args))
 		for i, v := range args {
-			if s, ok := v.(String); ok {
-				parts[i] = string(s)
-			} else {
-				parts[i] = Print(v)
-			}
+			parts[i] = display(v)
 		}
 		fmt.Fprintln(c.Env.Stdout, strings.Join(parts, " "))
 		return Done, nil
@@ -129,6 +125,30 @@ var fileFns = []*Builtin{
 			return nil, err
 		}
 		if err := writeAtomic(path, []byte(s)); err != nil {
+			return fileErr(err), nil
+		}
+		return Done, nil
+	})},
+	{Name: "file/append", Args: "path s", Mark: MarkWrite, Doc: "Add s to the end of the file, creating it if there isn't one.", Fn: onPath(func(path string, args []Value) (Value, error) {
+		s, err := arg[String](args, 1, "a string")
+		if err != nil {
+			return nil, err
+		}
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			return fileErr(err), nil
+		}
+		_, err = f.WriteString(string(s))
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+		if err != nil {
+			return fileErr(err), nil
+		}
+		return Done, nil
+	})},
+	{Name: "file/mkdir", Args: "path", Mark: MarkWrite, Doc: "Make the directory at path, and any parents it needs; :done if it is already there.", Fn: onPath(func(path string, _ []Value) (Value, error) {
+		if err := os.MkdirAll(path, 0o755); err != nil {
 			return fileErr(err), nil
 		}
 		return Done, nil
