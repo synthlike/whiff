@@ -97,10 +97,12 @@ only ever handling one message.
 - **Every function has a mark,** `:read` or `:write`. A builtin's is in its
   table (`file/write` is `:write`); a handler's is inferred from what it
   reaches: a `:write` builtin, a def that does, or the function a literal
-  target names. Computed targets are `:write`. A handler can claim `:read`
-  over what it reaches (git status runs `proc/run`, which is `:write`): that
-  claim is an override, listed by `whiff ls`, and the only place a mark is
-  trusted rather than inferred. At run time, a `:read` handler that reaches a
+  target names. Computed targets are `:write`, and so is an `:update`
+  handler or subscriber: the state it changes is yours. A handler can claim
+  `:read` over what it reaches (git status runs `proc/run`, which is
+  `:write`; gh's poll only caches): that claim is an override, listed by
+  `whiff ls`, and the only place a mark is trusted rather than inferred. A
+  `:write` claim only raises a mark, so it needs no trust. At run time, a `:read` handler that reaches a
   `:write` without an override faults, whoever called it: the backstop for
   what inference missed.
 
@@ -220,6 +222,8 @@ the stream.
 - History, inboxes, `:review`'s queue and timers are in memory: a restart
   loses them, and a job running when whiff stops never answers. Service
   state is stored. (v0.5 stores the rest.)
+- `whiff wait` finds an answer among the last 1000, like history: a busy
+  daemon can push one out before a client that went away asks for it.
 - A call waits 5s; anything longer is a job or an ask.
 - No calendar maths in puff: `1d` is 24 hours.
 - One machine. Peers over SSH are an idea, not a plan yet.

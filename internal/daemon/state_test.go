@@ -65,8 +65,9 @@ func TestState(t *testing.T) {
 		// Callers don't pass the state.
 		{kind(`(call :counter/add 1 2)`), `:bad-call`},
 		{kind(`(call :counter/reset-me)`), `:bad-call`},
+		// An :update is :write: the state it changes is yours.
 		{`(match (describe :counter) [(ok fs) (vector/filter fs (fn (f) (match f [{:fn :add} #t] [_ #f])))])`,
-			`[{:doc "Adds k." :fn :add :form :on :mark :read :params [:k]}]`},
+			`[{:doc "Adds k." :fn :add :form :on :mark :write :params [:k]}]`},
 		{`(publish :bump 3)`, `(ok :done)`},
 	}
 	for _, s := range steps {

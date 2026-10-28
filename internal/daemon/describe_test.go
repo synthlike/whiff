@@ -28,6 +28,10 @@ var markServices = map[string]string{
   (on (loop-b) "Calls a." (call :loop-a))
   (on (sends) "Sends to a reader." (send :files/peek "x"))
   (on (later) "Sends to a writer, later." (send-after 1s :files/save "x" "y")))`,
+	"count": `(service count :state 0
+  (on (keep n x) :update "Keeps x." (ok [n x]))
+  (on (cache n x) :read :update "Caches x, which only reads." (ok [n x]))
+  (on (get n) "Reads the state." (ok n)))`,
 }
 
 func TestDescribe(t *testing.T) {
@@ -68,6 +72,9 @@ func TestDescribe(t *testing.T) {
 :reader :read
 :sends :read
 :via-helper :write`},
+		{"count", `:cache :read
+:get :read
+:keep :write`},
 	}
 	for _, tt := range tests {
 		if got := marks(tt.addr); got != tt.want {

@@ -15,7 +15,8 @@ import (
 // reaches is: a :write builtin, a handler or def of its service by name, or
 // the function a literal target of call, send or send-after names. A
 // computed target, a target that doesn't exist, and call or send used as a
-// value are :write. A handler marked :write is :write whatever it reaches.
+// value are :write, and so is an :update handler or subscriber: the state
+// it changes is yours. A handler marked :write is :write whatever it reaches.
 // One marked :read is :read too: a claim, reviewed with its file, which is
 // an override when it lowers what the handler reaches (proc/run running git
 // status). whiff's own functions have the marks they say.
@@ -57,7 +58,7 @@ func (mk *marker) mark(s *service, fn string) puff.Mark {
 func (mk *marker) reaches(s *service, fn, topic string) puff.Mark {
 	mk.seen, mk.strict, mk.why = map[string]bool{}, true, nil
 	if fn == "" {
-		return mk.forms(s, s.subs[topic].body)
+		return mk.sub(s, s.subs[topic])
 	}
 	return mk.node(s, fn)
 }
@@ -87,8 +88,12 @@ func (mk *marker) write(f *puff.Form) puff.Mark {
 // node is the mark of name, a handler or def of s. Recursion adds nothing,
 // so a name already being worked out counts as :read.
 func (mk *marker) node(s *service, name string) puff.Mark {
-	if h, ok := s.fns[name]; ok && h.marked && (h.mark == puff.MarkWrite || !mk.strict || h.native != nil) {
+	h, ok := s.fns[name]
+	switch {
+	case ok && h.marked && (h.mark == puff.MarkWrite || !mk.strict || h.native != nil):
 		return h.mark
+	case ok && h.update:
+		return mk.updates(h.pos)
 	}
 	key := s.name + "/" + name
 	if mk.seen[key] {
@@ -166,11 +171,24 @@ func (mk *marker) topic(name string) puff.Mark {
 			continue
 		}
 		mk.seen[key] = true
-		if mk.forms(s, sub.body) == puff.MarkWrite {
+		if mk.sub(s, sub) == puff.MarkWrite {
 			return puff.MarkWrite
 		}
 	}
 	return puff.MarkRead
+}
+
+// sub is the mark of s's subscriber sub.
+func (mk *marker) sub(s *service, sub subscriber) puff.Mark {
+	if sub.update {
+		return mk.updates(sub.pos)
+	}
+	return mk.forms(s, sub.body)
+}
+
+// updates is :write, for an :update handler or subscriber at pos.
+func (mk *marker) updates(pos puff.Pos) puff.Mark {
+	return mk.write(&puff.Form{Kind: puff.FormLiteral, Pos: pos, Val: puff.Keyword("update")})
 }
 
 // targetAt returns where the target is in a call, send or send-after, or 0
