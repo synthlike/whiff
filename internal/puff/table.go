@@ -168,6 +168,13 @@ func help(c *Call, args []Value) (Value, error) {
 	return Done, nil
 }
 
+// Base returns puff's own table, which every Env starts with, in the order
+// of its groups: for documentation.
+func Base() []*Builtin { return slices.Clone(base) }
+
+// Signature is how help shows a call of b: (string/split s sep).
+func (b *Builtin) Signature() string { return signature(b.Name, b.Args) }
+
 func signature(name, args string) string {
 	if args == "" {
 		return "(" + name + ")"

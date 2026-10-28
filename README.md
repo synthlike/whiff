@@ -38,6 +38,9 @@ starts a REPL. Try `go run ./cmd/puff examples/hello.puff ann`.
 
 The daemon, `whiff`, comes next.
 
+[docs/stdlib.md](docs/stdlib.md) lists every function puff has, and whiff's
+own.
+
 ## License
 
 MIT, see [LICENSE](LICENSE).
