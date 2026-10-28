@@ -7,12 +7,17 @@ complete.
 
 ## Layout
 
-One module, two binaries: `go install ./cmd/...` installs both.
+One module, three binaries: `go install ./cmd/...` installs them all.
 
 - `cmd/puff`: runs puff without a daemon (`puff file.puff args...`, `puff -e`,
   `puff` for a REPL), with the base stdlib only.
 - `cmd/whiff`: the daemon and its clients (`whiff`, `whiff call`, `whiff eval`,
   `whiff mcp`, ...).
+- `cmd/sniff`: whiff's web UI, a client of the daemon like the CLI: `net/http`
+  on 127.0.0.1 with a token and a Host check, and an embedded page in plain
+  JS (`cmd/sniff/web`), with no framework and no build step. The page gets
+  history as server-sent events and asks sniff for the rest as JSON; puff
+  values reach it as typed trees, so it shows them as puff.
 - `internal/puff`: the language: reader, printer, evaluator and the base stdlib
   table (one entry per function: name, Go wrapper, `:read` or `:write`, one-line
   doc). It knows nothing about whiff; `internal/daemon` adds its own functions

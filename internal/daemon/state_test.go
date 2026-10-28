@@ -160,6 +160,11 @@ func TestStateOf(t *testing.T) {
 			t.Errorf("%s = %+v %v, want %s", tt.src, resp, err, tt.want)
 		}
 	}
+	resp, err := c.Eval(`(addresses)`, "")
+	want := `(ok [{:address :counter :client #f :state #t} {:address :hiss :client #t :state #f} {:address :jobs :client #f :state #f} {:address :me :client #f :state #f} {:address :plain :client #f :state #f}])`
+	if err != nil || resp.Value != want {
+		t.Errorf("(addresses) = %+v %v, want %s", resp, err, want)
+	}
 	// It only reads: an agent's runs without review.
 	if resp, err := agent.Eval(`(state :counter)`, ""); err != nil || resp.Value != `(ok {:n 2})` {
 		t.Errorf("agent's state = %+v %v", resp, err)

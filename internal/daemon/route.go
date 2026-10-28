@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -238,6 +239,23 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 					return nil, c.Ctx.Err()
 				}
 				return <-r.done, nil
+			}},
+		{Name: "addresses", Mark: puff.MarkRead,
+			Doc: "(ok addrs): every address, sorted, each {:address :client :state}: :client for a client's, :state for a service with :state.",
+			Fn: func(_ *puff.Call, _ []puff.Value) (puff.Value, error) {
+				var addrs []puff.Value
+				d.do(func(st *state) {
+					for _, name := range slices.Sorted(maps.Keys(st.addrs)) {
+						s := st.addrs[name]
+						m, _ := puff.NewMap(
+							puff.Entry{Key: puff.Keyword("address"), Val: puff.Keyword(name)},
+							puff.Entry{Key: puff.Keyword("client"), Val: puff.Bool(s.client)},
+							puff.Entry{Key: puff.Keyword("state"), Val: puff.Bool(s.stateful)},
+						)
+						addrs = append(addrs, m)
+					}
+				})
+				return puff.Ok(puff.NewVector(addrs...)), nil
 			}},
 		{Name: "state", Args: "service", Mark: puff.MarkRead,
 			Doc: "(ok state): service's state as it last committed it; (err {:kind :stateless}) for a service without :state, (err {:kind :no-address}) if there is none.",
