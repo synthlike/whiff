@@ -64,10 +64,7 @@
 
   (on (add text)
     "Adds \"- [ ] text\" at the end of TODO.md, creating the file if there isn't one; (ok line), the item's line."
-    (match (read)
-      [(ok old) (write-new (append old text))]
-      [(err {:kind :not-found}) (write-new (append "" text))]
-      [e e]))
+    (write-new (append (try (catch (read) [{:kind :not-found} (ok "")])) text)))
 
   (on (done line)
     "Ticks the open item at line; (err {:kind :no-item}) if there isn't one there."

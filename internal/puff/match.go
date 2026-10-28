@@ -17,17 +17,67 @@ func (c *compiler) match(f *Form, s *scope, tail bool) (expr, error) {
 	if err != nil {
 		return nil, err
 	}
-	type arm struct {
-		match    matcher
-		slots    int
-		guard    expr // nil without when
-		guardPos Pos
-		body     expr
+	arms, err := c.arms("match", f.Items[2:], s, tail)
+	if err != nil {
+		return nil, err
 	}
+	return func(t *thread, fr *frame) (Value, error) {
+		v, err := subject(t, fr)
+		if err != nil {
+			return nil, err
+		}
+		r, ok, err := t.arms(arms, v, fr)
+		if err == nil && !ok {
+			err = faultf(f.Pos, "no match for %s", Print(v))
+		}
+		return r, err
+	}, nil
+}
+
+// catch compiles (catch value [pattern body...] ...), whose arms are
+// match's: an (err e) from value has e matched against them, and the first
+// arm that matches gives catch's value. An err no arm matches, or anything
+// but an err, is catch's value as it is: catch handles the errs it knows,
+// and the rest go on.
+func (c *compiler) catch(f *Form, s *scope, tail bool) (expr, error) {
+	if len(f.Items) < 3 {
+		return nil, errorf(f.Pos, "catch wants a value and [pattern body...] arms")
+	}
+	subject, err := c.expr(f.Items[1], s, false)
+	if err != nil {
+		return nil, err
+	}
+	arms, err := c.arms("catch", f.Items[2:], s, tail)
+	if err != nil {
+		return nil, err
+	}
+	return func(t *thread, fr *frame) (Value, error) {
+		v, err := subject(t, fr)
+		if err != nil || !isErr(v) {
+			return v, err
+		}
+		r, ok, err := t.arms(arms, v.(Tag).args[0], fr)
+		if err == nil && !ok {
+			return v, nil
+		}
+		return r, err
+	}, nil
+}
+
+type arm struct {
+	match    matcher
+	slots    int
+	guard    expr // nil without when
+	guardPos Pos
+	body     expr
+}
+
+// arms compiles the [pattern body...] arms of a match or catch.
+func (c *compiler) arms(what string, fs []*Form, s *scope, tail bool) ([]arm, error) {
 	var arms []arm
-	for _, a := range f.Items[2:] {
+	for _, a := range fs {
 		if a.Kind != FormVector || len(a.Items) < 2 {
-			return nil, errorf(a.Pos, "match arms are [pattern body...]")
+			return nil, errorf(a.Pos, "%s arms are [pattern body...]", what)
 		}
 		as := &scope{kind: scopeLet, parent: s}
 		m, err := c.pattern(a.Items[0], &as.names)
@@ -39,7 +89,7 @@ func (c *compiler) match(f *Form, s *scope, tail bool) (expr, error) {
 		var guardPos Pos
 		if h := rest[0]; h.Kind == FormSymbol && h.Name == "when" {
 			if len(rest) < 3 {
-				return nil, errorf(a.Pos, "match arms with a guard are [pattern when test body...]")
+				return nil, errorf(a.Pos, "%s arms with a guard are [pattern when test body...]", what)
 			}
 			if guard, err = c.expr(rest[1], as, false); err != nil {
 				return nil, err
@@ -47,35 +97,36 @@ func (c *compiler) match(f *Form, s *scope, tail bool) (expr, error) {
 			guardPos = rest[1].Pos
 			rest = rest[2:]
 		}
-		body, err := c.body("match arm", a.Pos, rest, as, tail)
+		body, err := c.body(what+" arm", a.Pos, rest, as, tail)
 		if err != nil {
 			return nil, err
 		}
 		arms = append(arms, arm{m, len(as.names), guard, guardPos, body})
 	}
-	return func(t *thread, fr *frame) (Value, error) {
-		v, err := subject(t, fr)
-		if err != nil {
-			return nil, err
+	return arms, nil
+}
+
+// arms runs the first of arms that matches v: its value, and whether one
+// did.
+func (t *thread) arms(arms []arm, v Value, fr *frame) (Value, bool, error) {
+	for _, a := range arms {
+		af := &frame{vals: make([]Value, a.slots), parent: fr}
+		if !a.match(v, af.vals) {
+			continue
 		}
-		for _, a := range arms {
-			af := &frame{vals: make([]Value, a.slots), parent: fr}
-			if !a.match(v, af.vals) {
+		if a.guard != nil {
+			ok, err := t.test(a.guard, af, a.guardPos)
+			if err != nil {
+				return nil, true, err
+			}
+			if !ok {
 				continue
 			}
-			if a.guard != nil {
-				ok, err := t.test(a.guard, af, a.guardPos)
-				if err != nil {
-					return nil, err
-				}
-				if !ok {
-					continue
-				}
-			}
-			return a.body(t, af)
 		}
-		return nil, faultf(f.Pos, "no match for %s", Print(v))
-	}, nil
+		r, err := a.body(t, af)
+		return r, true, err
+	}
+	return nil, false, nil
 }
 
 // pattern compiles a pattern, appending the names it binds to names:

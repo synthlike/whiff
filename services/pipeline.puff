@@ -34,10 +34,7 @@
     (map/update-in state [:runs n] (fn (run) (map/merge run m))))
 
   ; started is (ok id), the id of the job r says has started, or r.
-  (def (started r)
-    (match r
-      [(err {:kind :pending :id id}) (ok id)]
-      [e e]))
+  (def (started r) (catch r [{:kind :pending :id id} (ok id)]))
 
   ; waiting notes that run n waits for job id at step.
   (def (waiting state n step id)
@@ -194,6 +191,5 @@
       [(none) (ok state)]
       [(some [n step])
        (let [state (map/update state :jobs (fn (js) (map/delete js id)))]
-         (match (step-done state n step r)
-           [(ok s) (ok s)]
-           [(err e) (ok (or-else (finish state n :failed (value/to-string e)) state))]))])))
+         (catch (step-done state n step r)
+           [e (ok (or-else (finish state n :failed (value/to-string e)) state))]))])))

@@ -31,6 +31,32 @@ func TestTry(t *testing.T) {
 	}
 }
 
+func TestCatch(t *testing.T) {
+	tests := []struct{ src, want string }{
+		// An err an arm matches is handled; the rest go on as they are.
+		{`(def (f r) (catch r [{:kind :not-found} (ok "")])) [(f (err {:kind :not-found})) (f (err {:kind :io})) (f (ok "x"))]`,
+			`[(ok "") (err {:kind :io}) (ok "x")]`},
+		{`[(catch (err 1) [e (ok (+ e 1))]) (catch (some 1) [_ 2]) (catch 5 [_ 2])]`, `[(ok 2) (some 1) 5]`},
+		{`(catch (err {:kind :x :n 3}) [{:n n} when (> n 5) :big] [{:n n} [:small n]])`, `[:small 3]`},
+		{`(catch (err {:kind :x}) [{:kind :y} 1] [{:kind :x} 2])`, `2`},
+		// With try: handle one kind here, pass the rest up.
+		{`(def (read k) (err {:kind k})) (def (f k) (let [s (try (catch (read k) [{:kind :not-found} (ok "")]))] (ok (str s "!")))) [(f :not-found) (f :io)]`,
+			`[(ok "!") (err {:kind :io :trace ["1:51"]})]`},
+		// An arm's body is in tail position.
+		{`(loop [i 0] (catch (if (< i 3) (err i) (ok i)) [n (recur (+ n 1))]))`, `(ok 3)`},
+
+		{`(catch (err 1))`, "1:1: catch wants a value and [pattern body...] arms"},
+		{`(catch (err 1) 2)`, "1:16: catch arms are [pattern body...]"},
+		{`(catch (err 1) [_ (err 2) 3])`, "1:19: dropped an err: (err 2)"},
+		{`catch`, "1:1: catch is a special form, not a value"},
+	}
+	for _, tt := range tests {
+		if got := load(NewEnv(), tt.src); got != tt.want {
+			t.Errorf("%s\n got %s\nwant %s", tt.src, got, tt.want)
+		}
+	}
+}
+
 func TestMapWith(t *testing.T) {
 	m := mustMap(t, Keyword("b"), Int(1))
 	m2, err := m.With(Keyword("a"), Int(2))

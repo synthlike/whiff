@@ -82,8 +82,10 @@ only ever handling one message.
   with no arm that fits, or a `let` or param that doesn't, faults; `cond`
   and `match` end in a `_` arm for the rest.
 - **Errors are values.** A failing builtin returns `(err {:kind ...})`;
-  `try` passes one up from the function it is in. An err dropped in a `do`
-  faults rather than going unnoticed.
+  `try` passes one up from the function it is in, and `catch` handles the
+  ones its arms match, `(catch (read) [{:kind :not-found} (ok "")])`, and
+  lets the rest go on. An err dropped in a `do` faults rather than going
+  unnoticed.
 - **Faults are bugs.** Bad arguments, a non-exhaustive `match`, `(fail e)`:
   the handler stops, its caller gets `(err {:kind :fault})`, and the service
   restarts from its file. A file that doesn't load keeps the old version

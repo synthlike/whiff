@@ -24,8 +24,8 @@ client.
 - Clojure: immutable data that compares by value, with literals for vectors
   `[...]` and maps `{k v}`, keywords like `:read`, `let` with vector
   bindings, `loop` / `recur`, and `->` to thread a value through calls.
-- Rust: Result and Option instead of nil and exceptions, and `try` to pass
-  an error up.
+- Rust: Result and Option instead of nil and exceptions, `try` to pass an
+  error up and `catch` to handle one.
 - [vrs](https://github.com/leoshimo/vrs): a lisp runtime for personal
   services, the idea whiff started from.
 

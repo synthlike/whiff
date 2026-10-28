@@ -48,7 +48,7 @@ func TestHomeAndUUID(t *testing.T) {
 	}
 	got := load(NewEnv(), `[(uuid/new) (uuid/new)]`)
 	re := `"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"`
-	if !regexp.MustCompile(`^\[` + re + " " + re + `\]$`).MatchString(got) || got[1:38] == got[39:76] {
+	if !regexp.MustCompile(`^\[`+re+" "+re+`\]$`).MatchString(got) || got[1:38] == got[39:76] {
 		t.Errorf("uuid/new: %s", got)
 	}
 }

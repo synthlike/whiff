@@ -207,7 +207,7 @@ func (s *scope) loop() *scope {
 
 var specialForms = map[string]bool{
 	"def": true, "let": true, "fn": true, "if": true, "cond": true, "do": true, "and": true, "or": true,
-	"match": true, "when": true, "loop": true, "recur": true, "->": true, "try": true,
+	"match": true, "when": true, "loop": true, "recur": true, "->": true, "try": true, "catch": true,
 }
 
 // compiler turns forms into exprs, resolving every name.
@@ -367,6 +367,8 @@ func (c *compiler) expr(f *Form, s *scope, tail bool) (expr, error) {
 			return c.thread(f, s, tail)
 		case "try":
 			return c.try(f, s)
+		case "catch":
+			return c.catch(f, s, tail)
 		}
 	}
 	return c.call(f, s)
