@@ -26,6 +26,12 @@ func TestRead(t *testing.T) {
 		{"{(f) 1 (f) 2}", "{(f) 1 (f) 2}"},
 		{"()  []\n{}", "() [] {}"},
 		{"  ; only a comment\n", ""},
+		// """ strings: raw, with the closing """'s indent taken off.
+		{"(def p \"\"\"\n    Review \\n \"this\".\n      Skip nits.\n\n    \"\"\") x", `(def p "Review \\n \"this\".\n  Skip nits.\n") x`},
+		{"\"\"\"  \r\none\r\n\"\"\"", `"one"`},
+		{"\"\"\"\n\"\"\"", `""`},
+		{"[\"\"\"\n  a\n\n  b\n  \"\"\" 1]", `["a\n\nb" 1]`},
+		{"\"\"\"\n  a\n    \n  \"\"\"", `"a\n  "`},
 	}
 	for _, tt := range tests {
 		forms, err := Read("t.puff", tt.src)
@@ -66,6 +72,25 @@ func TestReadPositions(t *testing.T) {
 	}
 }
 
+func TestReadPositionsAfterText(t *testing.T) {
+	forms, err := Read("t.puff", "(a \"\"\"\n    x\n    \"\"\" b)\nc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		f    *Form
+		want string
+	}{
+		{forms[0].Items[1], "t.puff:1:4"},
+		{forms[0].Items[2], "t.puff:3:9"},
+		{forms[1], "t.puff:4:1"},
+	} {
+		if got := tt.f.Pos.String(); got != tt.want {
+			t.Errorf("%s at %s, want %s", tt.f, got, tt.want)
+		}
+	}
+}
+
 func TestReadErrors(t *testing.T) {
 	tests := []struct {
 		src  string
@@ -94,6 +119,9 @@ func TestReadErrors(t *testing.T) {
 		{":", "t.puff:1:1: bad keyword :"},
 		{"(a\n  b\n  @x)", "t.puff:3:3: bad name @x"},
 		{"; comment\n  \"multi\nline", "t.puff:2:3: unclosed string"},
+		{"\"\"\" a\n\"\"\"", `t.puff:1:1: a """ string starts on the line after its """`},
+		{"(x\n  \"\"\"\n    a\n   b\n    \"\"\")", `t.puff:4:1: this line is indented less than the closing """ of the string at t.puff:2:3`},
+		{"\"\"\"\n  a \"\"\"", `t.puff:1:1: unclosed """ string`},
 	}
 	for _, tt := range tests {
 		_, err := Read("t.puff", tt.src)

@@ -100,6 +100,9 @@ func (r *reader) form() (*Form, error) {
 	case ')', ']', '}':
 		return nil, errorf(p, "unexpected %q", c)
 	case '"':
+		if strings.HasPrefix(r.src[r.off:], `"""`) {
+			return r.text(p)
+		}
 		return r.str(p)
 	}
 	return r.atom(p)
@@ -181,6 +184,68 @@ func (r *reader) str(p Pos) (*Form, error) {
 
 // atom reads a token up to the next delimiter: a bool, keyword, number,
 // duration or symbol.
+// text reads a """ string: the lines after the opening """ up to a line
+// whose first non-blank is the closing """, as they are, without escapes.
+// The closing """'s indent is taken off every line, and the line break
+// before it isn't part of the string:
+//
+//	(def prompt """
+//	  Review this diff.
+//	    Skip nits.
+//	  """)
+//
+// is "Review this diff.\n  Skip nits.".
+func (r *reader) text(p Pos) (*Form, error) {
+	for range 3 {
+		r.next()
+	}
+	for !r.eof() && (r.peek() == ' ' || r.peek() == '\t' || r.peek() == '\r') {
+		r.next()
+	}
+	if r.eof() || r.peek() != '\n' {
+		return nil, errorf(p, `a """ string starts on the line after its """`)
+	}
+	r.next()
+	type line struct {
+		pos  Pos
+		text string
+	}
+	var lines []line
+	for !r.eof() {
+		lp, start := r.pos(), r.off
+		for !r.eof() && r.peek() != '\n' {
+			r.next()
+		}
+		text := strings.TrimSuffix(r.src[start:r.off], "\r")
+		indent := text[:len(text)-len(strings.TrimLeft(text, " \t"))]
+		if strings.HasPrefix(text[len(indent):], `"""`) {
+			// Back to just after the closing """: what follows is more forms.
+			r.off, r.line, r.col = start, lp.Line, lp.Col
+			for range len(indent) + 3 {
+				r.next()
+			}
+			out := make([]string, len(lines))
+			for i, l := range lines {
+				switch {
+				case strings.HasPrefix(l.text, indent):
+					out[i] = l.text[len(indent):]
+				case strings.TrimSpace(l.text) == "":
+				default:
+					return nil, errorf(l.pos, `this line is indented less than the closing """ of the string at %s`, p)
+				}
+			}
+			return &Form{Kind: FormLiteral, Pos: p, Val: String(strings.Join(out, "\n"))}, nil
+		}
+		lines = append(lines, line{lp, text})
+		if !r.eof() {
+			r.next()
+		}
+	}
+	e := errorf(p, `unclosed """ string`)
+	e.Unclosed = true
+	return nil, e
+}
+
 func (r *reader) atom(p Pos) (*Form, error) {
 	start := r.off
 	for !r.eof() && strings.IndexByte(" \t\r\n()[]{}\";", r.peek()) < 0 {

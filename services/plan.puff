@@ -12,7 +12,14 @@
 (service plan :state {:next 1 :plans {} :jobs {} :runs {}}
   (def most 4) ; tasks a plan may have
 
-  (def prompt "You are the planner of a small pipeline. Read the repository you are in, then split the goal below into at most 4 tasks, in the order to build them. Each task is done by a developer in one sitting and reviewed on its own, so make each one small, complete and testable, and say in it what to test. Answer with only a JSON array of strings, one per task, and nothing else.\n\nGoal: ")
+  (def prompt """
+    You are the planner of a small pipeline. Read the repository you are in,
+    then split the goal below into at most 4 tasks, in the order to build
+    them. Each task is done by a developer in one sitting and reviewed on its
+    own, so make each one small, complete and testable, and say in it what to
+    test. Answer with only a JSON array of strings, one per task, and nothing
+    else.
+    """)
 
   (def (plan-of state n) (unwrap (map/get-in state [:plans n])))
 
@@ -52,7 +59,7 @@
           base (string/trim (try (proc/output ["git" "-C" repo "rev-parse" "HEAD"])))
           n (map/get-or state :next 1)
           id (try (catch (call :jobs/run ["claude" "-p" "--strict-mcp-config" "--tools" "Read,Glob,Grep" "--no-session-persistence"]
-                           {:stdin (str prompt goal) :dir repo :as :text :timeout 10m})
+                           {:stdin (str prompt "\n\nGoal: " goal) :dir repo :as :text :timeout 10m})
                     [{:kind :pending :id id} (ok id)]))]
       (ok [n (-> state
                (map/set :next (+ n 1))

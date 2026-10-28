@@ -21,9 +21,23 @@
   (def rounds 3)
   (def home (path/join (os/home) ".whiff" "pipelines"))
 
-  (def dev-system "You are the developer in a small pipeline. Make the change you are asked for in this repository, keeping to its style, and add or update tests. You can read and edit files and run the check command. Don't commit. End with a short summary of what you changed.")
+  (def dev-system """
+    You are the developer in a small pipeline. Make the change you are asked
+    for in this repository, keeping to its style, and add or update tests.
+    You can read and edit files and run the check command. Don't commit. End
+    with a short summary of what you changed.
+    """)
 
-  (def review-prompt "You are the reviewer in a small pipeline. Below are the task, the result of the project's check and the diff the developer made. List the real problems (bugs, missing tests, the task not done), most important first, each with its file and line and why. Skip style nits. End with one line on its own: VERDICT: approve, if it is ready to commit, or VERDICT: changes, if it needs another round.\n\n")
+  (def review-prompt """
+    You are the reviewer in a small pipeline. Below are the task, the result
+    of the project's check and the diff the developer made. List the real
+    problems (bugs, missing tests, the task not done), most important first,
+    each with its file and line and why. Skip style nits. End with one line
+    on its own:
+
+    VERDICT: approve, if it is ready to commit, or
+    VERDICT: changes, if it needs another round.
+    """)
 
   (def (git dir args) (proc/output (vector/concat ["git" "-C" dir] args)))
 
@@ -80,7 +94,7 @@
           diff (try (git dir ["diff" "--cached" base]))]
       (if (= diff "")
         (finish state n :failed "The developer changed nothing.")
-        (let [input (str review-prompt "Task: " task "\n\nThe check " (check-text checked) "\n\nThe diff:\n" diff)
+        (let [input (str review-prompt "\n\nTask: " task "\n\nThe check " (check-text checked) "\n\nThe diff:\n" diff)
               id (try (started (call :jobs/run ["claude" "-p" "--strict-mcp-config" "--tools" "" "--no-session-persistence"]
                                  {:stdin input :dir dir :as :text :timeout 10m})))]
           (ok (waiting (set-run state n {:checked checked}) n :review id))))))

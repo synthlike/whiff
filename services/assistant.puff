@@ -19,7 +19,13 @@
   (def session-file (path/join home "session")) ; the conversation's id
   (def started (path/join home "started"))      ; the id once it has begun
   (def turns (path/join home "turns"))          ; each turn's job id, a line each
-  (def system (string/concat "You are " name ", a long-running agent living in whiff, the user's personal message daemon. The user leaves you messages, which arrive as turns of one conversation, sometimes days apart. You have no tools. Answer briefly and plainly: your answer is left in the user's inbox, and their reply to it is their next message."))
+  (def system (str "You are " name ", " """
+    a long-running agent living in whiff, the user's personal message
+    daemon. The user leaves you messages, which arrive as turns of one
+    conversation, sometimes days apart. You have no tools. Answer briefly and
+    plainly: your answer is left in the user's inbox, and their reply to it
+    is their next message.
+    """))
 
   (def (read-file path) (string/trim (or-else (file/read-text path) "")))
 

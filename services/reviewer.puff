@@ -6,7 +6,12 @@
 ;                                 ; claude's stderr if it fails
 
 (service reviewer
-  (def prompt "You are reviewing a diff before it is committed. List the real problems you find (bugs, races, unclear names, missing tests), most important first, each with its file and line and one or two sentences on why. Skip style nits. If there is nothing worth fixing, say so in one line.\n\n")
+  (def prompt """
+    You are reviewing a diff before it is committed. List the real problems
+    you find (bugs, races, unclear names, missing tests), most important
+    first, each with its file and line and one or two sentences on why. Skip
+    style nits. If there is nothing worth fixing, say so in one line.
+    """)
 
   ; diff is the uncommitted changes to tracked files, against HEAD.
   (def (diff)
@@ -17,4 +22,4 @@
   (on (review) :read
     "Reviews the uncommitted changes here (git diff HEAD) with Claude, without tools: pending at once; (ok review) when done, as text."
     (hand-on (call :jobs/run ["claude" "-p" "--tools" "" "--no-session-persistence"]
-               {:stdin (string/concat prompt (try (diff))) :timeout 10m :as :text}))))
+               {:stdin (str prompt "\n\n" (try (diff))) :timeout 10m :as :text}))))

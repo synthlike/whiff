@@ -81,6 +81,10 @@ only ever handling one message.
   `fn`'s params: `(fn ([k {:step s}]) ...)` over a map's entries. A `match`
   with no arm that fits, or a `let` or param that doesn't, faults; `cond`
   and `match` end in a `_` arm for the rest.
+- **Text for people and models reads as text.** A `"""` string starts on
+  the next line and ends at a `"""` on a line of its own, without escapes;
+  the closing `"""`'s indent comes off every line, so a prompt sits in a
+  service file indented like the code around it.
 - **Errors are values.** A failing builtin returns `(err {:kind ...})`;
   `try` passes one up from the function it is in, and `catch` handles the
   ones its arms match, `(catch (read) [{:kind :not-found} (ok "")])`, and
