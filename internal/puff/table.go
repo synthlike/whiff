@@ -16,7 +16,11 @@ type Builtin struct {
 	// of the last: "s sep", "a [b]", "a b ...".
 	Args string
 	Mark Mark
-	Doc  string
+	// MarkByArgs is for a :write builtin whose mark depends on its
+	// arguments, as a host's call does on its target's: under WithMark
+	// :read, Fn checks for itself instead of faulting.
+	MarkByArgs bool
+	Doc        string
 	// Fn returns the call's value. A failure for the caller to handle is a
 	// value, (err e) from Errorf; a returned error is a fault: a wrong
 	// argument, an overflow.
@@ -96,6 +100,24 @@ func (m Mark) String() string {
 		return ":write"
 	}
 	return ":read"
+}
+
+type markKey struct{}
+
+// WithMark returns ctx for running what, a function whose mark is m. Under
+// :read, calling a :write builtin faults: the host's backstop for a mark it
+// worked out. It replaces what an outer WithMark said.
+func WithMark(ctx context.Context, what string, m Mark) context.Context {
+	if m == MarkWrite {
+		what = ""
+	}
+	return context.WithValue(ctx, markKey{}, what)
+}
+
+// ReadOnly returns what runs under :read in ctx, if anything does.
+func ReadOnly(ctx context.Context) (string, bool) {
+	what, _ := ctx.Value(markKey{}).(string)
+	return what, what != ""
 }
 
 // MarkOf returns v's mark. A builtin's is in its table entry. A puff

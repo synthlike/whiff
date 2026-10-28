@@ -549,6 +549,11 @@ func (s *service) handle(ctx context.Context, m message) (reply string, faulted 
 		}
 		return puff.Print(r), false
 	}
+	// The backstop: what a handler reaches, leaving out :read claims, sets
+	// its mark at run time, so if it is :read, a :write builtin or target
+	// it reaches all the same faults, whoever sent the message. One that
+	// counts on a :read claim, an override, is :write here.
+	m.ctx = puff.WithMark(m.ctx, what, s.d.marker().reaches(s, m.fn, m.topic))
 	s.cur.chain = slices.Concat(m.chain, []string{s.name})
 	s.cur.user = m.user
 	s.cur.handOn = func(id int64) error {

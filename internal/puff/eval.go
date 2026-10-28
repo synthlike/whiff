@@ -886,6 +886,9 @@ func (t *thread) call(pos Pos, fn Value, args []Value) (Value, error) {
 		if len(args) < fn.min || fn.max >= 0 && len(args) > fn.max {
 			return nil, faultf(pos, "%s", arity(fn.Name, fn.min, fn.max, len(args)))
 		}
+		if what, ok := ReadOnly(t.ctx); ok && fn.Mark == MarkWrite && !fn.MarkByArgs {
+			return nil, faultf(pos, "%s is :write, and %s is :read", fn.Name, what)
+		}
 		v, err := fn.Fn(&Call{Ctx: t.ctx, Env: t.env, t: t, pos: pos}, args)
 		if err != nil {
 			if _, ok := err.(*Fault); ok { // from a function it applied

@@ -129,3 +129,25 @@ func TestMarkFollowsRedefinition(t *testing.T) {
 		t.Errorf("u is %s after h writes, want :write", got)
 	}
 }
+
+func TestWithMark(t *testing.T) {
+	file := t.TempDir() + "/f"
+	read := WithMark(context.Background(), ":a/f", MarkRead)
+	tests := []struct {
+		ctx       context.Context
+		src, want string
+	}{
+		{read, `(match (file/read-text "` + file + `") [(err {:kind k}) k])`, `:not-found`},
+		{read, `(file/write "` + file + `" "x")`, `1:1: file/write is :write, and :a/f is :read`},
+		{read, `(vector/map ["x"] (fn (s) (file/write "` + file + `" s)))`, `1:27: file/write is :write, and :a/f is :read`},
+		{WithMark(read, ":a/g", MarkWrite), `(file/write "` + file + `" "x")`, `(ok :done)`},
+	}
+	for _, tt := range tests {
+		if got := loadCtx(tt.ctx, NewEnv(), tt.src); got != tt.want {
+			t.Errorf("%s = %s, want %s", tt.src, got, tt.want)
+		}
+	}
+	if what, ok := ReadOnly(read); what != ":a/f" || !ok {
+		t.Errorf("ReadOnly = %q %v", what, ok)
+	}
+}

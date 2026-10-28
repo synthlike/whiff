@@ -15,12 +15,19 @@ import (
 // reaches is: a :write builtin, a handler or def of its service by name, or
 // the function a literal target of call, send or send-after names. A
 // computed target, a target that doesn't exist, and call or send used as a
-// value are :write. A handler marked :read or :write has that mark, whatever
-// it reaches.
+// value are :write. A handler marked :write is :write whatever it reaches.
+// One marked :read is :read too: a claim, reviewed with its file, which is
+// an override when it lowers what the handler reaches (proc/run running git
+// status). whiff's own functions have the marks they say.
 type marker struct {
 	services map[string]*service
 	base     *puff.Env // for builtins' marks
 	seen     map[string]bool
+	// strict leaves out :read claims: what a function reaches whatever its
+	// handlers say, for overrides and the backstop (see service.handle).
+	strict bool
+	// why is the first :write form found, for an override's warning.
+	why *puff.Form
 }
 
 func (d *daemon) marker() *marker {
@@ -31,14 +38,46 @@ func (d *daemon) marker() *marker {
 
 // mark is the mark of s's handler fn.
 func (mk *marker) mark(s *service, fn string) puff.Mark {
-	mk.seen = map[string]bool{}
+	mk.seen, mk.strict, mk.why = map[string]bool{}, false, nil
 	return mk.node(s, fn)
+}
+
+// reaches is the mark of s's handler fn, or of its subscriber to topic
+// if fn is "", with every :read claim left out.
+func (mk *marker) reaches(s *service, fn, topic string) puff.Mark {
+	mk.seen, mk.strict, mk.why = map[string]bool{}, true, nil
+	if fn == "" {
+		return mk.forms(s, s.subs[topic].body)
+	}
+	return mk.node(s, fn)
+}
+
+// override says why s's handler fn is one: what :write thing its :read
+// claim leaves out. ok is false if it isn't one.
+func (mk *marker) override(s *service, fn string) (why string, ok bool) {
+	h := s.fns[fn]
+	if !h.marked || h.mark != puff.MarkRead || h.native != nil || mk.reaches(s, fn, "") == puff.MarkRead {
+		return "", false
+	}
+	at := mk.why.Pos
+	if at.File == h.pos.File {
+		at.File = ""
+	}
+	return fmt.Sprintf("%s: :%s/%s is marked :read, but reaches %s at %s", h.pos, s.name, fn, mk.why, at), true
+}
+
+// write is :write, and notes f as why if it is the first :write form found.
+func (mk *marker) write(f *puff.Form) puff.Mark {
+	if mk.why == nil {
+		mk.why = f
+	}
+	return puff.MarkWrite
 }
 
 // node is the mark of name, a handler or def of s. Recursion adds nothing,
 // so a name already being worked out counts as :read.
 func (mk *marker) node(s *service, name string) puff.Mark {
-	if h, ok := s.fns[name]; ok && h.marked {
+	if h, ok := s.fns[name]; ok && h.marked && (h.mark == puff.MarkWrite || !mk.strict || h.native != nil) {
 		return h.mark
 	}
 	key := s.name + "/" + name
@@ -62,18 +101,21 @@ func (mk *marker) form(s *service, f *puff.Form) puff.Mark {
 	switch f.Kind {
 	case puff.FormSymbol:
 		if _, ok := s.code[f.Name]; ok {
-			return mk.node(s, f.Name)
+			if mk.node(s, f.Name) == puff.MarkWrite {
+				return mk.write(f)
+			}
+			return puff.MarkRead
 		}
 		if v, ok := mk.base.Lookup(f.Name); ok {
-			if b, ok := v.(*puff.Builtin); ok {
-				return b.Mark
+			if b, ok := v.(*puff.Builtin); ok && b.Mark == puff.MarkWrite {
+				return mk.write(f)
 			}
 		}
 	case puff.FormList, puff.FormVector, puff.FormMap:
 		if isList(f, "publish") && len(f.Items) > 1 {
 			topic, ok := f.Items[1].Val.(puff.Keyword)
 			if f.Items[1].Kind != puff.FormLiteral || !ok || mk.topic(string(topic)) == puff.MarkWrite {
-				return puff.MarkWrite
+				return mk.write(f.Items[0])
 			}
 			return mk.forms(s, f.Items[2:])
 		}
@@ -83,7 +125,7 @@ func (mk *marker) form(s *service, f *puff.Form) puff.Mark {
 		}
 		target, ok := mk.resolve(s, f.Items[i])
 		if !ok || mk.node(target.s, target.fn) == puff.MarkWrite {
-			return puff.MarkWrite
+			return mk.write(f.Items[i])
 		}
 		return mk.forms(s, slices.Concat(f.Items[1:i], f.Items[i+1:]))
 	}
@@ -191,17 +233,19 @@ func (mk *marker) describe(addr string) puff.Value {
 	return puff.Ok(puff.NewVector(fns...))
 }
 
-// ls is every address's functions and subscriptions, then the literal
-// targets that don't exist:
+// ls is every address's functions and subscriptions, then the overrides,
+// and the literal targets that don't exist:
 //
 //	:greet
 //	  (hello name)        :read  Greets name.
+//	  (status)            :read  Runs git status.
 //	  ask (approve text)  :read  Waits for a person.
 //	  on :git/changed (v) :read
+//	override: greet.puff:6:3: :greet/status is marked :read, but reaches proc/run at 7:6
 //	warning: greet.puff:4:11: :nobody/x doesn't exist
 func (mk *marker) ls() string {
 	var b strings.Builder
-	var warnings []string
+	var overrides, warnings []string
 	tw := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
 	for _, addr := range slices.Sorted(maps.Keys(mk.services)) {
 		s := mk.services[addr]
@@ -221,15 +265,21 @@ func (mk *marker) ls() string {
 				sig = "ask " + sig
 			}
 			fmt.Fprintf(tw, "  %s\t%s\t%s\n", sig, mk.mark(s, fn), h.doc)
+			if why, ok := mk.override(s, fn); ok {
+				overrides = append(overrides, why)
+			}
 		}
 		for _, topic := range slices.Sorted(maps.Keys(s.subs)) {
 			sub := s.subs[topic]
-			mk.seen = map[string]bool{}
+			mk.seen, mk.strict = map[string]bool{}, false
 			fmt.Fprintf(tw, "  on :%s (%s)\t%s\n", topic, sub.param, mk.forms(s, sub.body))
 		}
 		warnings = append(warnings, mk.missing(s)...)
 	}
 	tw.Flush()
+	for _, o := range overrides {
+		fmt.Fprintf(&b, "override: %s\n", o)
+	}
 	for _, w := range warnings {
 		fmt.Fprintf(&b, "warning: %s\n", w)
 	}

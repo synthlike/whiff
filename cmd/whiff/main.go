@@ -33,7 +33,7 @@ const usage = `usage:
   whiff repl                      evaluate forms as they're typed, in the daemon, keeping what they define
   whiff history                   print every message, newest first
   whiff history -f                print the last 10, oldest first, then each new one until stopped
-  whiff ls                        list every address's functions and their marks
+  whiff ls                        list every address's functions and their marks, then the :read overrides
   whiff reset service             forget a service's stored state, so it starts from its :state again
   whiff stop                      stop the daemon
   whiff daemon                    run the daemon in the foreground

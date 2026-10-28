@@ -8,7 +8,9 @@ A signature names the arguments: `[b]` is optional and `...` takes any
 number more of the one before it. Functions are `:read` unless marked
 `:write`: a `:write` function changes something outside puff (a file, a
 process, a message sent). `whiff ls` shows each handler's mark, worked out
-from what it calls; whiff's review gate will go by it.
+from what it calls; whiff's review gate will go by it. A handler marked
+`:read` that calls a `:write` function is an override, which `whiff ls` lists;
+any other `:read` handler that reaches a `:write` function at run time faults.
 
 Failures a caller should handle are values: `(err {:kind :message})`, or
 `(none)` for a lookup that finds nothing. A wrong argument, such as a string
@@ -183,7 +185,7 @@ In `puff` and in whiff alike. Names without a namespace are under core.
 
 Only in whiff: in services, `whiff eval` and `whiff repl`. In a handler,
 `call`, `send` or `send-after` with a literal target counts as that target's
-mark rather than `:write`.
+mark rather than `:write`, and `publish` to a literal topic as its subscribers'.
 
 - `(describe address)`: (ok fns): address's functions, each {:fn :params :doc :mark :form}.
 - `(reset service)` `:write`: Deletes service's stored state and reloads it from its file, so it starts from its :state again: (ok :done), or (err e).

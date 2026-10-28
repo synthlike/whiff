@@ -1,9 +1,11 @@
 package daemon
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/synthlike/whiff/internal/puff"
 )
@@ -103,6 +105,7 @@ func TestLs(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Columns line up within each address.
+	files := filepath.Join(dir, "services", "files.puff")
 	greet := filepath.Join(dir, "services", "greet.puff")
 	want := `:files
   (peek path)       :read   Reads a file.
@@ -119,10 +122,91 @@ func TestLs(t *testing.T) {
 :me
   ask (ask question)  :read  Asks you question: pending now, your answer when you reply.
   ask (tell text)     :read  Tells you text, a report: it waits in your inbox until you reply, which dismisses it.
+override: ` + files + `:4:3: :files/status is marked :read, but reaches proc/run at 4:60
 warning: ` + greet + `:5:15: :nobody/x doesn't exist
 warning: ` + greet + `:5:32: :hello2 doesn't exist
 `
 	if got != want {
 		t.Errorf("ls:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestBackstop(t *testing.T) {
+	dir := tempDir(t)
+	file := filepath.Join(dir, "f")
+	writeServices(t, dir, map[string]string{
+		"b": `(srv b (on (x) "Reads." (ok 1)))`,
+		"a": `(srv a
+  (on (twice) "Waits on hiss, then calls b."
+    (do (call :hiss/hold) (call :b/x)))
+  (on (status) :read "Runs a program, which only reads." (proc/output ["true"]))
+  (on (via) "Counts on status's claim." (status))
+  (on (save) "Writes." (file/write "` + file + `" "x")))`,
+	})
+	start(t, dir)
+	c := dial(t, dir)
+	eval := func(src string) string {
+		t.Helper()
+		resp, err := c.Eval(src, "")
+		if err != nil || resp.Error != "" {
+			t.Fatalf("%s: %v %s", src, err, resp.Error)
+		}
+		return resp.Value
+	}
+
+	// hiss holds :a/twice until it is told to answer.
+	hiss := dial(t, dir)
+	if resp, err := hiss.Claim(":hiss", `(on (hold) "Holds the caller.")`); err != nil || resp.Value != "(ok :done)" {
+		t.Fatalf("claim :hiss = %+v %v", resp, err)
+	}
+	held, answer := make(chan int64), make(chan bool)
+	go func() {
+		for d := range hiss.Deliveries() {
+			held <- d.ID
+			<-answer
+			hiss.Answer(d.ID, "(ok :done)")
+		}
+	}()
+
+	// An override, and what counts on it, run; so does a :write handler.
+	for src, want := range map[string]string{
+		`(call :a/status)`: `(ok "")`,
+		`(call :a/via)`:    `(ok "")`,
+		`(call :a/save)`:   `(ok :done)`,
+	} {
+		if got := eval(src); got != want {
+			t.Errorf("%s = %s, want %s", src, got, want)
+		}
+	}
+
+	// :a/twice is :read while :b/x is.
+	go func() { <-held; answer <- true }()
+	if got := eval(`(call :a/twice)`); got != "(ok 1)" {
+		t.Fatalf("(call :a/twice) = %s", got)
+	}
+
+	// Once :b/x is :write, :a/twice faults on it, even mid-message.
+	got := make(chan string)
+	other := dial(t, dir) // a client waits for one request at a time
+	go func() {
+		resp, err := other.Eval(`(call :a/twice)`, "")
+		if err != nil {
+			resp.Value = err.Error()
+		}
+		got <- resp.Value
+	}()
+	<-held
+	writeServices(t, dir, map[string]string{"b": `(srv b (on (x) "Writes." (file/write "` + file + `" "y")))`})
+	for deadline := time.Now().Add(2 * time.Second); !strings.Contains(eval(`(describe :b)`), ":mark :write"); time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal(":b didn't reload")
+		}
+	}
+	answer <- true
+	if r, want := <-got, ":b/x is :write, and :a/twice is :read"; !strings.Contains(r, want) {
+		t.Errorf("(call :a/twice) after the reload = %s, want it to hold %q", r, want)
+	}
+	if b, _ := os.ReadFile(file); string(b) != "x" {
+		t.Errorf("file = %q, want :b/x not to have run", b)
 	}
 }

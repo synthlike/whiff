@@ -194,8 +194,9 @@ func (d *daemon) publish(m message) {
 }
 
 // builtins are whiff's functions on top of puff's base table, acting for
-// cur. call, send and send-after are :write: in a handler, one with a
-// literal target counts as its target's mark instead (see marker).
+// cur. call, send, send-after and publish are :write: in a handler, one with
+// a literal target or topic counts as its target's mark instead (see
+// marker), and under a :read mark they fault only on a :write target.
 func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 	return []*puff.Builtin{
 		{Name: "describe", Args: "address", Mark: puff.MarkRead,
@@ -277,12 +278,19 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 				}
 				return args[0], nil
 			}},
-		{Name: "publish", Args: "topic v", Mark: puff.MarkWrite,
+		{Name: "publish", Args: "topic v", Mark: puff.MarkWrite, MarkByArgs: true,
 			Doc: "Send v to every service subscribed to topic, a keyword: :done at once.",
 			Fn: func(c *puff.Call, args []puff.Value) (puff.Value, error) {
 				topic, ok := args[0].(puff.Keyword)
 				if !ok || topic == "" {
 					return nil, fmt.Errorf("want a topic like :git/changed, got %s", puff.Print(args[0]))
+				}
+				if what, ok := puff.ReadOnly(c.Ctx); ok {
+					mk := d.marker()
+					mk.seen = map[string]bool{}
+					if mk.topic(string(topic)) == puff.MarkWrite {
+						return nil, fmt.Errorf(":%s has :write subscribers, and %s is :read", topic, what)
+					}
 				}
 				msg, err := encode(puff.NewVector(args[1]))
 				if err != nil {
@@ -291,19 +299,25 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 				d.publish(message{from: cur.addr, topic: string(topic), args: msg, dir: c.Env.Dir, user: cur.user})
 				return puff.Done, nil
 			}},
-		{Name: "call", Args: "target [arg] ...", Mark: puff.MarkWrite,
+		{Name: "call", Args: "target [arg] ...", Mark: puff.MarkWrite, MarkByArgs: true,
 			Doc: "Send target, :address/fn, a message and wait for its Result; (err {:kind :timeout}) after 5s.",
 			Fn: func(c *puff.Call, args []puff.Value) (puff.Value, error) {
 				m, addr, err := cur.message(c.Env.Dir, args)
+				if err == nil {
+					err = d.readOnly(c.Ctx, addr, m.fn)
+				}
 				if err != nil {
 					return nil, err
 				}
 				return d.request(c.Ctx, cur, addr, m)
 			}},
-		{Name: "send", Args: "target [arg] ...", Mark: puff.MarkWrite,
+		{Name: "send", Args: "target [arg] ...", Mark: puff.MarkWrite, MarkByArgs: true,
 			Doc: "Send target, :address/fn, a message without waiting: :done once it is in the mailbox.",
 			Fn: func(c *puff.Call, args []puff.Value) (puff.Value, error) {
 				m, addr, err := cur.message(c.Env.Dir, args)
+				if err == nil {
+					err = d.readOnly(c.Ctx, addr, m.fn)
+				}
 				if err != nil {
 					return nil, err
 				}
@@ -312,7 +326,7 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 				}
 				return puff.Done, nil
 			}},
-		{Name: "send-after", Args: "d target [arg] ...", Mark: puff.MarkWrite,
+		{Name: "send-after", Args: "d target [arg] ...", Mark: puff.MarkWrite, MarkByArgs: true,
 			Doc: "Send target a message once d has passed; :done at once.",
 			Fn: func(c *puff.Call, args []puff.Value) (puff.Value, error) {
 				after, ok := args[0].(puff.Duration)
@@ -320,6 +334,9 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 					return nil, fmt.Errorf("want a duration of 0s or more, got %s", puff.Print(args[0]))
 				}
 				m, addr, err := cur.message(c.Env.Dir, args[1:])
+				if err == nil {
+					err = d.readOnly(c.Ctx, addr, m.fn)
+				}
 				if err != nil {
 					return nil, err
 				}
@@ -390,6 +407,24 @@ func (cur *caller) message(dir string, args []puff.Value) (message, string, erro
 		return message{}, "", err
 	}
 	return message{from: cur.addr, fn: fn, args: msg, dir: dir, user: cur.user}, addr, nil
+}
+
+// readOnly is an error if ctx runs under a :read mark and addr's fn is
+// :write. A target that doesn't exist is left for its message to fail.
+func (d *daemon) readOnly(ctx context.Context, addr, fn string) error {
+	what, ok := puff.ReadOnly(ctx)
+	if !ok {
+		return nil
+	}
+	mk := d.marker()
+	s, ok := mk.services[addr]
+	if !ok {
+		return nil
+	}
+	if _, ok := s.fns[fn]; !ok || mk.mark(s, fn) == puff.MarkRead {
+		return nil
+	}
+	return fmt.Errorf(":%s/%s is :write, and %s is :read", addr, fn, what)
 }
 
 // target splits :address/fn at its last slash: :gh/prs, :agent/1/inbox.
