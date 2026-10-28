@@ -172,3 +172,175 @@ func TestReviewGate(t *testing.T) {
 		t.Errorf("after the agent's reply = %+v", e)
 	}
 }
+
+func TestEvalGate(t *testing.T) {
+	dir := tempDir(t)
+	file := filepath.Join(dir, "notes")
+	os.WriteFile(file, []byte("a"), 0o600)
+	writeServices(t, dir, map[string]string{
+		"notes": `(srv notes
+  (on (add text) "Appends text." (file/append "` + file + `" text))
+  (on (list) "Reads them." (file/read-text "` + file + `")))`,
+	})
+	start(t, dir)
+	c := dial(t, dir)
+	agent := dial(t, dir)
+	agent.Agent = true
+
+	eval := func(c *rpc.Client, src string) string {
+		t.Helper()
+		resp, err := c.Eval(src, "")
+		if err != nil {
+			t.Fatalf("%s: %v", src, err)
+		}
+		if resp.Error != "" {
+			return "error: " + resp.Error
+		}
+		return resp.Value
+	}
+	held := func(src string) string {
+		t.Helper()
+		r := eval(agent, src)
+		v, _ := puff.ReadValue(r)
+		n, ok := pendingID(v)
+		if !ok {
+			t.Fatalf("%s = %s, want it held", src, r)
+		}
+		return puff.Print(puff.Int(n))
+	}
+	notes := func() string {
+		b, _ := os.ReadFile(file)
+		return string(b)
+	}
+	write := `(file/write "` + file + `" "x")`
+
+	if r := eval(agent, write); !strings.Contains(r, ":no-reviewer") {
+		t.Errorf("agent's write with no reviewer = %s", r)
+	}
+	reviewer := dial(t, dir)
+	if _, err := reviewer.Sub("review/pending"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Code that only reads runs; so does yours that writes.
+	for src, want := range map[string]string{
+		`(file/read-text "` + file + `")`:        `(ok "a")`,
+		`(call :notes/list)`:                     `(ok "a")`,
+		`(def (peek) (call :notes/list)) (peek)`: `(ok "a")`,
+	} {
+		if r := eval(agent, src); r != want {
+			t.Errorf("agent's %s = %s, want %s", src, r, want)
+		}
+	}
+	if r := eval(c, `(file/append "`+file+`" "b")`); r != "(ok :done)" {
+		t.Errorf("your append = %s", r)
+	}
+
+	// Code that reaches :write waits as a whole, however it gets there.
+	for _, src := range []string{
+		`(call :notes/add "z")`,
+		`(def (w) ` + write + `) (w)`,
+		`(vector/map ["z"] (fn (s) (call :notes/add s)))`,
+	} {
+		n := held(src)
+		if r, err := c.Message("reject", "", "["+n+` "no"]`, ""); err != nil || r.Value != "(ok :done)" {
+			t.Errorf("reject %s = %+v %v", src, r, err)
+		}
+	}
+	if got := notes(); got != "ab" {
+		t.Errorf("notes after holding = %q", got)
+	}
+
+	// Accepting runs it, and its sender gets the result.
+	n := held(write)
+	if text, _ := c.Inbox("review"); text != n+`  client -> eval "(file/write \"`+file+`\" \"x\")"`+"\n" {
+		t.Errorf("whiff pending = %q", text)
+	}
+	if r, err := c.Message("accept", "", "["+n+"]", ""); err != nil || r.Value != "(ok :done)" {
+		t.Errorf("accept = %+v %v", r, err)
+	}
+	if got := notes(); got != "x" {
+		t.Errorf("notes after accepting = %q", got)
+	}
+	if r, err := agent.Message("wait", "", "["+n+"]", ""); err != nil || r.Value != "(ok :done)" {
+		t.Errorf("agent's wait = %+v %v", r, err)
+	}
+
+	// A held repl form is gated the same way.
+	resp, err := agent.Repl(`(file/append "`+file+`" "y")`, "")
+	if err != nil || !strings.Contains(resp.Value, ":pending") {
+		t.Errorf("agent's repl write = %+v %v", resp, err)
+	}
+}
+
+func TestPublishGate(t *testing.T) {
+	dir := tempDir(t)
+	file := filepath.Join(dir, "notes")
+	writeServices(t, dir, map[string]string{
+		"notes": `(srv notes
+  (on :t/write (v) (file/append "` + file + `" v))
+  (on :t/read (v) (ok v)))`,
+		"relay": `(srv relay
+  (on (shout v) :read "Publishes v; claims :read, so its call isn't held." (publish :t/write v)))`,
+	})
+	start(t, dir)
+	c := dial(t, dir)
+	agent := dial(t, dir)
+	agent.Agent = true
+	reviewer := dial(t, dir)
+	if _, err := reviewer.Sub("review/pending"); err != nil {
+		t.Fatal(err)
+	}
+	notes := func() string {
+		b, _ := os.ReadFile(file)
+		return string(b)
+	}
+	added := func(want string) {
+		t.Helper()
+		eventually(t, want, notes, want)
+	}
+	msg := func(c *rpc.Client, op, target, args string) string {
+		t.Helper()
+		resp, err := c.Message(op, target, args, "")
+		if err != nil {
+			t.Fatalf("%s %s: %v", op, target, err)
+		}
+		return resp.Value
+	}
+	held := func(r string) string {
+		t.Helper()
+		v, _ := puff.ReadValue(r)
+		n, ok := pendingID(v)
+		if !ok {
+			t.Fatalf("%s isn't pending", r)
+		}
+		return puff.Print(puff.Int(n))
+	}
+
+	// To :read subscribers, and yours, go straight through.
+	if r := msg(agent, "pub", "t/read", `[1]`); r != "(ok :done)" {
+		t.Errorf("agent's pub to :read subscribers = %s", r)
+	}
+	if r := msg(c, "pub", "t/write", `["a"]`); r != "(ok :done)" {
+		t.Errorf("your pub = %s", r)
+	}
+	added("a")
+
+	// An agent's, from a client or a service, waits for review.
+	n := held(msg(agent, "pub", "t/write", `["b"]`))
+	if text, _ := c.Inbox("review"); text != n+`  client -> publish :t/write "b"`+"\n" {
+		t.Errorf("whiff pending = %q", text)
+	}
+	m := held(msg(agent, "call", "relay/shout", `["c"]`))
+	if got := notes(); got != "a" {
+		t.Errorf("notes before the review = %q", got)
+	}
+	if r := msg(c, "accept", "", "["+n+"]"); r != "(ok :done)" {
+		t.Errorf("accept = %s", r)
+	}
+	added("ab")
+	if r := msg(c, "accept", "", "["+m+"]"); r != "(ok :done)" {
+		t.Errorf("accept the service's = %s", r)
+	}
+	added("abc")
+}

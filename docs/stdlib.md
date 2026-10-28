@@ -193,7 +193,7 @@ mark rather than `:write`, and `publish` to a literal topic as its subscribers'.
 - `(reply id result)` `:write`: Answer the message id in this service's inbox with result: its sender gets [:whiff/done id result]. (err {:kind :no-id}) if it isn't there.
 - `(self)`: This service's address, as a keyword: :assistant, or :try/3/assistant in whiff try.
 - `(hand-on r)`: r; if r is the pending of a job or ask this service started, its answer goes to the caller of the message being handled instead. (err {:kind :no-id}) for another pending.
-- `(publish topic v)` `:write`: Send v to every service subscribed to topic, a keyword: :done at once.
+- `(publish topic v)` `:write`: Send v to every service subscribed to topic, a keyword: :done at once; pending if the review gate holds it.
 - `(call target [arg] ...)` `:write`: Send target, :address/fn, a message and wait for its Result; (err {:kind :timeout}) after 5s.
 - `(send target [arg] ...)` `:write`: Send target, :address/fn, a message without waiting: :done once it is in the mailbox.
 - `(send-after d target [arg] ...)` `:write`: Send target a message once d has passed; :done at once.

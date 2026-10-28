@@ -21,8 +21,9 @@ import (
 // status). whiff's own functions have the marks they say.
 type marker struct {
 	services map[string]*service
-	base     *puff.Env // for builtins' marks
-	seen     map[string]bool
+	base     *puff.Env // for builtins' marks, and an eval's earlier defs'
+
+	seen map[string]bool
 	// strict leaves out :read claims: what a function reaches whatever its
 	// handlers say, for overrides and the backstop (see service.handle).
 	strict bool
@@ -107,7 +108,7 @@ func (mk *marker) form(s *service, f *puff.Form) puff.Mark {
 			return puff.MarkRead
 		}
 		if v, ok := mk.base.Lookup(f.Name); ok {
-			if b, ok := v.(*puff.Builtin); ok && b.Mark == puff.MarkWrite {
+			if puff.MarkOf(v) == puff.MarkWrite {
 				return mk.write(f)
 			}
 		}
@@ -130,6 +131,21 @@ func (mk *marker) form(s *service, f *puff.Form) puff.Mark {
 		return mk.forms(s, slices.Concat(f.Items[1:i], f.Items[i+1:]))
 	}
 	return puff.MarkRead
+}
+
+// evalMark is the mark of forms, code evaluated in env for from (an
+// address, "" for none), as if they were a service's: what their defs,
+// env's earlier ones and the targets they name reach.
+func (d *daemon) evalMark(env *puff.Env, from string, forms []*puff.Form) puff.Mark {
+	s := &service{name: from, code: map[string][]*puff.Form{}}
+	for _, f := range forms {
+		if name, body, ok := defCode(f); ok {
+			s.code[name] = body
+		}
+	}
+	mk := d.marker()
+	mk.base, mk.seen = env, map[string]bool{}
+	return mk.forms(s, forms)
 }
 
 // topic is :write if any service's subscriber to it reaches :write.

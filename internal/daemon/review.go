@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/synthlike/whiff/internal/puff"
@@ -31,28 +32,64 @@ func (d *daemon) gated(st *state, s *service, m message) bool {
 	return mk.mark(s, m.fn) == puff.MarkWrite
 }
 
-// hold puts m, for addr, in :review's inbox and publishes it on
-// :review/pending, or says why it can't wait there: nobody follows
-// :review/pending to review it, or the inbox is full.
+// publishGated publishes m, as publish and whiff pub do: :done, or the
+// pending of the review gate, which holds an agent's publish to a topic
+// with :write subscribers as it holds a message. whiff's own events, such
+// as :jobs/done, aren't gated: like a whiff/done, they tell of something
+// already started.
+func (d *daemon) publishGated(m message) puff.Value {
+	r := puff.Done
+	d.do(func(st *state) {
+		if !m.user && !m.reviewed {
+			mk := &marker{base: d.base, services: st.addrs, seen: map[string]bool{}}
+			if mk.topic(m.topic) == puff.MarkWrite {
+				r = d.hold(st, "", m)
+				return
+			}
+		}
+		st.publish(m)
+	})
+	return r
+}
+
+// hold puts m, for addr, or m's topic, in :review's inbox: see queue.
 func (d *daemon) hold(st *state, addr string, m message) puff.Value {
-	if !st.reviewing() {
-		return puff.Errorf("no-reviewer", ":%s is :write, and nobody reviews agents' messages: a reviewer follows :review/pending (whiff sub review/pending)", m.to(addr))
-	}
-	if len(st.inbox("review")) >= inboxSize {
-		return puff.Errorf("full", ":review's inbox is full")
-	}
 	v, err := puff.ReadValue(m.args)
 	if err != nil {
 		return puff.Errorf("bad-call", "%v", err)
 	}
 	held := m
 	held.ctx, held.reply, held.chain = nil, nil, nil
+	a := &asked{ticket: ticket{from: m.from, dir: m.dir, user: m.user}, fn: m.fn, args: v.(puff.Vector), held: &held, to: addr}
+	if m.topic != "" {
+		a.fn, a.to = "publish", m.topic
+	}
+	return st.queue(a, a.what())
+}
+
+// holdEval puts an agent's code, req.Src, evaluated for from, in :review's
+// inbox as {:fn :eval :args [src]}: see queue. Accepting runs it.
+func (d *daemon) holdEval(st *state, from string, req rpc.Request) puff.Value {
+	a := &asked{ticket: ticket{from: from, dir: req.Dir}, fn: "eval", args: puff.NewVector(puff.String(req.Src)), src: req.Src}
+	return st.queue(a, "the agent's eval")
+}
+
+// queue puts a, which what names, in :review's inbox and publishes it on
+// :review/pending, and returns the pending for its sender; or says why it
+// can't wait there: nobody follows :review/pending to review it, or the
+// inbox is full.
+func (st *state) queue(a *asked, what string) puff.Value {
+	if !st.reviewing() {
+		return puff.Errorf("no-reviewer", "%s is :write, and nobody reviews agents' messages: a reviewer follows :review/pending (whiff sub review/pending)", what)
+	}
+	if len(st.inbox("review")) >= inboxSize {
+		return puff.Errorf("full", ":review's inbox is full")
+	}
 	st.nextID++
-	a := &asked{ticket: ticket{id: st.nextID, from: m.from, dir: m.dir, user: m.user}, addr: "review", fn: m.fn,
-		args: v.(puff.Vector), at: time.Now(), held: &held, to: addr}
+	a.id, a.addr, a.at = st.nextID, "review", time.Now()
 	st.asked = append(st.asked, a)
-	st.publish(message{from: "review", topic: "review/pending", args: puff.Print(puff.NewVector(a.value())), user: m.user})
-	return pending(a.id, ":%s waits for your review", m.to(addr))
+	st.publish(message{from: "review", topic: "review/pending", args: puff.Print(puff.NewVector(a.value())), user: a.user})
+	return pending(a.id, "%s waits for your review", what)
 }
 
 // reviewing says whether a client follows :review/pending, on its own or
@@ -67,15 +104,27 @@ func (st *state) reviewing() bool {
 }
 
 // accept delivers the message id that :review holds, as it was sent and
-// let through the gate with all it leads to, and returns its result, which
-// its sender gets too. The error is for ctx ending.
+// let through the gate with all it leads to, or runs the code it holds,
+// and returns its result, which its sender gets too. The error is for ctx
+// ending.
 func (d *daemon) accept(ctx context.Context, id int64) (puff.Value, error) {
 	var a *asked
 	d.do(func(st *state) { a = st.take("review", id) })
 	if a == nil {
 		return puff.Errorf("no-id", "no message %d waits for review", id), nil
 	}
+	if a.held == nil {
+		r := d.runHeld(ctx, a)
+		d.reviewed(a, r)
+		return r, ctx.Err()
+	}
 	m := *a.held
+	if m.topic != "" {
+		m.reviewed = true
+		d.publish(m)
+		d.reviewed(a, puff.Done)
+		return puff.Done, nil
+	}
 	m.reviewed = true
 	r, err := d.request(ctx, &caller{}, a.to, m)
 	if err != nil {
@@ -83,6 +132,28 @@ func (d *daemon) accept(ctx context.Context, id int64) (puff.Value, error) {
 	}
 	d.reviewed(a, r)
 	return r, err
+}
+
+// runHeld runs the code a holds, as its sender's eval would have and
+// passing the gate, within the call timeout. Its Result is the code's
+// value, (ok v) unless it is a Result, or a fault as (err {:kind :fault}).
+// What it prints is dropped.
+func (d *daemon) runHeld(ctx context.Context, a *asked) puff.Value {
+	env := d.newEnv(io.Discard, &caller{addr: a.from, reviewed: true})
+	env.Dir = a.dir
+	ctx, cancel := context.WithTimeout(ctx, d.callTimeout)
+	defer cancel()
+	v, err := env.Load(ctx, "eval", a.src)
+	if err != nil {
+		return puff.Errorf("fault", "%v", err)
+	}
+	if t, ok := v.(puff.Tag); ok && t.Len() == 1 && (t.Name() == "ok" || t.Name() == "err") {
+		return v
+	}
+	if v == nil {
+		return puff.Done
+	}
+	return puff.Ok(v)
 }
 
 // reject answers the message id that :review holds (err {:kind :rejected
@@ -95,7 +166,7 @@ func (d *daemon) reject(id int64, reason string) puff.Value {
 	}
 	e, _ := puff.NewMap(
 		puff.Entry{Key: puff.Keyword("kind"), Val: puff.Keyword("rejected")},
-		puff.Entry{Key: puff.Keyword("message"), Val: puff.String(fmt.Sprintf("you rejected :%s: %s", a.held.to(a.to), reason))},
+		puff.Entry{Key: puff.Keyword("message"), Val: puff.String(fmt.Sprintf("you rejected %s: %s", a.what(), reason))},
 		puff.Entry{Key: puff.Keyword("reason"), Val: puff.String(reason)},
 	)
 	d.reviewed(a, puff.NewTag("err", e))

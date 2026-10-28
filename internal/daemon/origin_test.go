@@ -1,8 +1,11 @@
 package daemon
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/synthlike/whiff/internal/puff"
 )
 
 func TestOrigin(t *testing.T) {
@@ -91,8 +94,16 @@ func TestOrigin(t *testing.T) {
 		t.Fatal(err)
 	}
 	id = run(false, `(match (call :relay/ask) [(err {:kind :pending :id id}) id])`)
-	held := run(true, `(match (call :todo/answer `+id+`) [(err {:kind :pending :id id}) id])`)
-	if _, err := user.Message("accept", "", "["+held+"]", ""); err != nil {
+	resp, err := agent.Message("call", "todo/answer", "["+id+"]", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, _ := puff.ReadValue(resp.Value)
+	held, ok := pendingID(v)
+	if !ok {
+		t.Fatalf("agent's todo/answer = %s, want it held", resp.Value)
+	}
+	if _, err := user.Message("accept", "", fmt.Sprintf("[%d]", held), ""); err != nil {
 		t.Fatal(err)
 	}
 	inHistory(`done  agent  :todo -> :relay/whiff/done ` + id + ` (ok :from-todo)  (ok (ok :from-todo))`)

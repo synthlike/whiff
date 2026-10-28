@@ -36,9 +36,23 @@ type asked struct {
 	fn   string
 	args puff.Vector
 	at   time.Time // when it arrived
-	// held is the message :review holds, for to's fn, as it was sent.
+	// held is the message :review holds, for to's fn, as it was sent; or
+	// src is the code it holds, an agent's eval.
 	held *message
 	to   string
+	src  string
+}
+
+// what names a held message, publish or eval: :todo/add, publish
+// :git/changed, or the agent's eval.
+func (a *asked) what() string {
+	switch {
+	case a.held == nil:
+		return "the agent's eval"
+	case a.held.topic != "":
+		return "publish :" + a.held.topic
+	}
+	return ":" + a.held.to(a.to)
 }
 
 // pending is the (err {:kind :pending :id id}) a sender gets for a message
@@ -255,6 +269,8 @@ func (a *asked) value() puff.Value {
 // inboxText is addr's inbox, oldest first, a message a line:
 //
 //	7  client -> :todo/suggest "write docs"
+//	8  :agent/1 -> eval "(file/write \"notes\" \"x\")"
+//	9  :agent/1 -> publish :git/changed {:dir "..."}
 func (d *daemon) inboxText(addr string) string {
 	var b strings.Builder
 	d.do(func(st *state) {
@@ -264,8 +280,11 @@ func (d *daemon) inboxText(addr string) string {
 				from = ":" + a.from
 			}
 			target := ":" + addr + "/" + a.fn
-			if a.held != nil {
-				target = ":" + a.to + "/" + a.fn
+			switch {
+			case a.src != "":
+				target = "eval"
+			case a.held != nil:
+				target = a.what()
 			}
 			if args := puff.Print(a.args); args != "[]" {
 				target += " " + args[1:len(args)-1]

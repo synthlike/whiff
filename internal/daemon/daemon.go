@@ -230,7 +230,7 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 				if repl == nil {
 					repl = d.newEnv(&replOut, cur)
 				}
-				resp = d.evalIn(ectx, repl, &replOut, "repl", req)
+				resp = d.evalIn(ectx, repl, &replOut, "repl", from, req)
 				replOut.Reset()
 			}
 			cancelEval.Store(nil)
@@ -297,8 +297,8 @@ func (d *daemon) message(ctx context.Context, from string, req rpc.Request) rpc.
 		if topic == "" || vec.Len() != 1 {
 			return rpc.Response{Error: "pub wants a topic and one value"}
 		}
-		d.publish(message{from: from, topic: topic, args: puff.Print(vec), dir: req.Dir, user: !req.Agent})
-		return rpc.Response{Value: puff.Print(puff.Done)}
+		r := d.publishGated(message{from: from, topic: topic, args: puff.Print(vec), dir: req.Dir, user: !req.Agent})
+		return rpc.Response{Value: puff.Print(r)}
 	}
 	vals := []puff.Value{puff.Keyword(strings.TrimPrefix(req.Target, ":"))}
 	for i := range vec.Len() {
@@ -325,13 +325,25 @@ func (d *daemon) message(ctx context.Context, from string, req rpc.Request) rpc.
 func (d *daemon) eval(ctx context.Context, from string, req rpc.Request) rpc.Response {
 	var out strings.Builder
 	env := d.newEnv(&out, &caller{addr: from, user: !req.Agent})
-	return d.evalIn(ctx, env, &out, "eval", req)
+	return d.evalIn(ctx, env, &out, "eval", from, req)
 }
 
 // evalIn evaluates req.Src, named file in errors, in env, which prints to
-// out, in the client's directory.
-func (d *daemon) evalIn(ctx context.Context, env *puff.Env, out *strings.Builder, file string, req rpc.Request) rpc.Response {
+// out, in the client's directory, for the client's address (from, "" for
+// none). An agent's code that reaches :write waits for review instead, as
+// a whole; the rest runs under :read.
+func (d *daemon) evalIn(ctx context.Context, env *puff.Env, out *strings.Builder, file, from string, req rpc.Request) rpc.Response {
 	env.Dir = req.Dir
+	if req.Agent {
+		if forms, err := puff.Read(file, req.Src); err == nil {
+			if d.evalMark(env, from, forms) == puff.MarkWrite {
+				var r puff.Value
+				d.do(func(st *state) { r = d.holdEval(st, from, req) })
+				return rpc.Response{Value: puff.Print(r)}
+			}
+			ctx = puff.WithMark(ctx, "the agent's eval", puff.MarkRead)
+		}
+	}
 	v, err := env.Load(ctx, file, req.Src)
 	resp := rpc.Response{Out: out.String()}
 	if err != nil {

@@ -291,7 +291,7 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 				return args[0], nil
 			}},
 		{Name: "publish", Args: "topic v", Mark: puff.MarkWrite, MarkByArgs: true,
-			Doc: "Send v to every service subscribed to topic, a keyword: :done at once.",
+			Doc: "Send v to every service subscribed to topic, a keyword: :done at once; pending if the review gate holds it.",
 			Fn: func(c *puff.Call, args []puff.Value) (puff.Value, error) {
 				topic, ok := args[0].(puff.Keyword)
 				if !ok || topic == "" {
@@ -308,8 +308,8 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 				if err != nil {
 					return nil, err
 				}
-				d.publish(message{from: cur.addr, topic: string(topic), args: msg, dir: c.Env.Dir, user: cur.user})
-				return puff.Done, nil
+				m := message{from: cur.addr, topic: string(topic), args: msg, dir: c.Env.Dir, user: cur.user, reviewed: cur.reviewed}
+				return d.publishGated(m), nil
 			}},
 		{Name: "call", Args: "target [arg] ...", Mark: puff.MarkWrite, MarkByArgs: true,
 			Doc: "Send target, :address/fn, a message and wait for its Result; (err {:kind :timeout}) after 5s.",
