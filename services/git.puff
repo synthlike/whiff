@@ -47,8 +47,8 @@
   ; the index's if the work tree has none.
   (def (what f)
     (match f
-      [{:index i :work :none} (string/slice (str i) 1)]
-      [{:work w} (string/slice (str w) 1)]))
+      [{:index i :work :none} (keyword/name i)]
+      [{:work w} (keyword/name w)]))
 
   (on (status) :read
     "The branch, (some name) or (none) when detached; its upstream, an Option too; commits :ahead and :behind it; and each changed file, {:path :index :work}, with what changed in the index and the work tree: :none, :modified, :added, :deleted, :renamed, :copied, :unmerged or :untracked."

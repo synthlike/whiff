@@ -115,6 +115,22 @@ var stringFns = []*Builtin{
 	{Name: "string/replace", Args: "s old new", Doc: "s with every old replaced by new.", Fn: str3(func(s, old, new string) Value {
 		return String(strings.ReplaceAll(s, old, new))
 	})},
+	{Name: "string/replace-first", Args: "s old new", Doc: "s with the first old replaced by new.", Fn: str3(func(s, old, new string) Value {
+		return String(strings.Replace(s, old, new, 1))
+	})},
+	{Name: "string/trim-prefix", Args: "s prefix", Doc: "s without prefix at its start; s if it doesn't start with it.", Fn: str2(func(s, p string) Value {
+		return String(strings.TrimPrefix(s, p))
+	})},
+	{Name: "string/trim-suffix", Args: "s suffix", Doc: "s without suffix at its end; s if it doesn't end with it.", Fn: str2(func(s, p string) Value {
+		return String(strings.TrimSuffix(s, p))
+	})},
+	{Name: "string/cut", Args: "s sep", Doc: "(some [before after]): s around the first sep; (none) if sep isn't in s.", Fn: str2(func(s, sep string) Value {
+		before, after, ok := strings.Cut(s, sep)
+		if !ok {
+			return None()
+		}
+		return Some(strVec([]string{before, after}))
+	})},
 	{Name: "string/index", Args: "s sub", Doc: "(some i): where sub first is in s, counting characters; (none) if it isn't.", Fn: str2(func(s, sub string) Value {
 		i := strings.Index(s, sub)
 		if i < 0 {
@@ -248,6 +264,13 @@ var valueFns = []*Builtin{
 	})},
 	{Name: "value/type", Args: "v", Doc: "v's type: :bool, :int, :float, :string, :keyword, :duration, :vector, :map, :tag or :function.", Fn: func(_ *Call, args []Value) (Value, error) {
 		return Keyword(typeName(args[0])), nil
+	}},
+	{Name: "keyword/name", Args: "k", Doc: "k's name, without its colon: \"ready\" for :ready.", Fn: func(_ *Call, args []Value) (Value, error) {
+		k, err := arg[Keyword](args, 0, "a keyword")
+		if err != nil {
+			return nil, err
+		}
+		return String(k), nil
 	}},
 }
 

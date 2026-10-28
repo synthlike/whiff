@@ -78,9 +78,7 @@
       (match (vector/find (parse text) (fn (it) (match it [{:line l :done d} (and (= l line) (not d))])))
         [(none) (err {:kind :no-item :message (str "no open item at line " line)})]
         [(some _)
-         (let [l (unwrap (vector/get lines (- line 1)))
-               i (unwrap (string/index l "[ ]"))
-               ticked (string/concat (string/slice l 0 i) "[x]" (string/slice l (+ i 3)))
+         (let [ticked (string/replace-first (unwrap (vector/get lines (- line 1))) "[ ]" "[x]")
                new (vector/set lines (- line 1) ticked)]
            (do (try (file/write-atomic file (string/concat (string/join new "\n") "\n")))
                (ok :done)))]))))

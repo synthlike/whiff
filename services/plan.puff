@@ -14,19 +14,17 @@
 
   (def prompt "You are the planner of a small pipeline. Read the repository you are in, then split the goal below into at most 4 tasks, in the order to build them. Each task is done by a developer in one sitting and reviewed on its own, so make each one small, complete and testable, and say in it what to test. Answer with only a JSON array of strings, one per task, and nothing else.\n\nGoal: ")
 
-  (def (plan-of state n) (unwrap (map/get (map/get-or state :plans {}) n)))
+  (def (plan-of state n) (unwrap (map/get-in state [:plans n])))
 
   (def (set-plan state n m)
-    (map/update state :plans (fn (ps) (map/update ps n (fn (p) (map/merge p m))))))
+    (map/update-in state [:plans n] (fn (p) (map/merge p m))))
 
-  (def (min a b) (if (< a b) a b))
-
-  (def (strings? v) (vector/empty? (vector/filter v (fn (x) (not (= (value/type x) :string))))))
+  (def (strings? v) (vector/all? v (fn (x) (= (value/type x) :string))))
 
   ; tasks reads the planner's answer: the JSON array in it, even inside a
   ; code fence, as (ok tasks), at most most of them.
   (def (tasks text)
-    (let [from (match (string/index text "[") [(some i) i] [(none) 0])
+    (let [from (or-else (string/index text "[") 0)
           json (match (string/split (string/slice text from) "\n```") [[j & _] j])
           ts (try (json/parse (string/trim json)))]
       (match ts
@@ -41,11 +39,11 @@
           run (try (call :pipeline/start-on repo base task check))]
       (ok (-> state
             (set-plan n {:step :building :task i :run run})
-            (map/update :runs (fn (rs) (map/set rs run n)))))))
+            (map/set-in [:runs run] n)))))
 
   (def (finish state n status note)
     (let [{:goal goal} (plan-of state n)]
-      (do (or-else (call :me/tell (str "plan " n ", " goal ": " (string/slice (str status) 1) ". " note)) :told)
+      (do (or-else (call :me/tell (str "plan " n ", " goal ": " (keyword/name status) ". " note)) :told)
           (ok (set-plan state n {:step status})))))
 
   (on (start state goal check) :write :update
@@ -57,9 +55,10 @@
                       {:stdin (str prompt goal) :dir repo :as :text :timeout 10m})
                [(err {:kind :pending :id id}) id]
                [e (try e)])]
-      (ok [n (map/merge state {:next (+ n 1)
-                               :plans (map/set (map/get-or state :plans {}) n {:goal goal :repo repo :base base :check check :step :planning :tasks []})
-                               :jobs (map/set (map/get-or state :jobs {}) id n)})])))
+      (ok [n (-> state
+               (map/set :next (+ n 1))
+               (map/set-in [:plans n] {:goal goal :repo repo :base base :check check :step :planning :tasks []})
+               (map/set-in [:jobs id] n))])))
 
   (on (plans state) :read
     "Every plan, oldest first: {:plan :goal :step :tasks :task :run}, with :step one of :planning, :building, :done or :failed, and :task the index of the task :run builds."
@@ -69,7 +68,7 @@
   ; The planner's answer: the tasks, and the first one's run.
   (on (whiff/done state id r) :update
     "The planner is done: its tasks, and the first one's run."
-    (match (map/get (map/get-or state :jobs {}) id)
+    (match (map/get-in state [:jobs id])
       [(none) (ok state)]
       [(some n)
        (let [state (map/update state :jobs (fn (js) (map/delete js id)))
@@ -87,7 +86,7 @@
   (on :pipeline/done (state v) :update
     (match v
       [{:run run :status status :branch branch :note note}
-       (match (map/get (map/get-or state :runs {}) run)
+       (match (map/get-in state [:runs run])
          [(none) (ok state)]
          [(some n)
           (let [state (map/update state :runs (fn (rs) (map/delete rs run)))
@@ -95,7 +94,7 @@
                 last (= (+ i 1) (vector/length ts))]
             (cond
               [(not (= status :ready))
-               (finish state n :failed (str "Task " (+ i 1) " of " (vector/length ts) " ended " (string/slice (str status) 1) ": " note))]
+               (finish state n :failed (str "Task " (+ i 1) " of " (vector/length ts) " ended " (keyword/name status) ": " note))]
               [last
                (finish state n :done (str "All " (vector/length ts) " tasks built; " branch " has them all."))]
               [#t

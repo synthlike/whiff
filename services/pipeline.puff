@@ -19,7 +19,7 @@
 
 (service pipeline :state {:next 1 :runs {} :jobs {}}
   (def rounds 3)
-  (def home (path/join (unwrap (env/get "HOME")) ".whiff" "pipelines"))
+  (def home (path/join (os/home) ".whiff" "pipelines"))
 
   (def dev-system "You are the developer in a small pipeline. Make the change you are asked for in this repository, keeping to its style, and add or update tests. You can read and edit files and run the check command. Don't commit. End with a short summary of what you changed.")
 
@@ -27,11 +27,11 @@
 
   (def (git dir args) (proc/output (vector/concat ["git" "-C" dir] args)))
 
-  (def (run-of state n) (unwrap (map/get (map/get-or state :runs {}) n)))
+  (def (run-of state n) (unwrap (map/get-in state [:runs n])))
 
   ; set-run sets run n's fields to those of m.
   (def (set-run state n m)
-    (map/update state :runs (fn (rs) (map/update rs n (fn (run) (map/merge run m))))))
+    (map/update-in state [:runs n] (fn (run) (map/merge run m))))
 
   ; started is (ok id), the id of the job r says has started, or r.
   (def (started r)
@@ -42,7 +42,7 @@
   ; waiting notes that run n waits for job id at step.
   (def (waiting state n step id)
     (-> state
-      (map/update :jobs (fn (js) (map/set js id [n step])))
+      (map/set-in [:jobs id] [n step])
       (set-run n {:step step :job id})))
 
   ; dev-cmd is the dev's claude: its session's first turn, or a later one.
@@ -70,9 +70,7 @@
   (def (passed? checked) (match checked [{:exit 0} #t] [_ #f]))
 
   ; tail is the last 4000 characters of s.
-  (def (tail s)
-    (let [n (string/length s)]
-      (if (> n 4000) (string/slice s (- n 4000)) s)))
+  (def (tail s) (string/slice s (max 0 (- (string/length s) 4000))))
 
   (def (check-text checked)
     (match checked
@@ -93,8 +91,7 @@
   ; subject is task's first sentence, as a commit's subject: at most 72
   ; characters. The whole task goes in the commit's body.
   (def (subject task)
-    (let [first (match (string/split (string/trim task) ". ") [[f & _] f])
-          first (if (string/ends-with? first ".") (string/slice first 0 (- (string/length first) 1)) first)]
+    (let [first (string/trim-suffix (match (string/split (string/trim task) ". ") [[f & _] f]) ".")]
       (if (> (string/length first) 72) (str (string/slice first 0 71) "…") first)))
 
   (def (reviewed state n text)
@@ -118,7 +115,7 @@
   (def (finish state n status note)
     (let [{:task task :branch branch :dir dir :quiet quiet} (run-of state n)]
       ; :me/tell answers pending, as it waits in your inbox.
-      (do (if quiet :quiet (or-else (call :me/tell (str "pipeline " n ", " task ": " (string/slice (str status) 1) ". " note)) :told))
+      (do (if quiet :quiet (or-else (call :me/tell (str "pipeline " n ", " task ": " (keyword/name status) ". " note)) :told))
           (publish :pipeline/done {:run n :status status :branch branch :dir dir :note note})
           (ok (set-run state n {:step status})))))
 
@@ -150,11 +147,11 @@
           n (map/get-or state :next 1)
           dir (path/join home (str (path/base repo) "-" n))
           branch (str "whiff/" n)
-          session (string/lower (string/trim (try (proc/output ["uuidgen"]))))
+          session (uuid/new)
           _ (try (file/mkdir home))
           _ (try (git repo ["worktree" "add" "-q" "-b" branch dir base]))
           run {:task task :repo repo :dir dir :branch branch :base base :check check :round 1 :session session :step :starting :quiet quiet}
-          state (map/merge state {:next (+ n 1) :runs (map/set (map/get-or state :runs {}) n run)})]
+          state (-> state (map/set :next (+ n 1)) (map/set-in [:runs n] run))]
       ; A run that can't start leaves no worktree or branch behind.
       (match (dev state n (str "Task: " task))
         [(ok s) (ok [n s])]
@@ -184,12 +181,12 @@
       (fn (e)
         (match e
           [[n {:task t :step s :round r :branch b}]
-           (let [item {:label (str n "  " t) :detail (str (string/slice (str s) 1) ", round " r ", " b)}]
+           (let [item {:label (str n "  " t) :detail (str (keyword/name s) ", round " r ", " b)}]
              (if (active? s) (map/set item :action [:pipeline/cancel n]) item))]))))))
 
   (on (cancel state n) :write :update
     "Cancels run n: kills the job it waits for and leaves its worktree as it is. (err {:kind :no-run}) if there is no such run, or it has ended."
-    (match (map/get (map/get-or state :runs {}) n)
+    (match (map/get-in state [:runs n])
       [(some {:step s :job id}) when (active? s)
        (do (or-else (call :jobs/cancel id) :gone)
            (ok [:cancelled (set-run state n {:step :cancelled})]))]
@@ -197,7 +194,7 @@
 
   (on (whiff/done state id r) :update
     "A job a run waited for is done: the run takes its next step."
-    (match (map/get (map/get-or state :jobs {}) id)
+    (match (map/get-in state [:jobs id])
       [(none) (ok state)]
       [(some [n step])
        (let [state (map/update state :jobs (fn (js) (map/delete js id)))]

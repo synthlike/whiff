@@ -3,6 +3,7 @@ package puff
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -38,6 +39,20 @@ var osFns = []*Builtin{
 		}
 		return None()
 	})},
+	{Name: "os/home", Doc: "Your home directory.", Fn: func(*Call, []Value) (Value, error) {
+		dir, err := os.UserHomeDir()
+		if err != nil {
+			return nil, err
+		}
+		return String(dir), nil
+	}},
+	{Name: "uuid/new", Doc: "A new random UUID, in lower case: \"0b6f5f1e-...\".", Fn: func(*Call, []Value) (Value, error) {
+		var b [16]byte
+		rand.Read(b[:])
+		b[6] = b[6]&0x0f | 0x40 // version 4
+		b[8] = b[8]&0x3f | 0x80 // RFC 9562 variant
+		return String(fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])), nil
+	}},
 	{Name: "os/cwd", Doc: "The working directory.", Fn: func(c *Call, _ []Value) (Value, error) {
 		if c.Env.Dir != "" {
 			return String(c.Env.Dir), nil

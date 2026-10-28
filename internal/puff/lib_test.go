@@ -38,6 +38,9 @@ func TestStringLib(t *testing.T) {
 		{`[(string/upper "abc") (string/lower "ABC")]`, `["ABC" "abc"]`},
 		{`[(string/contains? "abc" "b") (string/starts-with? "abc" "ab") (string/ends-with? "abc" "x")]`, `[#t #t #f]`},
 		{`(string/replace "a-b-c" "-" "+")`, `"a+b+c"`},
+		{`[(string/replace-first "a-b-c" "-" "+") (string/replace-first "abc" "-" "+")]`, `["a+b-c" "abc"]`},
+		{`[(string/trim-prefix "v1.2" "v") (string/trim-prefix "1.2" "v") (string/trim-suffix "done." ".") (string/trim-suffix "done" ".")]`, `["1.2" "1.2" "done" "done"]`},
+		{`[(string/cut "k=v=w" "=") (string/cut "kv" "=") (string/cut "k=" "=")]`, `[(some ["k" "v=w"]) (none) (some ["k" ""])]`},
 		{`(str "line " 12 " " :a [1 "x"] (some 2))`, `"line 12 :a[1 \"x\"](some 2)"`},
 		{`[(string/slice "héllo" 1 3) (string/slice "héllo" 3)]`, `["él" "lo"]`},
 		{`[(string/index "héllo" "l") (string/index "abc" "x")]`, `[(some 2) (none)]`},
@@ -57,8 +60,10 @@ func TestNumberLib(t *testing.T) {
 		{`[(float/from-string "2.5") (float/from-string "inf")]`, `[(ok 2.5) (err {:kind :parse :message "not a float: \"inf\""})]`},
 		{`[(float/to-string 2.0) (float/from-int 3) (float/div 1.0 4.0)]`, `["2.0" 3.0 0.25]`},
 		{`[(float/round 2.5) (float/floor -1.5) (float/ceil 1.2)]`, `[3.0 -2.0 2.0]`},
+		{`[(min 3 1 2) (max 3 1 2) (min "b" "a") (max 1s 2m) (min 4 4)]`, `[1 3 "a" 2m 4]`},
 
 		{`(int/div 1 0)`, "1:1: int/div: division by zero"},
+		{`(min 1 "a")`, "1:1: min: can't compare string and int"},
 		{`(int/div -9223372036854775808 -1)`, "1:1: int/div: int overflow"},
 		{`(float/div 1.0 0.0)`, "1:1: float/div: division by zero"},
 	})
@@ -69,6 +74,8 @@ func TestValueLib(t *testing.T) {
 		{`(value/to-string {:a [1 "x"]})`, `"{:a [1 \"x\"]}"`},
 		{`[(value/from-string "(ok [1])") (value/from-string "(")]`, `[(ok (ok [1])) (err {:kind :parse :message "1:1: no closing ')'"})]`},
 		{`[(value/type 1) (value/type "s") (value/type +) (value/type (ok 1))]`, `[:int :string :function :tag]`},
+		{`(keyword/name :gave-up)`, `"gave-up"`},
+		{`(keyword/name "x")`, `1:1: keyword/name: want a keyword, got "x"`},
 	})
 }
 
@@ -91,6 +98,9 @@ func TestVectorLib(t *testing.T) {
 		{`(vector/filter [1 2 3 4] (fn (x) (> x 2)))`, `[3 4]`},
 		{`(vector/reduce [1 2 3] 0 +)`, `6`},
 		{`[(vector/find [1 2 3] (fn (x) (> x 1))) (vector/find [] (fn (x) #t))]`, `[(some 2) (none)]`},
+		{`[(vector/any? [1 2 3] (fn (x) (> x 2))) (vector/any? [1 2] (fn (x) (> x 2))) (vector/any? [] (fn (x) #t))]`, `[#t #f #f]`},
+		{`[(vector/all? [1 2 3] (fn (x) (> x 0))) (vector/all? [1 2] (fn (x) (> x 1))) (vector/all? [] (fn (x) #f))]`, `[#t #f #t]`},
+		{`(vector/all? [1] (fn (x) x))`, "1:1: vector/all?: want a bool, got 1"},
 		{`(vector/each [1 2] (fn (x) (ok x)))`, `(ok :done)`},
 		{`(vector/each [1 2 3] (fn (x) (if (= x 2) (err :two) (ok x))))`, `(err :two)`},
 
@@ -113,6 +123,12 @@ func TestMapLib(t *testing.T) {
 		{`[(map/delete {:a 1 :b 2} :a) (map/delete {:a 1} :x)]`, `[{:b 2} {:a 1}]`},
 		{`(map/update {:a 1 :b 2} :a (fn (n) (+ n 1)))`, `{:a 2 :b 2}`},
 		{`(map/update {:a 1} :b (fn (n) n))`, "1:1: map/update: no key :b"},
+		{`[(map/get-in {:a {:b 1}} [:a :b]) (map/get-in {:a {:b 1}} [:a :c]) (map/get-in {:a 1} [:a :b]) (map/get-in {:a 1} [])]`, `[(some 1) (none) (none) (some {:a 1})]`},
+		{`[(map/set-in {:a {:b 1}} [:a :b] 2) (map/set-in {} [:a 1 :c] 3) (map/set-in {:x 0} [:x] 1)]`, `[{:a {:b 2}} {:a {1 {:c 3}}} {:x 1}]`},
+		{`(map/set-in {:a 1} [:a :b] 2)`, "1:1: map/set-in: want a map under :a, got 1"},
+		{`(map/set-in {} [] 2)`, "1:1: map/set-in: want a path of at least one key, got []"},
+		{`(map/update-in {:runs {1 {:step :dev}}} [:runs 1] (fn (r) (map/set r :step :check)))`, `{:runs {1 {:step :check}}}`},
+		{`(map/update-in {:runs {}} [:runs 1] (fn (r) r))`, "1:1: map/update-in: no key 1"},
 		{`(map/merge {:a 1 :b 1} {:b 2} {:c 3})`, `{:a 1 :b 2 :c 3}`},
 		{`[(map/keys {:b 1 :a 2}) (map/values {:b 1 :a 2})]`, `[[:a :b] [2 1]]`},
 		{`(map/entries {:a 1})`, `[[:a 1]]`},

@@ -42,6 +42,8 @@ In `puff` and in whiff alike. Names without a namespace are under core.
 - `(+ a b ...)`: The sum of ints, floats or durations, or a time plus durations.
 - `(- a [b])`: a minus b, or minus a. A time minus a duration is a time, minus a time a duration.
 - `(* a b ...)`: The product of ints or floats.
+- `(min a b ...)`: The least of the values, as < compares them.
+- `(max a b ...)`: The greatest of the values, as > compares them.
 - `(str v ...)`: The values joined together, strings as they are and the rest printed: (str "line " 12) is "line 12".
 
 ### string
@@ -58,6 +60,10 @@ In `puff` and in whiff alike. Names without a namespace are under core.
 - `(string/starts-with? s prefix)`: Whether s starts with prefix.
 - `(string/ends-with? s suffix)`: Whether s ends with suffix.
 - `(string/replace s old new)`: s with every old replaced by new.
+- `(string/replace-first s old new)`: s with the first old replaced by new.
+- `(string/trim-prefix s prefix)`: s without prefix at its start; s if it doesn't start with it.
+- `(string/trim-suffix s suffix)`: s without suffix at its end; s if it doesn't end with it.
+- `(string/cut s sep)`: (some [before after]): s around the first sep; (none) if sep isn't in s.
 - `(string/index s sub)`: (some i): where sub first is in s, counting characters; (none) if it isn't.
 - `(string/slice s start [end])`: The characters of s from start up to end, or to the end of s.
 
@@ -85,6 +91,10 @@ In `puff` and in whiff alike. Names without a namespace are under core.
 - `(value/from-string s)`: (ok v): s read as a value.
 - `(value/type v)`: v's type: :bool, :int, :float, :string, :keyword, :duration, :vector, :map, :tag or :function.
 
+### keyword
+
+- `(keyword/name k)`: k's name, without its colon: "ready" for :ready.
+
 ### vector
 
 - `(vector/length v)`: The number of items in v.
@@ -103,6 +113,8 @@ In `puff` and in whiff alike. Names without a namespace are under core.
 - `(vector/map v f)`: f of each item.
 - `(vector/filter v f)`: The items for which f is #t.
 - `(vector/find v f)`: (some x): the first item for which f is #t; (none) if there isn't one.
+- `(vector/any? v f)`: Whether f is #t for some item.
+- `(vector/all? v f)`: Whether f is #t for every item; #t for no items.
 - `(vector/reduce v init f)`: (f (f init x1) x2) ... over the items.
 - `(vector/each v f)`: Call f on each item for its effect: (ok :done), or the first (err e) f returns.
 
@@ -113,6 +125,9 @@ In `puff` and in whiff alike. Names without a namespace are under core.
 - `(map/has? m key)`: Whether m has key.
 - `(map/set m key v)`: m with key set to v.
 - `(map/update m key f)`: m with key's value v replaced by (f v); a key m doesn't have faults.
+- `(map/get-in m path)`: (some v): the value at path, a vector of keys, through nested maps; (none) if there isn't one.
+- `(map/set-in m path v)`: m with the value at path, a vector of keys, set to v, making the maps on the way that m doesn't have.
+- `(map/update-in m path f)`: m with the value v at path, a vector of keys, replaced by (f v); a path m doesn't have faults.
 - `(map/delete m key)`: m without key.
 - `(map/merge m ...)`: The maps' entries together; a later map's value wins.
 - `(map/keys m)`: m's keys, in print order.
@@ -147,7 +162,12 @@ In `puff` and in whiff alike. Names without a namespace are under core.
 
 ### os
 
+- `(os/home)`: Your home directory.
 - `(os/cwd)`: The working directory.
+
+### uuid
+
+- `(uuid/new)`: A new random UUID, in lower case: "0b6f5f1e-...".
 
 ### path
 

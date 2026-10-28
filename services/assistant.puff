@@ -15,7 +15,7 @@
 
 (service assistant
   (def name (string/slice (value/to-string (self)) 1))
-  (def home (path/join (unwrap (env/get "HOME")) ".whiff" "agents" name))
+  (def home (path/join (os/home) ".whiff" "agents" name))
   (def session-file (path/join home "session")) ; the conversation's id
   (def started (path/join home "started"))      ; the id once it has begun
   (def turns (path/join home "turns"))          ; each turn's job id, a line each
@@ -27,7 +27,7 @@
   (def (session)
     (match [(read-file session-file) (read-file started)]
       [["" ""]
-       (let [id (string/lower (string/trim (try (proc/output ["uuidgen"]))))]
+       (let [id (uuid/new)]
          (do (try (file/write session-file id)) (ok id)))]
       [["" s] (ok s)] ; begun before there was a session file
       [[s _] (ok s)]))
@@ -42,7 +42,7 @@
   (def (busy?)
     (match [(vector/last (read-turns)) (call :jobs/list)]
       [[(some last) (ok js)]
-       (vector/contains? (vector/map js (fn (j) (match j [{:id i} (int/to-string i)]))) last)]
+       (vector/any? js (fn (j) (match j [{:id i} (= (int/to-string i) last)])))]
       [_ #f]))
 
   ; turn starts one turn with text: (ok :thinking), or (err {:kind :busy}).

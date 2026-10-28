@@ -28,6 +28,25 @@ var coreFns = []*Builtin{
 	{Name: "+", Args: "a b ...", Doc: "The sum of ints, floats or durations, or a time plus durations.", Fn: add},
 	{Name: "-", Args: "a [b]", Doc: "a minus b, or minus a. A time minus a duration is a time, minus a time a duration.", Fn: sub},
 	{Name: "*", Args: "a b ...", Doc: "The product of ints or floats.", Fn: mul},
+	{Name: "min", Args: "a b ...", Doc: "The least of the values, as < compares them.", Fn: extreme(func(c int) bool { return c < 0 })},
+	{Name: "max", Args: "a b ...", Doc: "The greatest of the values, as > compares them.", Fn: extreme(func(c int) bool { return c > 0 })},
+}
+
+// extreme returns the first of its arguments that better beats every other.
+func extreme(better func(int) bool) func(*Call, []Value) (Value, error) {
+	return func(_ *Call, args []Value) (Value, error) {
+		best := args[0]
+		for _, v := range args[1:] {
+			c, err := compare(v, best)
+			if err != nil {
+				return nil, err
+			}
+			if better(c) {
+				best = v
+			}
+		}
+		return best, nil
+	}
 }
 
 func tagFn(name string) func(*Call, []Value) (Value, error) {

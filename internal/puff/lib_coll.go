@@ -168,6 +168,24 @@ var vectorFns = []*Builtin{
 		}
 		return None(), nil
 	})},
+	{Name: "vector/any?", Args: "v f", Doc: "Whether f is #t for some item.", Fn: vecFn(func(c *Call, v Vector, f Value, _ []Value) (Value, error) {
+		for _, x := range v.items {
+			ok, err := applyTest(c, f, x)
+			if err != nil || ok {
+				return Bool(ok), err
+			}
+		}
+		return Bool(false), nil
+	})},
+	{Name: "vector/all?", Args: "v f", Doc: "Whether f is #t for every item; #t for no items.", Fn: vecFn(func(c *Call, v Vector, f Value, _ []Value) (Value, error) {
+		for _, x := range v.items {
+			ok, err := applyTest(c, f, x)
+			if err != nil || !ok {
+				return Bool(ok), err
+			}
+		}
+		return Bool(true), nil
+	})},
 	{Name: "vector/reduce", Args: "v init f", Doc: "(f (f init x1) x2) ... over the items.", Fn: vecFn(func(c *Call, v Vector, f Value, args []Value) (Value, error) {
 		acc := args[1]
 		for _, x := range v.items {
@@ -190,6 +208,44 @@ var vectorFns = []*Builtin{
 		}
 		return Done, nil
 	})},
+}
+
+// updateIn is map/set-in and map/update-in: args[0] with the value at
+// args[1], a path, replaced by f of it. A missing key on the way is a new
+// map if create, else a fault.
+func updateIn(args []Value, create bool, f func(v Value) (Value, error)) (Value, error) {
+	m, err := arg[Map](args, 0, "a map")
+	if err != nil {
+		return nil, err
+	}
+	path, err := arg[Vector](args, 1, "a path vector")
+	if err != nil {
+		return nil, err
+	}
+	if len(path.items) == 0 {
+		return nil, fmt.Errorf("want a path of at least one key, got []")
+	}
+	var in func(m Map, keys []Value) (Value, error)
+	in = func(m Map, keys []Value) (Value, error) {
+		v, ok := m.Get(keys[0])
+		switch {
+		case !ok && !create:
+			return nil, fmt.Errorf("no key %s", Print(keys[0]))
+		case len(keys) == 1:
+			v, err = f(v)
+		default:
+			next, isMap := v.(Map)
+			if ok && !isMap {
+				return nil, fmt.Errorf("want a map under %s, got %s", Print(keys[0]), Print(v))
+			}
+			v, err = in(next, keys[1:])
+		}
+		if err != nil {
+			return nil, err
+		}
+		return m.With(keys[0], v)
+	}
+	return in(m, path.items)
 }
 
 // applyTest applies f, which must return a bool.
@@ -248,6 +304,29 @@ var mapFns = []*Builtin{
 			return nil, err
 		}
 		return m.With(args[1], v)
+	}},
+	{Name: "map/get-in", Args: "m path", Doc: "(some v): the value at path, a vector of keys, through nested maps; (none) if there isn't one.", Fn: map1(func(m Map, args []Value) (Value, error) {
+		path, err := arg[Vector](args, 1, "a path vector")
+		if err != nil {
+			return nil, err
+		}
+		var v Value = m
+		for _, k := range path.items {
+			m, ok := v.(Map)
+			if !ok {
+				return None(), nil
+			}
+			if v, ok = m.Get(k); !ok {
+				return None(), nil
+			}
+		}
+		return Some(v), nil
+	})},
+	{Name: "map/set-in", Args: "m path v", Doc: "m with the value at path, a vector of keys, set to v, making the maps on the way that m doesn't have.", Fn: func(_ *Call, args []Value) (Value, error) {
+		return updateIn(args, true, func(Value) (Value, error) { return args[2], nil })
+	}},
+	{Name: "map/update-in", Args: "m path f", Doc: "m with the value v at path, a vector of keys, replaced by (f v); a path m doesn't have faults.", Fn: func(c *Call, args []Value) (Value, error) {
+		return updateIn(args, false, func(v Value) (Value, error) { return c.Apply(args[2], v) })
 	}},
 	{Name: "map/delete", Args: "m key", Doc: "m without key.", Fn: map1(func(m Map, args []Value) (Value, error) {
 		if _, ok := m.Get(args[1]); !ok {
