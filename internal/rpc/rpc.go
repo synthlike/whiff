@@ -18,17 +18,17 @@ import (
 
 // Version is the protocol version. Bump it when a message changes; hello and
 // stop must stay readable by every version, so an old daemon can be stopped.
-const Version = 14
+const Version = 15
 
 // Request is a client's message to the daemon. The daemon answers each with
 // a Response, in order, except an answer or a cancel, which have none.
 type Request struct {
-	Op      string `json:"op"`                // "hello", "eval", "repl", "cancel", "call", "send", "pub", "sub", "try", "inbox", "reply", "accept", "reject", "wait", "claim", "answer", "history", "trace", "ls" or "stop"
+	Op      string `json:"op"`                // "hello", "eval", "repl", "cancel", "call", "send", "pub", "sub", "try", "inbox", "reply", "accept", "reject", "mode", "wait", "claim", "answer", "history", "trace", "ls" or "stop"
 	Version int    `json:"version,omitempty"` // hello: the client's protocol
 	Src     string `json:"src,omitempty"`     // eval, repl: puff code; claim: the interface, (on ...) and (ask ...) forms without bodies; try: the service file
 	File    string `json:"file,omitempty"`    // try: the service file's name, for its errors
-	Target  string `json:"target,omitempty"`  // call, send: address/fn; pub: the topic; inbox, claim: the address, or "agent" for an agent's next :agent/<n>; try: the fn
-	Args    string `json:"args,omitempty"`    // call, send, pub, try: a printed puff vector, of one value for pub; reply: [id result]; wait, accept: [id]; reject: [id reason]; answer: the printed Result; sub: the topics, a printed vector of keywords, [] for every topic
+	Target  string `json:"target,omitempty"`  // call, send: address/fn; pub: the topic; inbox, claim: the address, or "agent" for an agent's next :agent/<n>; mode: the agent session's address; try: the fn
+	Args    string `json:"args,omitempty"`    // call, send, pub, try: a printed puff vector, of one value for pub; reply: [id result]; wait, accept: [id]; reject: [id reason]; answer: the printed Result; sub: the topics, a printed vector of keywords, [] for every topic; mode: {:mode :gated|:trusted|:free :services [...] :for 2h}
 	Dir     string `json:"dir,omitempty"`     // eval, call, send, pub, try: the client's working directory
 	ID      int64  `json:"id,omitempty"`      // answer: the Delivery's ID
 	// Agent says the client acts for an agent: its messages' origin is
@@ -280,6 +280,27 @@ func (c *Client) Message(op, target, args, dir string) (Response, error) {
 func (c *Client) Try(file, src, fn, args, dir string) (Response, error) {
 	var resp Response
 	err := c.roundTrip(Request{Op: "try", File: file, Src: src, Target: fn, Args: args, Dir: dir}, &resp)
+	return resp, err
+}
+
+// Mode sets the review gate's mode for the agent session at addr: mode is
+// "gated", "trusted" (with services, the ones whose messages go through)
+// or "free"; for, if not 0, ends it after that long. The Response's Value
+// is (ok :done), or (err {:kind :no-address}).
+func (c *Client) Mode(addr, mode string, services []string, d time.Duration) (Response, error) {
+	args := "{:mode :" + mode
+	if len(services) > 0 {
+		keys := make([]string, len(services))
+		for i, s := range services {
+			keys[i] = ":" + strings.TrimPrefix(s, ":")
+		}
+		args += " :services [" + strings.Join(keys, " ") + "]"
+	}
+	if d > 0 {
+		args += fmt.Sprintf(" :for %ds", int64(d/time.Second))
+	}
+	var resp Response
+	err := c.roundTrip(Request{Op: "mode", Target: addr, Args: args + "}"}, &resp)
 	return resp, err
 }
 

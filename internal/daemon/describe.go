@@ -21,7 +21,8 @@ import (
 // status). whiff's own functions have the marks they say.
 type marker struct {
 	services map[string]*service
-	base     *puff.Env // for builtins' marks, and an eval's earlier defs'
+	modes    map[string]string // agent sessions' modes, as ls shows them
+	base     *puff.Env         // for builtins' marks, and an eval's earlier defs'
 
 	seen map[string]bool
 	// strict leaves out :read claims: what a function reaches whatever its
@@ -33,7 +34,15 @@ type marker struct {
 
 func (d *daemon) marker() *marker {
 	mk := &marker{base: d.base}
-	d.do(func(st *state) { mk.services = maps.Clone(st.addrs) })
+	d.do(func(st *state) {
+		mk.services = maps.Clone(st.addrs)
+		mk.modes = map[string]string{}
+		for addr := range st.modes {
+			if m := st.modeOf(addr); m != nil {
+				mk.modes[addr] = m.String()
+			}
+		}
+	})
 	return mk
 }
 
@@ -265,9 +274,16 @@ func (mk *marker) ls() string {
 	tw := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
 	for _, addr := range slices.Sorted(maps.Keys(mk.services)) {
 		s := mk.services[addr]
-		if s.client {
+		switch {
+		case s.client && strings.HasPrefix(addr, "agent/"):
+			m := mk.modes[addr]
+			if m == "" {
+				m = "gated"
+			}
+			fmt.Fprintf(tw, ":%s (agent, %s)\n", addr, m)
+		case s.client:
 			fmt.Fprintf(tw, ":%s (client)\n", addr)
-		} else {
+		default:
 			fmt.Fprintf(tw, ":%s\n", addr)
 		}
 		for _, fn := range slices.Sorted(maps.Keys(s.fns)) {

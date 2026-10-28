@@ -40,6 +40,9 @@ func (d *daemon) gated(st *state, s *service, m message) bool {
 func (d *daemon) publishGated(m message) puff.Value {
 	r := puff.Done
 	d.do(func(st *state) {
+		if !m.user && !m.reviewed && st.lets(m.from, "") {
+			m.reviewed = true
+		}
 		if !m.user && !m.reviewed {
 			mk := &marker{base: d.base, services: st.addrs, seen: map[string]bool{}}
 			if mk.topic(m.topic) == puff.MarkWrite {

@@ -99,6 +99,7 @@ type state struct {
 	waiters map[int64][]chan puff.Value // whiff waits, by the id they wait for
 	subs    map[*watcher]bool           // clients' subscriptions: whiff sub
 	tracers map[*tracer]bool            // clients following history: whiff history -f
+	modes   map[string]*mode            // agent sessions that aren't gated, by address
 }
 
 // watcher is a client subscribed to topics, every topic if topics is nil.
@@ -112,7 +113,7 @@ type watcher struct {
 // route owns the state until the daemon stops; others reach it through do.
 func (d *daemon) route() {
 	st := &state{addrs: map[string]*service{}, jobs: map[int64]*job{}, waiters: map[int64][]chan puff.Value{},
-		subs: map[*watcher]bool{}, tracers: map[*tracer]bool{}}
+		subs: map[*watcher]bool{}, tracers: map[*tracer]bool{}, modes: map[string]*mode{}}
 	for {
 		select {
 		case op := <-d.ops:
@@ -151,6 +152,10 @@ func (d *daemon) deliver(addr string, m message) puff.Value {
 // {:kind :pending :id n}) at once.
 func (d *daemon) put(st *state, addr string, m message) puff.Value {
 	var res puff.Value
+	// An agent session's mode may let its message through, as accepted.
+	if !m.user && !m.reviewed && st.lets(m.from, addr) {
+		m.reviewed = true
+	}
 	switch s := st.addrs[addr]; {
 	case s == nil:
 		res = puff.Errorf("no-address", "no address :%s", addr)

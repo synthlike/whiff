@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/synthlike/whiff/internal/daemon"
 	"github.com/synthlike/whiff/internal/puff"
@@ -32,16 +33,22 @@ const usage = `usage:
   whiff pending                   list agents' messages that wait for your review
   whiff accept id                 deliver a message that waits for review, and print its value
   whiff reject id reason          answer a message that waits for review with (err {:kind :rejected})
+  whiff trust agent/n service...  let an agent session's messages to the services through, as if you accepted them
+  whiff free agent/n              let everything an agent session sends, publishes and evaluates through
+  whiff gate agent/n              hold an agent session's :write messages for review again, as by default
   whiff eval code                 evaluate puff code in the daemon and print its value
   whiff repl                      evaluate forms as they're typed, in the daemon, keeping what they define
   whiff history                   print every message, newest first
   whiff history -f                print the last 10, oldest first, then each new one until stopped
-  whiff ls                        list every address's functions and their marks, then the :read overrides
+  whiff ls                        list every address's functions and their marks, each agent session's mode, then the :read overrides
   whiff state service             print a service's state, as it last committed it
   whiff reset service             forget a service's stored state, so it starts from its :state again
   whiff mcp                       serve whiff to an agent over MCP on stdin and stdout, as :agent/<n>
   whiff stop                      stop the daemon
   whiff daemon                    run the daemon in the foreground
+
+trust and free take --for 2h to end the mode after that long; else it lasts
+until the session ends.
 
 Each arg of call, send, pub, try and reply is read as a puff value, or taken as
 a string if it doesn't read as one: 12 is 12, ann is "ann", '"12"' is "12".
@@ -76,6 +83,8 @@ func run(args []string, dir, services string, stdout, stderr io.Writer) int {
 	case len(args) == 3 && args[0] == "reply", len(args) == 2 && args[0] == "wait",
 		len(args) == 2 && args[0] == "accept", len(args) == 3 && args[0] == "reject":
 		return message(dir, args[0], "", args[1:], stdout, stderr)
+	case len(args) >= 2 && (args[0] == "trust" && len(args) >= 3 || args[0] == "free" || args[0] == "gate"):
+		return setMode(dir, args[0], args[1], args[2:], stdout, stderr)
 	case len(args) == 1 && args[0] == "pending":
 		pending := func(c *rpc.Client) (string, error) { return c.Inbox("review") }
 		return text(dir, pending, stdout, stderr)
@@ -226,6 +235,45 @@ func result(op string, resp rpc.Response, stdout, stderr io.Writer) int {
 		}
 	}
 	return 0
+}
+
+// setMode sets agent's mode: trust (with services), free or gate, which
+// takes no args. --for 2h, before or among the services, ends it after
+// that long.
+func setMode(dir, op, agent string, args []string, stdout, stderr io.Writer) int {
+	var services []string
+	var d time.Duration
+	for i := 0; i < len(args); i++ {
+		if args[i] != "--for" {
+			services = append(services, args[i])
+			continue
+		}
+		var err error
+		if i+1 < len(args) {
+			d, err = time.ParseDuration(args[i+1])
+		}
+		if i+1 == len(args) || err != nil || d <= 0 || op == "gate" {
+			fmt.Fprint(stderr, usage)
+			return 2
+		}
+		i++
+	}
+	if op == "gate" && len(services) > 0 || op == "free" && len(services) > 0 || op == "trust" && len(services) == 0 {
+		fmt.Fprint(stderr, usage)
+		return 2
+	}
+	mode := map[string]string{"trust": "trusted", "free": "free", "gate": "gated"}[op]
+	c := connect(dir, stderr)
+	if c == nil {
+		return 1
+	}
+	defer c.Close()
+	resp, err := c.Mode(strings.TrimPrefix(agent, ":"), mode, services, d)
+	if err != nil {
+		fmt.Fprintf(stderr, "whiff: %v\n", err)
+		return 1
+	}
+	return result(op, resp, stdout, stderr)
 }
 
 // serviceOp evaluates (op :service), reset or state: reset has the daemon

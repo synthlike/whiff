@@ -224,14 +224,19 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 		case "eval", "repl":
 			ectx, cancel := context.WithCancel(ctx)
 			cancelEval.Store(&cancel)
+			// A free session's code runs as if you had accepted it.
+			free := false
+			if req.Agent && from != "" {
+				d.do(func(st *state) { free = st.lets(from, "") })
+			}
 			if req.Op == "eval" {
-				resp = d.eval(ectx, from, req)
+				resp = d.eval(ectx, from, free, req)
 			} else {
-				cur.addr, cur.user = from, !req.Agent
+				cur.addr, cur.user, cur.reviewed = from, !req.Agent, free
 				if repl == nil {
 					repl = d.newEnv(&replOut, cur)
 				}
-				resp = d.evalIn(ectx, repl, &replOut, "repl", from, req)
+				resp = d.evalIn(ectx, repl, &replOut, "repl", from, free, req)
 				replOut.Reset()
 			}
 			cancelEval.Store(nil)
@@ -266,6 +271,8 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 			resp.Out = d.inboxText(strings.TrimPrefix(req.Target, ":"))
 		case "reply":
 			resp = d.clientReply(from, req)
+		case "mode":
+			resp = d.clientMode(req)
 		case "accept", "reject":
 			resp = d.clientReview(ctx, req)
 		case "wait":
@@ -322,20 +329,20 @@ func (d *daemon) message(ctx context.Context, from string, req rpc.Request) rpc.
 }
 
 // eval evaluates req.Src in a fresh environment, in the client's directory,
-// acting for its address (from, "" for none).
-func (d *daemon) eval(ctx context.Context, from string, req rpc.Request) rpc.Response {
+// acting for its address (from, "" for none); as accepted if free.
+func (d *daemon) eval(ctx context.Context, from string, free bool, req rpc.Request) rpc.Response {
 	var out strings.Builder
-	env := d.newEnv(&out, &caller{addr: from, user: !req.Agent})
-	return d.evalIn(ctx, env, &out, "eval", from, req)
+	env := d.newEnv(&out, &caller{addr: from, user: !req.Agent, reviewed: free})
+	return d.evalIn(ctx, env, &out, "eval", from, free, req)
 }
 
 // evalIn evaluates req.Src, named file in errors, in env, which prints to
 // out, in the client's directory, for the client's address (from, "" for
 // none). An agent's code that reaches :write waits for review instead, as
-// a whole; the rest runs under :read.
-func (d *daemon) evalIn(ctx context.Context, env *puff.Env, out *strings.Builder, file, from string, req rpc.Request) rpc.Response {
+// a whole; the rest runs under :read. A free session's runs as it is.
+func (d *daemon) evalIn(ctx context.Context, env *puff.Env, out *strings.Builder, file, from string, free bool, req rpc.Request) rpc.Response {
 	env.Dir = req.Dir
-	if req.Agent {
+	if req.Agent && !free {
 		if forms, err := puff.Read(file, req.Src); err == nil {
 			if d.evalMark(env, from, forms) == puff.MarkWrite {
 				var r puff.Value
