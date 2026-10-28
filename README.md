@@ -31,15 +31,29 @@ client.
 
 ## Status
 
-v0.1: puff runs on its own, without a daemon. `go install ./cmd/...`
-installs `puff`; `puff file.puff args...` runs a file (calling its `main` if
-it defines one), `puff -e '(...)'` evaluates an expression and `puff` alone
-starts a REPL. Try `go run ./cmd/puff examples/hello.puff ann`.
+v0.3. `go install ./cmd/...` installs two binaries:
 
-The daemon, `whiff`, comes next.
+- `puff` runs puff without a daemon: `puff file.puff args...` runs a file
+  (calling its `main` if it defines one), `puff -e '(...)'` evaluates an
+  expression and `puff` alone starts a REPL. Try `go run ./cmd/puff
+  examples/hello.puff ann`.
+- `whiff` is the daemon and its CLI. The first command starts the daemon,
+  which loads the services in `~/.whiff/services/`, reloads them when you
+  save and restarts them when they fault. `whiff call`, `send`, `pub` and
+  `sub` talk to them; `whiff inbox`, `reply` and `wait` answer the questions
+  they ask you and pick up long jobs; `whiff history -f` follows every
+  message; `whiff -h` lists the rest.
 
-[docs/stdlib.md](docs/stdlib.md) lists every function puff has, and whiff's
-own.
+Services keep state across restarts (`:state`, kept in `~/.whiff/whiff.db`;
+`whiff reset` forgets it), subscribe to topics, run long work as jobs and
+mark each function `:read` or `:write`. [services/](services/README.md) has
+the ones in daily use: `git`, `gh` (which watches your pull requests), `todo`,
+`reviewer` and `assistant`, a resident Claude agent you talk to through your
+inbox. [docs/stdlib.md](docs/stdlib.md) lists every function puff has, and
+whiff's own.
+
+Next, in v0.4: `whiff mcp` for agents, and the review queue for what they ask
+to write.
 
 ## License
 
