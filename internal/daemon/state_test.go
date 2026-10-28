@@ -19,14 +19,16 @@ func TestState(t *testing.T) {
   (on (boom n) :update "Faults." (+ 1 1.0))
   (on (leak n) :update "Puts a function in the state." (ok [1 (fn () n)]))
   (on (shape n) :update "Returns only the state." (ok n))
+  (on (reset-me n) "Resets itself." (reset :counter))
   (on :bump (n v) :update (ok (+ n v))))`
 	writeServices(t, dir, map[string]string{
 		"counter": counter,
+		"plain":   `(srv plain (on (f) "Answers." (ok 1)))`,
 		"started": `(srv started :state []
   :start (fn (s) (ok (vector/append s :started)))
   (on (get s) "The state." (ok s)))`,
 	})
-	start(t, dir)
+	done := start(t, dir)
 	c := dial(t, dir)
 
 	// becomes waits until src evaluates to want.
@@ -62,6 +64,7 @@ func TestState(t *testing.T) {
 		{get, `(ok 2)`},
 		// Callers don't pass the state.
 		{kind(`(call :counter/add 1 2)`), `:bad-call`},
+		{kind(`(call :counter/reset-me)`), `:bad-call`},
 		{`(match (describe :counter) [(ok fs) (vector/filter fs (fn (f) (match f [{:fn :add} #t] [_ #f])))])`,
 			`[{:doc "Adds k." :fn :add :form :on :mark :read :params [:k]}]`},
 		{`(publish :bump 3)`, `(ok :done)`},
@@ -96,4 +99,33 @@ func TestState(t *testing.T) {
   :start (fn (s) (ok (vector/append s :again)))
   (on (get s) "The state." (ok s)))`)
 	becomes(`(call :started/get)`, `(ok [:started :again])`)
+
+	// whiff reset forgets the stored state, so counter starts from its init.
+	becomes(`(reset :counter)`, `(ok :done)`)
+	becomes(get, `(ok 100)`)
+	becomes(kind(`(reset :plain)`), `:stateless`)
+	becomes(kind(`(reset :nobody)`), `:no-address`)
+	becomes(`(call :counter/add 1)`, `(ok 101)`)
+
+	// A reset whose file doesn't load keeps the service and its state.
+	fixed := strings.Replace(counter, ":state 0", ":state 100", 1)
+	reload("counter", "(srv counter")
+	historyHas(t, c, ":counter keeps running as it was")
+	becomes(kind(`(reset :counter)`), `:load`)
+	becomes(get, `(ok 101)`)
+	reload("counter", fixed)
+	becomes(`(match (call :counter/new) [(err {:kind k}) k])`, `:no-function`)
+	becomes(get, `(ok 101)`)
+
+	// The state outlives the daemon.
+	if err := c.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	start(t, dir)
+	c = dial(t, dir)
+	becomes(get, `(ok 101)`)
+	becomes(`(call :started/get)`, `(ok [:started :again :again])`)
 }

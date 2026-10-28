@@ -33,6 +33,7 @@ const usage = `usage:
   whiff repl                      evaluate forms as they're typed, in the daemon, keeping what they define
   whiff history                   print every message, newest first
   whiff ls                        list every address's functions and their marks
+  whiff reset service             forget a service's stored state, so it starts from its :state again
   whiff stop                      stop the daemon
   whiff daemon                    run the daemon in the foreground
 
@@ -83,6 +84,8 @@ func run(args []string, dir, services string, stdout, stderr io.Writer) int {
 		return text(dir, (*rpc.Client).History, stdout, stderr)
 	case len(args) == 1 && args[0] == "ls":
 		return text(dir, (*rpc.Client).Ls, stdout, stderr)
+	case len(args) == 2 && args[0] == "reset":
+		return resetService(dir, args[1], stdout, stderr)
 	case len(args) == 1 && args[0] == "stop":
 		return stop(dir, stderr)
 	case len(args) == 1 && args[0] == "daemon":
@@ -205,6 +208,26 @@ func result(op string, resp rpc.Response, stdout, stderr io.Writer) int {
 		}
 	}
 	return 0
+}
+
+// resetService has the daemon forget service's stored state and reload it.
+// It prints nothing, or (err e)'s e and exits 1.
+func resetService(dir, service string, stdout, stderr io.Writer) int {
+	c := connect(dir, stderr)
+	if c == nil {
+		return 1
+	}
+	defer c.Close()
+	resp, err := c.Eval("(reset "+puff.Print(puff.Keyword(strings.TrimPrefix(service, ":")))+")", "")
+	switch {
+	case err != nil:
+		fmt.Fprintf(stderr, "whiff: %v\n", err)
+		return 1
+	case resp.Error != "":
+		fmt.Fprintln(stderr, resp.Error)
+		return 1
+	}
+	return result("reset", resp, stdout, stderr)
 }
 
 // sub prints each value published to topics, every topic if there are

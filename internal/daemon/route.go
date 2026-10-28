@@ -91,7 +91,6 @@ type state struct {
 	answers []answered                  // the latest answers, oldest first
 	waiters map[int64][]chan puff.Value // whiff waits, by the id they wait for
 	subs    map[*watcher]bool           // clients' subscriptions: whiff sub
-	states  map[string]string           // each stateful service's last committed state, printed
 }
 
 // watcher is a client subscribed to topics, every topic if topics is nil.
@@ -105,7 +104,7 @@ type watcher struct {
 // route owns the state until the daemon stops; others reach it through do.
 func (d *daemon) route() {
 	st := &state{addrs: map[string]*service{}, jobs: map[int64]*job{}, waiters: map[int64][]chan puff.Value{},
-		subs: map[*watcher]bool{}, states: map[string]string{}}
+		subs: map[*watcher]bool{}}
 	for {
 		select {
 		case op := <-d.ops:
@@ -206,6 +205,25 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 					return nil, fmt.Errorf("want an address like :gh, got %s", puff.Print(args[0]))
 				}
 				return d.marker().describe(string(addr)), nil
+			}},
+		{Name: "reset", Args: "service", Mark: puff.MarkWrite,
+			Doc: "Deletes service's stored state and reloads it from its file, so it starts from its :state again: (ok :done), or (err e).",
+			Fn: func(c *puff.Call, args []puff.Value) (puff.Value, error) {
+				addr, ok := args[0].(puff.Keyword)
+				if !ok {
+					return nil, fmt.Errorf("want a service like :gh, got %s", puff.Print(args[0]))
+				}
+				if string(addr) == cur.addr {
+					// Its reload would wait for this handler to end.
+					return puff.Errorf("bad-call", "a service can't reset itself"), nil
+				}
+				r := reset{name: string(addr), done: make(chan puff.Value, 1)}
+				select {
+				case d.resets <- r:
+				case <-c.Ctx.Done():
+					return nil, c.Ctx.Err()
+				}
+				return <-r.done, nil
 			}},
 		{Name: "inbox", Args: "[fn]", Mark: puff.MarkRead,
 			Doc: "This service's messages waiting for a reply, oldest first, each {:id :fn :args :from :cwd :at}; only fn's, a keyword, if given.",

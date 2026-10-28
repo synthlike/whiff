@@ -212,18 +212,19 @@ func (d *daemon) loadSource(file, src, addr string) (*service, error) {
 // initState gives s its state: the last one committed under its name, else
 // init's value.
 func (s *service) initState(ctx context.Context, init *puff.Form) error {
-	var kept string
-	found := false
 	if s.keep {
-		s.d.do(func(st *state) { kept, found = st.states[s.name] })
-	}
-	if found {
-		v, err := puff.ReadValue(kept)
+		p, found, err := s.d.storedState(s.name)
 		if err != nil {
 			return err
 		}
-		s.state = v
-		return nil
+		if found {
+			v, err := puff.ReadValue(p)
+			if err != nil {
+				return fmt.Errorf(":%s's stored state: %v; whiff reset %s starts it afresh", s.name, err, s.name)
+			}
+			s.state = v
+			return nil
+		}
 	}
 	v, err := s.env.LoadForms(ctx, []*puff.Form{init})
 	if err != nil {
@@ -238,14 +239,16 @@ func (s *service) initState(ctx context.Context, init *puff.Form) error {
 	return nil
 }
 
-// commit makes v s's state, once it is kept: only data can be.
+// commit makes v s's state, once it is stored: only data can be.
 func (s *service) commit(v puff.Value) error {
 	p := puff.Print(v)
 	if _, err := puff.ReadValue(p); err != nil {
 		return fmt.Errorf("can't keep %s as state: only data can be", p)
 	}
 	if s.keep {
-		s.d.do(func(st *state) { st.states[s.name] = p })
+		if err := s.d.storeState(s.name, p); err != nil {
+			return fmt.Errorf("can't store the state: %v", err)
+		}
 	}
 	s.state = v
 	return nil

@@ -82,6 +82,8 @@ func TestRun(t *testing.T) {
 		{name: "send err", args: []string{"send", "nobody/x"}, code: 1,
 			wantErr: "whiff: {:kind :no-address :message \"no address :nobody\"}\n"},
 		{name: "history", args: []string{"history"}, outHas: `  call  user   client -> :greet/hello "bob"  (ok "hello, bob")  `},
+		{name: "reset a service without state", args: []string{"reset", "greet"}, code: 1,
+			wantErr: "whiff: {:kind :stateless :message \":greet has no state\"}\n"},
 		{name: "stop", args: []string{"stop"}},
 		{name: "stopped", args: []string{"stop"}, wantErr: "whiff isn't running\n"},
 		{name: "eval starts it again", args: []string{"eval", "(os/cwd)"}, wantOut: quote(t) + "\n"},

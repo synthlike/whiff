@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -51,6 +52,8 @@ func (sv *supervisor) run() {
 					sv.load(file, w)
 				}
 			}
+		case r := <-sv.d.resets:
+			r.done <- sv.reset(r.name)
 		case <-sv.d.ctx.Done():
 			return
 		}
@@ -89,16 +92,17 @@ func (sv *supervisor) scan() {
 }
 
 // load loads file and puts it in place of the service running from it, if
-// any. A file that fails to load leaves that service running.
-func (sv *supervisor) load(file string, w *watched) {
+// any. A file that fails to load leaves that service running, and the
+// error is noted and returned.
+func (sv *supervisor) load(file string, w *watched) error {
 	s, err := sv.d.loadService(file)
 	switch {
 	case err != nil && w.s != nil:
 		sv.d.note("%v; :%s keeps running as it was", err, w.s.name)
-		return
+		return err
 	case err != nil:
 		sv.d.note("%v", err)
-		return
+		return err
 	}
 	old := w.s
 	if old != nil {
@@ -116,14 +120,52 @@ func (sv *supervisor) load(file string, w *watched) {
 	})
 	if held {
 		close(s.quit) // drops the timers its :start set
-		sv.d.note("%s: :%s is held by a client, so the service isn't loaded", file, s.name)
-		return
+		err := fmt.Errorf("%s: :%s is held by a client, so the service isn't loaded", file, s.name)
+		sv.d.note("%v", err)
+		return err
 	}
 	if old != nil {
 		sv.d.stop(old)
 	}
 	w.s = s
 	sv.d.wg.Go(func() { s.run(sv.d.ctx) })
+	return nil
+}
+
+// reset is whiff reset name, for the supervisor: done gets its Result.
+type reset struct {
+	name string
+	done chan puff.Value
+}
+
+// reset deletes service name's stored state and reloads it from its file,
+// so it starts from init: (ok :done), or (err e) if there is no such
+// service with state, or its file doesn't load, which leaves it running
+// with its stored state as it was.
+func (sv *supervisor) reset(name string) puff.Value {
+	for file, w := range sv.files {
+		if w.s == nil || w.s.name != name {
+			continue
+		}
+		if !w.s.stateful {
+			return puff.Errorf("stateless", ":%s has no state", name)
+		}
+		p, found, err := sv.d.storedState(name)
+		if err == nil {
+			err = sv.d.forgetState(name)
+		}
+		if err != nil {
+			return puff.Errorf("store", "%v", err)
+		}
+		if err := sv.load(file, w); err != nil {
+			if found {
+				sv.d.storeState(name, p)
+			}
+			return puff.Errorf("load", "%v", err)
+		}
+		return puff.Done
+	}
+	return puff.Errorf("no-address", "no service :%s", name)
 }
 
 // remove takes s's address away and stops it: a service whose file is

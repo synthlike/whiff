@@ -232,7 +232,7 @@ func TestLoadService(t *testing.T) {
 		{"statetwice", `(srv statetwice :state 0 :state 1)`, ":1:26: srv takes :state once"},
 		{"statenoparam", `(srv statenoparam :state 0 (on (f) "Doc." (ok 1)))`, ":1:28: on in a service with :state wants (fn state params...)"},
 		{"statesub", `(srv statesub :state 0 (on :t (v) (ok v)))`, ":1:24: on :topic in a service with :state wants (state v) and a body"},
-		{"marknodoc",`(srv marknodoc (on (f) :read (ok 1)))`, ":1:16: on wants (fn params...), a doc string and a body"},
+		{"marknodoc", `(srv marknodoc (on (f) :read (ok 1)))`, ":1:16: on wants (fn params...), a doc string and a body"},
 		{"sub", `(srv sub (on :t (v) (ok v)))`, ""},
 		{"subnoparam", `(srv subnoparam (on :t (ok 1)))`, ":1:17: on :topic wants (v), one parameter for the value, and a body"},
 		{"subtwo", `(srv subtwo (on :t (a b) (ok 1)))`, ":1:13: on :topic wants (v), one parameter for the value, and a body"},

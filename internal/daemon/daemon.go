@@ -16,6 +16,8 @@ import (
 	"syscall"
 	"time"
 
+	"go.etcd.io/bbolt"
+
 	"github.com/synthlike/whiff/internal/puff"
 	"github.com/synthlike/whiff/internal/rpc"
 )
@@ -34,6 +36,8 @@ type daemon struct {
 	ctx         context.Context
 	ops         chan func(st *state)
 	restarts    chan *service // services that faulted, for the supervisor
+	resets      chan reset    // whiff reset, for the supervisor
+	db          *bbolt.DB     // whiff.db: see store.go
 	log         io.Writer     // notes, and what services print
 	callTimeout time.Duration
 	base        *puff.Env    // only looked up in, for builtins' marks
@@ -42,8 +46,8 @@ type daemon struct {
 }
 
 // Run serves clients on the socket in dir until a client stops it or ctx
-// ends, with the services in services. A lock file in dir keeps it to one
-// daemon per directory.
+// ends, with the services in services and their state in whiff.db next to
+// it. A lock file in dir keeps it to one daemon per directory.
 func Run(ctx context.Context, dir, services string) error {
 	if err := rpc.PrepareDir(dir); err != nil {
 		return err
@@ -59,6 +63,14 @@ func Run(ctx context.Context, dir, services string) error {
 		}
 		return err
 	}
+	// A daemon that is stopping releases the lock before whiff.db, which it
+	// holds until its services finish; openStore waits for it.
+	db, err := openStore(services)
+	if err != nil {
+		lock.Close()
+		return err
+	}
+	defer db.Close()
 	// The lock says no daemon is running, so a socket here is left over.
 	path := rpc.SocketPath(dir)
 	os.Remove(path)
@@ -82,7 +94,7 @@ func Run(ctx context.Context, dir, services string) error {
 	}()
 
 	d := &daemon{ctx: ctx, ops: make(chan func(*state)), restarts: make(chan *service, 16),
-		log: os.Stderr, callTimeout: defaultCallTimeout}
+		resets: make(chan reset), db: db, log: os.Stderr, callTimeout: defaultCallTimeout}
 	d.base = d.newEnv(io.Discard, &caller{})
 	d.wg.Go(d.route)
 	for _, s := range []*service{d.jobsService(), d.meService()} {
