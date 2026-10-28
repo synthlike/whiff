@@ -129,8 +129,8 @@ func TestGuard(t *testing.T) {
 
 func TestSniff(t *testing.T) {
 	s, base, c := sniffing(t, map[string]string{
-		"greet":   `(srv greet (on (hello name) "Greets name." (ok (str "hello, " name))))`,
-		"counter": `(srv counter :state {:n 1} (on (get s) "The count." (ok s)))`,
+		"greet":   `(service greet (on (hello name) "Greets name." (ok (str "hello, " name))))`,
+		"counter": `(service counter :state {:n 1} (on (get s) "The count." (ok s)))`,
 	})
 	cookie := &http.Cookie{Name: fmt.Sprintf("sniff-%d", s.port), Value: s.token}
 	get := func(path string) *http.Response {

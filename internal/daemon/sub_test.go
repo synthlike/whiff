@@ -10,7 +10,7 @@ import (
 func TestSub(t *testing.T) {
 	dir := tempDir(t)
 	writeServices(t, dir, map[string]string{
-		"git": `(srv git (on (poke v) "Publishes v." (publish :git/changed v)))`,
+		"git": `(service git (on (poke v) "Publishes v." (publish :git/changed v)))`,
 	})
 	start(t, dir)
 	c := dial(t, dir)

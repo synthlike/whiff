@@ -14,14 +14,14 @@ func TestJobs(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeServices(t, dir, map[string]string{
-		"builder": `(srv builder
+		"builder": `(service builder
   (on (build) "Runs a job in the caller's directory." (call :jobs/run ["cat" "here"]))
   (on (via) "Gets a job from hander." (call :hander/cat "handed on"))
   (on (whiff/done id r) "Writes the job's output."
     (match r [(ok {:stdout out}) (file/write "` + got + `" out)])))`,
-		"watch": `(srv watch
+		"watch": `(service watch
   (on :jobs/done (v) (ok v)))`,
-		"hander": `(srv hander
+		"hander": `(service hander
   (on (cat text) "Hands its caller a job." (hand-on (call :jobs/run ["cat"] {:stdin text})))
   (on (late) "Hands on a job that is done already, twice."
     (let [r (call :jobs/run ["echo" "late"])]
@@ -34,8 +34,8 @@ func TestJobs(t *testing.T) {
   (on (pass x) "Hands on an ask." (hand-on (call :box/q x)))
   (on (bogus) "Hands on what isn't its own." (hand-on (err {:kind :pending :id 999})))
   (on (plain) "Hands on a value." (hand-on (ok 1))))`,
-		"box":  `(srv box (ask (q x) "Waits."))`,
-		"jobs": `(srv jobs)`,
+		"box":  `(service box (ask (q x) "Waits."))`,
+		"jobs": `(service jobs)`,
 	})
 	start(t, dir)
 	c := dial(t, dir)

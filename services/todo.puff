@@ -5,7 +5,7 @@
 ;   whiff call todo/done 12
 ;   whiff call todo/view | fzf | whiff act   ; pick an open item to tick
 
-(srv todo
+(service todo
   (def file "TODO.md")
 
   ; An item is "- [ ] text" or "* [x] text", at any indent. Lines indented

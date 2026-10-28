@@ -12,7 +12,7 @@ func TestState(t *testing.T) {
 	set(t, &pollInterval, 10*time.Millisecond)
 
 	dir := tempDir(t)
-	counter := `(srv counter :state 0
+	counter := `(service counter :state 0
   (on (get n) "The count." (ok n))
   (on (add n k) :update "Adds k." (ok [(+ n k) (+ n k)]))
   (on (refuse n) :update "Fails, keeping the count." (err {:kind :nope}))
@@ -23,8 +23,8 @@ func TestState(t *testing.T) {
   (on :bump (n v) :update (ok (+ n v))))`
 	writeServices(t, dir, map[string]string{
 		"counter": counter,
-		"plain":   `(srv plain (on (f) "Answers." (ok 1)))`,
-		"started": `(srv started :state []
+		"plain":   `(service plain (on (f) "Answers." (ok 1)))`,
+		"started": `(service started :state []
   :start (fn (s) (ok (vector/append s :started)))
   (on (get s) "The state." (ok s)))`,
 	})
@@ -95,7 +95,7 @@ func TestState(t *testing.T) {
 		`(on (get n) "The count." (ok n))`, `(on (get n) "The count." (ok n)) (on (new n) "New." (ok :new))`, 1))
 	becomes(`(call :counter/new)`, `(ok :new)`)
 	becomes(get, `(ok 5)`)
-	reload("started", `(srv started :state []
+	reload("started", `(service started :state []
   :start (fn (s) (ok (vector/append s :again)))
   (on (get s) "The state." (ok s)))`)
 	becomes(`(call :started/get)`, `(ok [:started :again])`)
@@ -109,7 +109,7 @@ func TestState(t *testing.T) {
 
 	// A reset whose file doesn't load keeps the service and its state.
 	fixed := strings.Replace(counter, ":state 0", ":state 100", 1)
-	reload("counter", "(srv counter")
+	reload("counter", "(service counter")
 	historyHas(t, c, ":counter keeps running as it was")
 	becomes(kind(`(reset :counter)`), `:load`)
 	becomes(get, `(ok 101)`)
@@ -133,9 +133,9 @@ func TestState(t *testing.T) {
 func TestStateOf(t *testing.T) {
 	dir := tempDir(t)
 	writeServices(t, dir, map[string]string{
-		"counter": `(srv counter :state {:n 0}
+		"counter": `(service counter :state {:n 0}
   (on (add s k) :update "Adds k." (ok [:done {:n (+ (map/get-or s :n 0) k)}])))`,
-		"plain": `(srv plain (on (f) "Answers." (ok 1)))`,
+		"plain": `(service plain (on (f) "Answers." (ok 1)))`,
 	})
 	start(t, dir)
 	c := dial(t, dir)

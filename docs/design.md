@@ -96,7 +96,7 @@ only ever handling one message.
 
 ## Services
 
-A service is a file, `(srv name forms...)`: `(on (fn params...) "doc"
+A service is a file, `(service name forms...)`: `(on (fn params...) "doc"
 body...)` handlers, `(ask ...)` functions, `(on :topic (v) ...)`
 subscribers and private `def`s.
 
@@ -104,7 +104,7 @@ subscribers and private `def`s.
   a saved file reloads, a deleted one unloads, a fault restarts the service
   from its file. `whiff try file.puff fn` loads a file under a scratch
   address, calls it once and unloads it.
-- **State.** `(srv gh :state {} ...)` gives every handler the state as its
+- **State.** `(service gh :state {} ...)` gives every handler the state as its
   first parameter. An `:update` handler returns `(ok [reply state])`, or
   `(ok state)` for a subscriber or `whiff/done`, where nobody waits for a
   reply; the new state is committed to `whiff.db` before the reply is sent,

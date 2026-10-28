@@ -12,14 +12,14 @@ func TestPublish(t *testing.T) {
 	dir := tempDir(t)
 	logged, mirrored := filepath.Join(dir, "logged"), filepath.Join(dir, "mirrored")
 	writeServices(t, dir, map[string]string{
-		"log": `(srv log
+		"log": `(service log
   (on :note/added (v) (file/write "` + logged + `" v)))`,
-		"mirror": `(srv mirror
+		"mirror": `(service mirror
   (on :note/added (v) (file/write "` + mirrored + `" v))
   (on (shout v) "Publishes v." (publish :note/added v)))`,
-		"bad": `(srv bad
+		"bad": `(service bad
   (on :note/added (v) (+ 1 1.0)))`,
-		"quiet": `(srv quiet
+		"quiet": `(service quiet
   (on :ping/x (v) (ok v))
   (on (ping) "Publishes to a reader." (publish :ping/x 1)))`,
 	})

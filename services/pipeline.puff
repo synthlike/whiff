@@ -17,7 +17,7 @@
 ; running when whiff stopped stays where it was (jobs don't survive a
 ; restart yet): cancel it.
 
-(srv pipeline :state {:next 1 :runs {} :jobs {}}
+(service pipeline :state {:next 1 :runs {} :jobs {}}
   (def rounds 3)
   (def home (path/join (unwrap (env/get "HOME")) ".whiff" "pipelines"))
 

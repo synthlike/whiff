@@ -17,7 +17,7 @@ import (
 // it.
 var loadTimeout = 5 * time.Second
 
-// service is a loaded (srv name ...), or an address a client holds, whose
+// service is a loaded (service name ...), or an address a client holds, whose
 // functions are native and forward to it: its env belongs to the goroutine
 // running it. Its name, fns, code and forms don't change after loading, so
 // anyone can read them.
@@ -28,7 +28,7 @@ type service struct {
 	fns     map[string]handler
 	subs    map[string]subscriber   // by topic
 	code    map[string][]*puff.Form // the body or value of each handler and def
-	forms   []*puff.Form            // srv's body, as written
+	forms   []*puff.Form            // the service form's body, as written
 	mailbox chan message
 	cur     caller // whiff's builtins in env act for it
 	d       *daemon
@@ -74,7 +74,7 @@ type handler struct {
 	optional int // native: how many of the last params can be left out
 }
 
-// loadService reads and evaluates a service file: one (srv name forms...),
+// loadService reads and evaluates a service file: one (service name forms...),
 // named like the file. Each on becomes a def, so the service calls its own
 // functions by plain name.
 func (d *daemon) loadService(file string) (*service, error) {
@@ -92,13 +92,13 @@ func (d *daemon) loadSource(file, src, addr string) (*service, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(forms) != 1 || !isList(forms[0], "srv") {
-		return nil, &puff.Error{Pos: puff.Pos{File: file, Line: 1, Col: 1}, Msg: "a service file holds one (srv name ...)"}
+	if len(forms) != 1 || !isList(forms[0], "service") {
+		return nil, &puff.Error{Pos: puff.Pos{File: file, Line: 1, Col: 1}, Msg: "a service file holds one (service name ...)"}
 	}
 	srv := forms[0]
 	name := strings.TrimSuffix(filepath.Base(file), ".puff")
 	if len(srv.Items) < 2 || srv.Items[1].Kind != puff.FormSymbol || srv.Items[1].Name != name {
-		return nil, &puff.Error{Pos: srv.Pos, Msg: fmt.Sprintf("srv wants its name, %s, as in its file name", name)}
+		return nil, &puff.Error{Pos: srv.Pos, Msg: fmt.Sprintf("service wants its name, %s, as in its file name", name)}
 	}
 	if name == "jobs" || name == "me" {
 		return nil, &puff.Error{Pos: srv.Pos, Msg: ":" + name + " is whiff's own address; rename the file"}
@@ -117,9 +117,9 @@ func (d *daemon) loadSource(file, src, addr string) (*service, error) {
 		opt, ok := opts[k]
 		switch {
 		case !ok:
-			return nil, &puff.Error{Pos: body[0].Pos, Msg: "unknown srv option " + body[0].String()}
+			return nil, &puff.Error{Pos: body[0].Pos, Msg: "unknown service option " + body[0].String()}
 		case *opt.f != nil:
-			return nil, &puff.Error{Pos: body[0].Pos, Msg: "srv takes " + body[0].String() + " once"}
+			return nil, &puff.Error{Pos: body[0].Pos, Msg: "service takes " + body[0].String() + " once"}
 		case len(body) < 2:
 			return nil, &puff.Error{Pos: body[0].Pos, Msg: opt.want}
 		}

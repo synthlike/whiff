@@ -15,14 +15,14 @@ func TestReviewGate(t *testing.T) {
 	dir := tempDir(t)
 	file := filepath.Join(dir, "notes")
 	writeServices(t, dir, map[string]string{
-		"notes": `(srv notes
+		"notes": `(service notes
   (on (add text) "Appends text." (file/append "` + file + `" text))
   (on (list) "Reads them." (file/read-text "` + file + `")))`,
-		"asker": `(srv asker
+		"asker": `(service asker
   (on (go) "Asks you." (call :me/ask "add y?"))
   (on (agent) "Asks the agent." (call :agent/1/tell "add y?"))
   (on (whiff/done id r) "Adds y." (call :notes/add "y")))`,
-		"batch": `(srv batch
+		"batch": `(service batch
   (on (twice text) "Adds text twice." (do (try (call :notes/add text)) (call :notes/add text))))`,
 	})
 	start(t, dir)
@@ -189,7 +189,7 @@ func TestEvalGate(t *testing.T) {
 	file := filepath.Join(dir, "notes")
 	os.WriteFile(file, []byte("a"), 0o600)
 	writeServices(t, dir, map[string]string{
-		"notes": `(srv notes
+		"notes": `(service notes
   (on (add text) "Appends text." (file/append "` + file + `" text))
   (on (list) "Reads them." (file/read-text "` + file + `")))`,
 	})
@@ -288,10 +288,10 @@ func TestPublishGate(t *testing.T) {
 	dir := tempDir(t)
 	file := filepath.Join(dir, "notes")
 	writeServices(t, dir, map[string]string{
-		"notes": `(srv notes
+		"notes": `(service notes
   (on :t/write (v) (file/append "` + file + `" v))
   (on :t/read (v) (ok v)))`,
-		"relay": `(srv relay
+		"relay": `(service relay
   (on (shout v) :read "Publishes v; claims :read, so its call isn't held." (publish :t/write v)))`,
 	})
 	start(t, dir)

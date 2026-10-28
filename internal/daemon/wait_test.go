@@ -10,7 +10,7 @@ import (
 func TestWait(t *testing.T) {
 	dir := tempDir(t)
 	writeServices(t, dir, map[string]string{
-		"todo": `(srv todo
+		"todo": `(service todo
   (ask (suggest text) "Suggests a todo.")
   (on (answer id v) "Answers id." (reply id (ok v))))`,
 	})

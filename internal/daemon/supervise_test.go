@@ -31,7 +31,7 @@ func TestReload(t *testing.T) {
 		}
 	}
 	writeServices(t, dir, nil)
-	write(greet, `(srv greet (on (hello name) "Greets name." (ok (string/concat "hello, " name))))`)
+	write(greet, `(service greet (on (hello name) "Greets name." (ok (string/concat "hello, " name))))`)
 	start(t, dir)
 	c := dial(t, dir)
 
@@ -56,17 +56,17 @@ func TestReload(t *testing.T) {
 	hello := `(call :greet/hello "ann")`
 	becomes(hello, `(ok "hello, ann")`)
 
-	write(greet, `(srv greet (on (hello name) "Greets name." (ok (string/concat "hi, " name))))`)
+	write(greet, `(service greet (on (hello name) "Greets name." (ok (string/concat "hi, " name))))`)
 	becomes(hello, `(ok "hi, ann")`)
 
 	// A file that doesn't load leaves the running version.
-	write(greet, `(srv greet (on (hello name) "Greets name."`)
-	historyHas(t, c, greet+":1:12: no closing ')'; :greet keeps running as it was")
+	write(greet, `(service greet (on (hello name) "Greets name."`)
+	historyHas(t, c, greet+":1:16: no closing ')'; :greet keeps running as it was")
 	becomes(hello, `(ok "hi, ann")`)
 
 	// New files load; removed ones take their service away.
 	late := filepath.Join(services, "late.puff")
-	write(late, `(srv late (on (here) "Answers." (ok :here)))`)
+	write(late, `(service late (on (here) "Answers." (ok :here)))`)
 	becomes(`(call :late/here)`, `(ok :here)`)
 	if err := os.Remove(late); err != nil {
 		t.Fatal(err)
@@ -77,7 +77,7 @@ func TestReload(t *testing.T) {
 func TestRestartAfterFault(t *testing.T) {
 	dir := tempDir(t)
 	writeServices(t, dir, map[string]string{
-		"boom": `(srv boom
+		"boom": `(service boom
   (on (boom) "Faults." (+ 1 1.0))
   (on (fine) "Answers." (ok :fine)))`,
 	})

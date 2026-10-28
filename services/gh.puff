@@ -11,7 +11,7 @@
 ; Its state is each watched directory's open pull requests, as prs gives
 ; them, as it last saw them.
 
-(srv gh :state {}
+(service gh :state {}
   :start (fn (state) (do (send-after every :tick) (ok state)))
 
   (def every 5m) ; how often it looks at the watched repositories

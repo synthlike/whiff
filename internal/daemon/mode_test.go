@@ -14,12 +14,12 @@ func TestModes(t *testing.T) {
 	dir := tempDir(t)
 	file := filepath.Join(dir, "notes")
 	writeServices(t, dir, map[string]string{
-		"notes": `(srv notes
+		"notes": `(service notes
   (on (add text) "Appends text." (file/append "` + file + `" text))
   (on (list) "Reads them." (file/read-text "` + file + `")))`,
-		"relay": `(srv relay
+		"relay": `(service relay
   (on (add text) "Adds text to notes." (call :notes/add text)))`,
-		"tally": `(srv tally
+		"tally": `(service tally
   (on :t/x (v) (call :notes/add v)))`,
 	})
 	start(t, dir)
@@ -135,10 +135,10 @@ func TestSession(t *testing.T) {
 	dir := tempDir(t)
 	file := filepath.Join(dir, "notes")
 	writeServices(t, dir, map[string]string{
-		"notes": `(srv notes
+		"notes": `(service notes
   (on (add text) "Appends text." (file/append "` + file + `" text))
   (on (list) "Reads them." (file/read-text "` + file + `")))`,
-		"tally": `(srv tally
+		"tally": `(service tally
   (on :t/x (v) (call :notes/add v)))`,
 	})
 	start(t, dir)

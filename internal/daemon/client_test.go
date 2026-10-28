@@ -14,7 +14,7 @@ func TestClient(t *testing.T) {
 
 	dir := tempDir(t)
 	writeServices(t, dir, map[string]string{
-		"relay": `(srv relay
+		"relay": `(service relay
   (on (tell text) "Tells hiss." (call :hiss/toast text)))`,
 	})
 	start(t, dir)

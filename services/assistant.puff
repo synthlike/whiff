@@ -13,7 +13,7 @@
 ; sessions per directory) and the ids of the turns it started. Its turns
 ; are :agent's. Copy the file under another name for another agent.
 
-(srv assistant
+(service assistant
   (def name (string/slice (value/to-string (self)) 1))
   (def home (path/join (unwrap (env/get "HOME")) ".whiff" "agents" name))
   (def session-file (path/join home "session")) ; the conversation's id

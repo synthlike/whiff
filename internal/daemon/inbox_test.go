@@ -13,7 +13,7 @@ func TestInbox(t *testing.T) {
 	dir := tempDir(t)
 	got := filepath.Join(dir, "got")
 	writeServices(t, dir, map[string]string{
-		"todo": `(srv todo
+		"todo": `(service todo
   (ask (suggest text) "Suggests a todo.")
   (ask (quick) "Waits a moment." :expires 50ms)
   (def (timeless items) (vector/map items (fn (a) (map/delete a :at))))
@@ -22,7 +22,7 @@ func TestInbox(t *testing.T) {
   (on (recent) "Whether each message came in the last minute."
     (ok (vector/map (inbox) (fn (a) (match a [{:at t} (< (time/since t) 1m)])))))
   (on (answer id v) "Answers id." (reply id (ok v))))`,
-		"asker": `(srv asker
+		"asker": `(service asker
   (on (ask text) "Asks todo." (call :todo/suggest text))
   (on (whiff/done id r) "Writes the answer."
     (match r
@@ -105,11 +105,11 @@ func TestInbox(t *testing.T) {
 func TestAskDef(t *testing.T) {
 	dir := tempDir(t)
 	tests := []struct{ name, src, want string }{
-		{"ok", `(srv ok (ask (f x) :write "Doc." :expires 1d))`, ""},
-		{"nodoc", `(srv nodoc (ask (f x)))`, ":1:12: ask wants (fn params...) and a doc string"},
-		{"body", `(srv body (ask (f) "Doc." (ok 1)))`, ":1:27: ask takes :expires d after its doc string, got (ok 1)"},
-		{"expires", `(srv expires (ask (f) "Doc." :expires 1))`, ":1:39: want a positive :expires duration, got 1"},
-		{"clash", `(srv clash (ask (f) "Doc.") (on (f) "Doc." (ok 1)))`, ":1:34: f is already defined at"},
+		{"ok", `(service ok (ask (f x) :write "Doc." :expires 1d))`, ""},
+		{"nodoc", `(service nodoc (ask (f x)))`, ":1:16: ask wants (fn params...) and a doc string"},
+		{"body", `(service body (ask (f) "Doc." (ok 1)))`, ":1:31: ask takes :expires d after its doc string, got (ok 1)"},
+		{"expires", `(service expires (ask (f) "Doc." :expires 1))`, ":1:43: want a positive :expires duration, got 1"},
+		{"clash", `(service clash (ask (f) "Doc.") (on (f) "Doc." (ok 1)))`, ":1:38: f is already defined at"},
 	}
 	d := &daemon{ctx: context.Background()}
 	for _, tt := range tests {

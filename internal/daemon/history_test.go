@@ -13,10 +13,10 @@ import (
 func TestHistory(t *testing.T) {
 	dir := tempDir(t)
 	writeServices(t, dir, map[string]string{
-		"greet": `(srv greet
+		"greet": `(service greet
   (on (hello name) "Greets name." (ok (string/concat "hello, " name)))
   (on (relay name) "Greets name through a send." (send :hello name)))`,
-		"broken": `(srv broken`,
+		"broken": `(service broken`,
 	})
 	start(t, dir)
 	c := dial(t, dir)
@@ -58,7 +58,7 @@ func TestTrace(t *testing.T) {
 
 	dir := tempDir(t)
 	writeServices(t, dir, map[string]string{
-		"greet": `(srv greet (on (hello name) "Greets name." (ok (string/concat "hello, " name))))`,
+		"greet": `(service greet (on (hello name) "Greets name." (ok (string/concat "hello, " name))))`,
 	})
 	start(t, dir)
 	c := dial(t, dir)
@@ -97,7 +97,7 @@ func TestTrace(t *testing.T) {
 	if want := (rpc.Entry{Kind: "call", Origin: "user", To: "greet/hello", Args: `["bob"]`, Reply: `(ok "hello, bob")`}); e != want {
 		t.Errorf("entry:\n%+v\nwant\n%+v", e, want)
 	}
-	writeServices(t, dir, map[string]string{"broken": `(srv broken`})
+	writeServices(t, dir, map[string]string{"broken": `(service broken`})
 	if e := next(); e.Kind != "note" || !strings.HasSuffix(e.Note, "broken.puff:1:1: no closing ')'") || e.Origin != "" {
 		t.Errorf("note: %+v", e)
 	}

@@ -25,7 +25,7 @@ func TestRun(t *testing.T) {
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	services := filepath.Join(dir, "services")
 	os.Mkdir(services, 0o700)
-	greet := `(srv greet
+	greet := `(service greet
   (on (hello name) "Greets name."
     (ok (string/concat "hello, " name)))
   (on (echo x) "Returns x."
@@ -42,10 +42,10 @@ func TestRun(t *testing.T) {
 	// A greet being tried, beside the installed one.
 	trial, broken := filepath.Join(dir, "greet.puff"), filepath.Join(dir, "x", "greet.puff")
 	os.Mkdir(filepath.Join(dir, "x"), 0o700)
-	if err := os.WriteFile(trial, []byte(`(srv greet (on (hello name) "Greets name." (ok (string/concat "hi, " name))))`), 0o600); err != nil {
+	if err := os.WriteFile(trial, []byte(`(service greet (on (hello name) "Greets name." (ok (string/concat "hi, " name))))`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(broken, []byte("(srv greet\n  (on (hello) \"Doc.\" (ok x)))"), 0o600); err != nil {
+	if err := os.WriteFile(broken, []byte("(service greet\n  (on (hello) \"Doc.\" (ok x)))"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("WHIFF_TEST_DIR", dir)

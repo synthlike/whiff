@@ -184,7 +184,7 @@ esac
 	prs("[" + pr12 + "]")
 	writeServices(t, dir, map[string]string{
 		"gh": strings.Replace(string(src), "(def every 5m)", "(def every 20ms)", 1),
-		"seen": `(srv seen :state []
+		"seen": `(service seen :state []
   (on :gh/changed (s v) :update (ok (vector/append s v)))
   (on (numbers s) "The numbers of each change's pull requests."
     (ok (vector/map s (fn (v) (match v [{:prs ps} (vector/map ps (fn (p) (match p [{:number n} n])))]))))))`,
@@ -400,7 +400,7 @@ echo "$mode in $(basename "$PWD"): $msg"
 	os.WriteFile(filepath.Join(helperHome, "started"), []byte("old-id"), 0o600)
 	writeServices(t, dir, map[string]string{
 		"assistant": string(src),
-		"helper":    strings.Replace(string(src), "(srv assistant", "(srv helper", 1),
+		"helper":    strings.Replace(string(src), "(service assistant", "(service helper", 1),
 	})
 	start(t, dir)
 	c := dial(t, dir)

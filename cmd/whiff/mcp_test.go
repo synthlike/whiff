@@ -22,7 +22,7 @@ func TestMCP(t *testing.T) {
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	services := filepath.Join(dir, "services")
 	os.Mkdir(services, 0o700)
-	greet := `(srv greet
+	greet := `(service greet
   (on (hello name) "Greets name."
     (ok (string/concat "hello, " name)))
   (on (save x) :write "Saves x."

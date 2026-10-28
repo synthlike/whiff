@@ -27,7 +27,7 @@ func TestCall(t *testing.T) {
 
 	dir := tempDir(t)
 	writeServices(t, dir, map[string]string{
-		"greet": `(srv greet
+		"greet": `(service greet
   (def (greeting name) (string/concat "hello, " name))
   (on (hello name) "Greets name."
     (ok (greeting name)))
@@ -43,10 +43,10 @@ func TestCall(t *testing.T) {
     (ok greeting))
   (on (cwd) "The caller's directory."
     (ok (os/cwd))))`,
-		"relay": `(srv relay
+		"relay": `(service relay
   (on (hello name) "Asks greet."
     (call :greet/hello name)))`,
-		"slow": `(srv slow
+		"slow": `(service slow
   (on (spin) "Never ends."
     (loop [] (recur)))
   (on (fast) "Ends."
@@ -110,7 +110,7 @@ func TestSend(t *testing.T) {
 	dir := tempDir(t)
 	out := filepath.Join(dir, "out")
 	writeServices(t, dir, map[string]string{
-		"notes": `(srv notes
+		"notes": `(service notes
   (on (write path text) "Writes text to path."
     (file/write path text))
   (on (now path) "Writes to path through itself."
@@ -165,11 +165,11 @@ func TestSend(t *testing.T) {
 func TestCycle(t *testing.T) {
 	dir := tempDir(t)
 	writeServices(t, dir, map[string]string{
-		"a": `(srv a
+		"a": `(service a
   (on (ping) "Calls b, which calls back." (call :b/pong))
   (on (itself) "Calls itself." (call :itself))
   (on (fine) "Answers." (ok :fine)))`,
-		"b": `(srv b
+		"b": `(service b
   (on (pong) "Calls a." (call :a/ping))
   (on (fine) "Calls a, which isn't waiting." (call :a/fine)))`,
 	})
@@ -209,41 +209,41 @@ func TestLoadService(t *testing.T) {
 	tests := []struct {
 		name, src, want string
 	}{
-		{"ok", `(srv ok (on (f) "Doc." (ok 1)))`, ""},
-		{"read", `(srv read`, ":1:1: no closing ')'"},
-		{"two", "(srv two)\n(def x 1)", ":1:1: a service file holds one (srv name ...)"},
-		{"bare", `(def x 1)`, ":1:1: a service file holds one (srv name ...)"},
-		{"named", `(srv other)`, ":1:1: srv wants its name, named, as in its file name"},
-		{"option", `(srv option :begin 1)`, ":1:13: unknown srv option :begin"},
-		{"start", `(srv start :start (fn () (ok 1)) (on (f) "Doc." (ok 1)))`, ""},
-		{"startnofn", `(srv startnofn :start)`, ":1:16: :start wants a function"},
-		{"starttwice", `(srv starttwice :start (fn () (ok 1)) :start (fn () (ok 2)))`, ":1:39: srv takes :start once"},
-		{"startnotfn", `(srv startnotfn :start (def x 1))`, ":1:24: :start wants a function"},
-		{"starterr", `(srv starterr :start (fn () (err {:kind :nope})))`, ":1:22: :start returned (err {:kind :nope}), want (ok v)"},
-		{"startvalue", `(srv startvalue :start (fn () 5))`, ":1:24: :start returned 5, want (ok v)"},
-		{"nodoc", `(srv nodoc (on (f) (ok 1)))`, ":1:12: on wants (fn params...), a doc string and a body"},
-		{"marked", `(srv marked (on (f) :write "Doc." (ok 1)))`, ""},
-		{"badmark", `(srv badmark (on (f) :rw "Doc." (ok 1)))`, ":1:14: on takes :read or :write, and :update, after (fn params...), got :rw"},
-		{"markstwice", `(srv markstwice (on (f) :read :write "Doc." (ok 1)))`, ":1:17: on takes :read or :write, and :update, after (fn params...), got :write"},
-		{"updatestateless", `(srv updatestateless (on (f) :update "Doc." (ok 1)))`, ":1:22: :update needs a service with :state"},
-		{"subupdate", `(srv subupdate (on :t (v) :update (ok v)))`, ":1:16: :update needs a service with :state"},
-		{"askupdate", `(srv askupdate (ask (f) :update "Doc."))`, ":1:16: an ask has no state to :update"},
-		{"statenone", `(srv statenone :state)`, ":1:16: :state wants its first state"},
-		{"statetwice", `(srv statetwice :state 0 :state 1)`, ":1:26: srv takes :state once"},
-		{"statenoparam", `(srv statenoparam :state 0 (on (f) "Doc." (ok 1)))`, ":1:28: on in a service with :state wants (fn state params...)"},
-		{"statesub", `(srv statesub :state 0 (on :t (v) (ok v)))`, ":1:24: on :topic in a service with :state wants (state v) and a body"},
-		{"marknodoc", `(srv marknodoc (on (f) :read (ok 1)))`, ":1:16: on wants (fn params...), a doc string and a body"},
-		{"sub", `(srv sub (on :t (v) (ok v)))`, ""},
-		{"subnoparam", `(srv subnoparam (on :t (ok 1)))`, ":1:17: on :topic wants (v), one parameter for the value, and a body"},
-		{"subtwo", `(srv subtwo (on :t (a b) (ok 1)))`, ":1:13: on :topic wants (v), one parameter for the value, and a body"},
-		{"subtwice", `(srv subtwice (on :t (v) (ok 1)) (on :t (v) (ok 2)))`, ":1:34: already subscribed to :t at"},
-		{"subname", `(srv subname (on "t" (v) (ok 1)))`, `:1:14: on wants :topic or (fn params...), got "t"`},
-		{"subfault", `(srv subfault (on :t (v) (nope v)))`, ":1:27: unknown name nope"},
-		{"nodoc2", `(srv nodoc2 (on (f) (ok 1) (ok 2)))`, ":1:13: on wants a doc string after (fn params...)"},
-		{"unknown", `(srv unknown (on (f) "Doc." (nope)))`, ":1:30: unknown name nope"},
-		{"twice", `(srv twice (on (f) "Doc." (ok 1)) (on (f) "Doc." (ok 2)))`, ":1:40: f is already defined at"},
-		{"fault", `(srv fault (def x (+ 1 1.0)))`, ":1:19: +: can't add int and float"},
-		{"forever", `(srv forever (def x (loop [] (recur))))`, "cancelled"},
+		{"ok", `(service ok (on (f) "Doc." (ok 1)))`, ""},
+		{"read", `(service read`, ":1:1: no closing ')'"},
+		{"two", "(service two)\n(def x 1)", ":1:1: a service file holds one (service name ...)"},
+		{"bare", `(def x 1)`, ":1:1: a service file holds one (service name ...)"},
+		{"named", `(service other)`, ":1:1: service wants its name, named, as in its file name"},
+		{"option", `(service option :begin 1)`, ":1:17: unknown service option :begin"},
+		{"start", `(service start :start (fn () (ok 1)) (on (f) "Doc." (ok 1)))`, ""},
+		{"startnofn", `(service startnofn :start)`, ":1:20: :start wants a function"},
+		{"starttwice", `(service starttwice :start (fn () (ok 1)) :start (fn () (ok 2)))`, ":1:43: service takes :start once"},
+		{"startnotfn", `(service startnotfn :start (def x 1))`, ":1:28: :start wants a function"},
+		{"starterr", `(service starterr :start (fn () (err {:kind :nope})))`, ":1:26: :start returned (err {:kind :nope}), want (ok v)"},
+		{"startvalue", `(service startvalue :start (fn () 5))`, ":1:28: :start returned 5, want (ok v)"},
+		{"nodoc", `(service nodoc (on (f) (ok 1)))`, ":1:16: on wants (fn params...), a doc string and a body"},
+		{"marked", `(service marked (on (f) :write "Doc." (ok 1)))`, ""},
+		{"badmark", `(service badmark (on (f) :rw "Doc." (ok 1)))`, ":1:18: on takes :read or :write, and :update, after (fn params...), got :rw"},
+		{"markstwice", `(service markstwice (on (f) :read :write "Doc." (ok 1)))`, ":1:21: on takes :read or :write, and :update, after (fn params...), got :write"},
+		{"updatestateless", `(service updatestateless (on (f) :update "Doc." (ok 1)))`, ":1:26: :update needs a service with :state"},
+		{"subupdate", `(service subupdate (on :t (v) :update (ok v)))`, ":1:20: :update needs a service with :state"},
+		{"askupdate", `(service askupdate (ask (f) :update "Doc."))`, ":1:20: an ask has no state to :update"},
+		{"statenone", `(service statenone :state)`, ":1:20: :state wants its first state"},
+		{"statetwice", `(service statetwice :state 0 :state 1)`, ":1:30: service takes :state once"},
+		{"statenoparam", `(service statenoparam :state 0 (on (f) "Doc." (ok 1)))`, ":1:32: on in a service with :state wants (fn state params...)"},
+		{"statesub", `(service statesub :state 0 (on :t (v) (ok v)))`, ":1:28: on :topic in a service with :state wants (state v) and a body"},
+		{"marknodoc", `(service marknodoc (on (f) :read (ok 1)))`, ":1:20: on wants (fn params...), a doc string and a body"},
+		{"sub", `(service sub (on :t (v) (ok v)))`, ""},
+		{"subnoparam", `(service subnoparam (on :t (ok 1)))`, ":1:21: on :topic wants (v), one parameter for the value, and a body"},
+		{"subtwo", `(service subtwo (on :t (a b) (ok 1)))`, ":1:17: on :topic wants (v), one parameter for the value, and a body"},
+		{"subtwice", `(service subtwice (on :t (v) (ok 1)) (on :t (v) (ok 2)))`, ":1:38: already subscribed to :t at"},
+		{"subname", `(service subname (on "t" (v) (ok 1)))`, `:1:18: on wants :topic or (fn params...), got "t"`},
+		{"subfault", `(service subfault (on :t (v) (nope v)))`, ":1:31: unknown name nope"},
+		{"nodoc2", `(service nodoc2 (on (f) (ok 1) (ok 2)))`, ":1:17: on wants a doc string after (fn params...)"},
+		{"unknown", `(service unknown (on (f) "Doc." (nope)))`, ":1:34: unknown name nope"},
+		{"twice", `(service twice (on (f) "Doc." (ok 1)) (on (f) "Doc." (ok 2)))`, ":1:44: f is already defined at"},
+		{"fault", `(service fault (def x (+ 1 1.0)))`, ":1:23: +: can't add int and float"},
+		{"forever", `(service forever (def x (loop [] (recur))))`, "cancelled"},
 	}
 	set(t, &loadTimeout, 100*time.Millisecond)
 	d := &daemon{ctx: context.Background()}

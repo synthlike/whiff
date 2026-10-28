@@ -11,12 +11,12 @@ import (
 )
 
 var markServices = map[string]string{
-	"files": `(srv files
+	"files": `(service files
   (on (save path text) "Writes a file." (file/write path text))
   (on (peek path) "Reads a file." (file/read-text path))
   (on (status) :read "Runs git status, which only reads." (proc/run ["git" "status"]))
   (on (remember x) :write "Keeps x." (ok x)))`,
-	"user": `(srv user
+	"user": `(service user
   (def (writer path) (call :files/save path "x"))
   (on (via-helper path) "Saves through a helper." (writer path))
   (on (reader path) "Calls a function that reads." (call :files/peek path))
@@ -92,7 +92,7 @@ func TestLs(t *testing.T) {
 	dir := tempDir(t)
 	writeServices(t, dir, map[string]string{
 		"files": markServices["files"],
-		"greet": `(srv greet
+		"greet": `(service greet
   (on (hello name) "Greets name."
     (ok (string/concat "hello, " name)))
   (on (lost) "Calls targets that don't exist."
@@ -135,8 +135,8 @@ func TestBackstop(t *testing.T) {
 	dir := tempDir(t)
 	file := filepath.Join(dir, "f")
 	writeServices(t, dir, map[string]string{
-		"b": `(srv b (on (x) "Reads." (ok 1)))`,
-		"a": `(srv a
+		"b": `(service b (on (x) "Reads." (ok 1)))`,
+		"a": `(service a
   (on (twice) "Waits on hiss, then calls b."
     (do (call :hiss/hold) (call :b/x)))
   (on (status) :read "Runs a program, which only reads." (proc/output ["true"]))
@@ -196,7 +196,7 @@ func TestBackstop(t *testing.T) {
 		got <- resp.Value
 	}()
 	<-held
-	writeServices(t, dir, map[string]string{"b": `(srv b (on (x) "Writes." (file/write "` + file + `" "y")))`})
+	writeServices(t, dir, map[string]string{"b": `(service b (on (x) "Writes." (file/write "` + file + `" "y")))`})
 	for deadline := time.Now().Add(2 * time.Second); !strings.Contains(eval(`(describe :b)`), ":mark :write"); time.Sleep(5 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatal(":b didn't reload")

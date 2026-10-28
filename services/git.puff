@@ -3,7 +3,7 @@
 ;   whiff call git/branch
 ;   whiff call git/changes    ; the changed files, as file: what changed
 
-(srv git
+(service git
   ; git runs git with args: (ok stdout), or (err {:kind :exit}) with what
   ; it said when it fails, outside a repository say.
   (def (git args) (proc/output (vector/concat ["git" "-c" "core.quotePath=false"] args)))

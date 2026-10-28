@@ -230,7 +230,7 @@ The gate covers what reaches whiff: an agent that also has a shell can run
 
 ```lisp
 ; ~/src/notes.puff
-(srv notes :state []
+(service notes :state []
   (on (add state text) :write :update "Adds a note."
     (ok [:added (vector/append state text)]))
   (on (list state) "The notes."

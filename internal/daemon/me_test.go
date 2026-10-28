@@ -11,12 +11,12 @@ func TestMe(t *testing.T) {
 	dir := tempDir(t)
 	got := filepath.Join(dir, "got")
 	writeServices(t, dir, map[string]string{
-		"planner": `(srv planner
+		"planner": `(service planner
   (on (plan) "Asks you whether to go ahead." (call :me/ask "go ahead?"))
   (on (report) "Tells you how it went." (call :me/tell "all done"))
   (on (sneak id) "Tries to answer for you." (reply id (ok "yes")))
   (on (whiff/done id r) "Writes your answer." (file/write "` + got + `" (value/to-string r))))`,
-		"me": `(srv me)`,
+		"me": `(service me)`,
 	})
 	start(t, dir)
 	c := dial(t, dir)

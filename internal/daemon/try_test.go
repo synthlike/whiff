@@ -8,13 +8,13 @@ import (
 func TestTry(t *testing.T) {
 	dir := tempDir(t)
 	writeServices(t, dir, map[string]string{
-		"greet": `(srv greet (on (hello name) "Greets name." (ok "installed")))`,
+		"greet": `(service greet (on (hello name) "Greets name." (ok "installed")))`,
 	})
 	start(t, dir)
 	c := dial(t, dir)
 
 	// The file being tried is another greet, beside the installed one.
-	greet := `(srv greet
+	greet := `(service greet
   (def (shout s) (string/concat s "!"))
   (on (hello name) "Greets name." (ok (shout (string/concat "hello, " name))))
   (on (twice name) "Greets name through its own hello." (hello name))
@@ -50,16 +50,16 @@ func TestTry(t *testing.T) {
 	}
 
 	bad := []struct{ file, src, want string }{
-		{"greet.puff", `(srv greet (on (hello) "Doc." (ok x)))`, "greet.puff:1:35: unknown name x"},
-		{"x/oops.puff", `(srv greet)`, "x/oops.puff:1:1: srv wants its name, oops, as in its file name"},
-		{"greet.puff", `(srv greet`, "greet.puff:1:1: no closing ')'"},
+		{"greet.puff", `(service greet (on (hello) "Doc." (ok x)))`, "greet.puff:1:39: unknown name x"},
+		{"x/oops.puff", `(service greet)`, "x/oops.puff:1:1: service wants its name, oops, as in its file name"},
+		{"greet.puff", `(service greet`, "greet.puff:1:1: no closing ')'"},
 	}
 	for _, tt := range bad {
 		if resp, err := c.Try(tt.file, tt.src, "hello", "[]", ""); err != nil || resp.Error != tt.want {
 			t.Errorf("try %s = %+v %v, want error %q", tt.src, resp, err, tt.want)
 		}
 	}
-	if resp, err := c.Try("greet.puff", `(srv greet (on (where) "Its address." (ok (self))))`, "where", "[]", ""); err != nil || !strings.HasPrefix(resp.Value, "(ok :try/") || !strings.HasSuffix(resp.Value, "/greet)") {
+	if resp, err := c.Try("greet.puff", `(service greet (on (where) "Its address." (ok (self))))`, "where", "[]", ""); err != nil || !strings.HasPrefix(resp.Value, "(ok :try/") || !strings.HasSuffix(resp.Value, "/greet)") {
 		t.Errorf("(self) in a trial = %+v %v", resp, err)
 	}
 	if resp, err := c.Eval("(self)", ""); err != nil || resp.Error != "eval:1:1: self: only a service, or a client that holds an address, has one" {

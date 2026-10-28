@@ -5,7 +5,7 @@
 ;   whiff wait 12                 ; the review, or (err {:kind :exit}) with
 ;                                 ; claude's stderr if it fails
 
-(srv reviewer
+(service reviewer
   (def prompt "You are reviewing a diff before it is committed. List the real problems you find (bugs, races, unclear names, missing tests), most important first, each with its file and line and one or two sentences on why. Skip style nits. If there is nothing worth fixing, say so in one line.\n\n")
 
   ; diff is the uncommitted changes to tracked files, against HEAD.

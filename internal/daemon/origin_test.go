@@ -8,16 +8,16 @@ import (
 func TestOrigin(t *testing.T) {
 	dir := tempDir(t)
 	writeServices(t, dir, map[string]string{
-		"relay": `(srv relay
+		"relay": `(service relay
   (on (hello) "Calls greet." (call :greet/hello))
   (on (later) "Sends greet a message in a moment." (send-after 10ms :greet/hello))
   (on (shout) "Publishes." (publish :t/x 1))
   (on (ask) "Asks todo." (call :todo/suggest "x"))
   (on (whiff/done id r) "Gets answers." (ok r)))`,
-		"greet": `(srv greet
+		"greet": `(service greet
   (on (hello) "Hi." (ok :hi))
   (on :t/x (v) (ok v)))`,
-		"todo": `(srv todo
+		"todo": `(service todo
   (ask (suggest text) "Suggests a todo.")
   (on (answer id) "Answers id." (reply id (ok :from-todo)))
   (on (origins) "Each waiting message's origin." (ok (vector/map (inbox) (fn (a) (match a [{:origin o} o]))))))`,
