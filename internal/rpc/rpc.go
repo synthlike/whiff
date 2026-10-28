@@ -18,12 +18,12 @@ import (
 
 // Version is the protocol version. Bump it when a message changes; hello and
 // stop must stay readable by every version, so an old daemon can be stopped.
-const Version = 11
+const Version = 12
 
 // Request is a client's message to the daemon. The daemon answers each with
 // a Response, in order, except an answer or a cancel, which have none.
 type Request struct {
-	Op      string `json:"op"`                // "hello", "eval", "repl", "cancel", "call", "send", "pub", "sub", "try", "inbox", "reply", "wait", "claim", "answer", "history", "ls" or "stop"
+	Op      string `json:"op"`                // "hello", "eval", "repl", "cancel", "call", "send", "pub", "sub", "try", "inbox", "reply", "wait", "claim", "answer", "history", "trace", "ls" or "stop"
 	Version int    `json:"version,omitempty"` // hello: the client's protocol
 	Src     string `json:"src,omitempty"`     // eval, repl: puff code; claim: the interface, (on ...) and (ask ...) forms without bodies; try: the service file
 	File    string `json:"file,omitempty"`    // try: the service file's name, for its errors
@@ -38,15 +38,71 @@ type Request struct {
 
 // Response is the daemon's answer to one Request; or, with Delivery set, a
 // message for the address the client holds; or, with Event set, a value
-// published to a topic the client subscribed to.
+// published to a topic the client subscribed to; or, with Entry set, a new
+// entry of history for a client that traces it.
 type Response struct {
 	Version  int       `json:"version,omitempty"` // hello: the daemon's protocol
 	Value    string    `json:"value,omitempty"`   // eval: the printed value; others: the printed Result
 	Out      string    `json:"out,omitempty"`     // eval: what io/println wrote
+	History  []Entry   `json:"history,omitempty"` // history, trace: history so far, oldest first
 	Error    string    `json:"error,omitempty"`
 	Fault    bool      `json:"fault,omitempty"` // eval: Error is a fault
 	Delivery *Delivery `json:"delivery,omitempty"`
 	Event    *Event    `json:"event,omitempty"`
+	Entry    *Entry    `json:"entry,omitempty"`
+}
+
+// Entry is one entry of history: a message and its Result, or a note about
+// whiff itself, such as a service that failed to load.
+type Entry struct {
+	At     time.Time     `json:"at"`
+	Kind   string        `json:"kind"`             // "call", "send", "pub", "done" (a [:whiff/done id result]) or "note"
+	Origin string        `json:"origin,omitempty"` // "user" or "agent"
+	From   string        `json:"from,omitempty"`   // the sender's address; "" for a client
+	To     string        `json:"to,omitempty"`     // address/fn, or address on :topic; "" for a client
+	Args   string        `json:"args,omitempty"`   // a printed puff vector
+	Reply  string        `json:"reply,omitempty"`  // the printed Result; "" for a done no service handled
+	Took   time.Duration `json:"took,omitempty"`   // in nanoseconds
+	Note   string        `json:"note,omitempty"`
+}
+
+// String is e as a line of whiff history:
+//
+//	10:42:01.123  call  user   client -> :greet/hello "ann"  (ok "hello, ann")  1.2ms
+func (e Entry) String() string {
+	at := e.At.Local().Format("15:04:05.000")
+	if e.Kind == "note" {
+		return at + "  note  " + e.Note
+	}
+	from := "client"
+	if e.From != "" {
+		from = ":" + e.From
+	}
+	target := "client"
+	if e.To != "" {
+		target = ":" + e.To
+	}
+	if len(e.Args) > 2 {
+		target += " " + e.Args[1:len(e.Args)-1]
+	}
+	line := fmt.Sprintf("%s  %-4s  %-5s  %s -> %s", at, e.Kind, e.Origin, from, target)
+	if e.Reply != "" {
+		line += "  " + e.Reply
+	}
+	if e.Took > 0 {
+		line += "  " + e.Took.Round(time.Microsecond).String()
+	}
+	return line
+}
+
+// HistoryText is es as whiff history prints them: newest first, a line each.
+func HistoryText(es []Entry) string {
+	var b strings.Builder
+	for i := len(es) - 1; i >= 0; i-- {
+		b.WriteString(es[i].String())
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
 
 // Event is a value published to a topic a client subscribed to.
@@ -134,6 +190,7 @@ type Client struct {
 	resps      chan Response
 	deliveries chan Delivery
 	events     chan Event    // closed when the connection ends
+	entries    chan Entry    // closed when the connection ends
 	done       chan struct{} // closed when the connection ends
 	err        error         // why it ended, set before done is closed
 }
@@ -162,7 +219,8 @@ func Dial(dir string, start func() error) (*Client, error) {
 		return nil, err
 	}
 	c := &Client{conn: NewConn(nc), resps: make(chan Response),
-		deliveries: make(chan Delivery, 100), events: make(chan Event, 100), done: make(chan struct{})}
+		deliveries: make(chan Delivery, 100), events: make(chan Event, 100), entries: make(chan Entry, 100),
+		done: make(chan struct{})}
 	go c.read()
 	var resp Response
 	if err := c.roundTrip(Request{Op: "hello", Version: Version}, &resp); err != nil {
@@ -223,12 +281,25 @@ func (c *Client) Try(file, src, fn, args, dir string) (Response, error) {
 	return resp, err
 }
 
-// History is the daemon's history, newest first, a line an entry.
-func (c *Client) History() (string, error) {
+// History is the daemon's history, oldest first.
+func (c *Client) History() ([]Entry, error) {
 	var resp Response
 	err := c.roundTrip(Request{Op: "history"}, &resp)
-	return resp.Out, err
+	return resp.History, err
 }
+
+// Trace is History, and from then on every new entry comes on Entries until
+// the connection closes, with none missed or repeated in between.
+func (c *Client) Trace() ([]Entry, error) {
+	var resp Response
+	err := c.roundTrip(Request{Op: "trace"}, &resp)
+	return resp.History, err
+}
+
+// Entries are the new entries of history after Trace; the channel closes
+// when the connection ends. A client that doesn't keep reading them misses
+// some: the daemon doesn't wait for it.
+func (c *Client) Entries() <-chan Entry { return c.entries }
 
 // Inbox is the messages waiting in addr's inbox, oldest first, a line each.
 func (c *Client) Inbox(addr string) (string, error) {
@@ -299,6 +370,7 @@ func (c *Client) Close() error { return c.conn.Close() }
 // connection ends.
 func (c *Client) read() {
 	defer close(c.events)
+	defer close(c.entries)
 	defer close(c.done)
 	for {
 		var r Response
@@ -314,6 +386,13 @@ func (c *Client) read() {
 			select {
 			case c.events <- *r.Event:
 			default: // nobody reads them
+			}
+			continue
+		}
+		if r.Entry != nil {
+			select {
+			case c.entries <- *r.Entry:
+			default:
 			}
 			continue
 		}

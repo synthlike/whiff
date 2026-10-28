@@ -70,7 +70,7 @@ func TestPublish(t *testing.T) {
 			filepath.Join(dir, "services", "bad.puff") + `:2:23: +: can't add int and float"})  `,
 	}
 	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(5 * time.Millisecond) {
-		h, err := c.History()
+		h, err := historyOf(c)
 		if err != nil {
 			t.Fatal(err)
 		}

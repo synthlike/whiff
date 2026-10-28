@@ -139,6 +139,7 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 	l := newLink(conn)
 	var held *service // the address the client holds, if any
 	var sub *watcher  // its subscription, if any
+	var tr *tracer    // its trace of history, if any
 	// The client's REPL keeps its env across requests, acting for cur.
 	var repl *puff.Env
 	var replOut strings.Builder
@@ -152,6 +153,9 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 		}
 		if sub != nil {
 			d.unsubscribe(sub)
+		}
+		if tr != nil {
+			d.untrace(tr)
 		}
 	}()
 	defer func() {
@@ -248,7 +252,13 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 			}
 			held, resp = d.claim(l, req)
 		case "history":
-			resp.Out = d.historyText()
+			d.do(func(st *state) { resp.History = st.entries() })
+		case "trace":
+			if tr != nil {
+				resp.Error = "this connection traces history already"
+				break
+			}
+			tr, resp = d.trace(l)
 		case "ls":
 			resp.Out = d.marker().ls()
 		case "inbox":

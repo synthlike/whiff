@@ -52,7 +52,7 @@ func TestJobs(t *testing.T) {
 	inHistory := func(want string) {
 		t.Helper()
 		eventually(t, want, func() string {
-			h, err := c.History()
+			h, err := historyOf(c)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -94,7 +94,7 @@ func TestJobs(t *testing.T) {
 		t.Errorf("handing on twice = %s %v", resp.Value, err)
 	}
 	inHistory(` (ok {:exit 0 :stderr "" :stdout "late\n"})`)
-	h, _ := c.History()
+	h, _ := historyOf(c)
 	if !strings.Contains(h, `  done  user   :jobs -> client `) || !strings.Contains(h, `:jobs -> :hander/whiff/done `) {
 		t.Errorf("want the late answer to go to both the client and hander:\n%s", h)
 	}

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/synthlike/whiff/internal/rpc"
 )
 
 func TestHistory(t *testing.T) {
@@ -37,7 +39,7 @@ func TestHistory(t *testing.T) {
 	// relay's send is handled after relay has replied.
 	var got string
 	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(5 * time.Millisecond) {
-		h, err := c.History()
+		h, err := historyOf(c)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -48,5 +50,55 @@ func TestHistory(t *testing.T) {
 	}
 	if got != want {
 		t.Errorf("history:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestTrace(t *testing.T) {
+	set(t, &pollInterval, 10*time.Millisecond)
+
+	dir := tempDir(t)
+	writeServices(t, dir, map[string]string{
+		"greet": `(srv greet (on (hello name) "Greets name." (ok (string/concat "hello, " name))))`,
+	})
+	start(t, dir)
+	c := dial(t, dir)
+	if _, err := c.Eval(`(call :greet/hello "ann")`, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	tr := dial(t, dir)
+	es, err := tr.Trace()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(es); n == 0 || es[n-1].To != "greet/hello" || es[n-1].Args != `["ann"]` {
+		t.Fatalf("history at the trace's start: %+v", es)
+	}
+	if _, err := tr.Trace(); err == nil || err.Error() != "this connection traces history already" {
+		t.Errorf("a second trace: %v", err)
+	}
+
+	// next is the next new entry.
+	next := func() rpc.Entry {
+		t.Helper()
+		select {
+		case e := <-tr.Entries():
+			return e
+		case <-time.After(2 * time.Second):
+			t.Fatal("no entry")
+			return rpc.Entry{}
+		}
+	}
+	if _, err := c.Eval(`(call :greet/hello "bob")`, ""); err != nil {
+		t.Fatal(err)
+	}
+	e := next()
+	e.At, e.Took = time.Time{}, 0
+	if want := (rpc.Entry{Kind: "call", Origin: "user", To: "greet/hello", Args: `["bob"]`, Reply: `(ok "hello, bob")`}); e != want {
+		t.Errorf("entry:\n%+v\nwant\n%+v", e, want)
+	}
+	writeServices(t, dir, map[string]string{"broken": `(srv broken`})
+	if e := next(); e.Kind != "note" || !strings.HasSuffix(e.Note, "broken.puff:1:1: no closing ')'") || e.Origin != "" {
+		t.Errorf("note: %+v", e)
 	}
 }

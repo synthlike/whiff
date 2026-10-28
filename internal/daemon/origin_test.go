@@ -42,7 +42,7 @@ func TestOrigin(t *testing.T) {
 	inHistory := func(want string) {
 		t.Helper()
 		eventually(t, want, func() string {
-			h, err := user.History()
+			h, err := historyOf(user)
 			if err != nil {
 				t.Fatal(err)
 			}

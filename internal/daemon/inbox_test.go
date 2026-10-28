@@ -74,7 +74,7 @@ func TestInbox(t *testing.T) {
 		t.Errorf("reply 1 5: %v", err)
 	}
 	history := func() string {
-		h, err := c.History()
+		h, err := historyOf(c)
 		if err != nil {
 			t.Fatal(err)
 		}

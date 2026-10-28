@@ -3,8 +3,9 @@ package daemon
 import (
 	"fmt"
 	"slices"
-	"strings"
 	"time"
+
+	"github.com/synthlike/whiff/internal/rpc"
 )
 
 // historySize bounds history, which is in memory until it is stored.
@@ -24,10 +25,36 @@ type entry struct {
 	note  string
 }
 
+// rpc is e as clients get it.
+func (e entry) rpc() rpc.Entry {
+	if e.note != "" {
+		return rpc.Entry{At: e.at, Kind: "note", Note: e.note}
+	}
+	return rpc.Entry{At: e.at, Kind: e.kind, Origin: string(origin(e.user)), From: e.from, To: e.to,
+		Args: e.args, Reply: e.reply, Took: e.took}
+}
+
+// tracer is a client following history: whiff history -f, sniff. Its
+// entries wait in ch for the client's connection; when ch is full they are
+// dropped, so a slow client never holds up a message.
+type tracer struct {
+	ch chan rpc.Entry
+}
+
 func (st *state) record(e entry) {
 	st.history = append(st.history, e)
 	if n := len(st.history) - historySize; n > 0 {
 		st.history = slices.Delete(st.history, 0, n)
+	}
+	if len(st.tracers) == 0 {
+		return
+	}
+	re := e.rpc()
+	for t := range st.tracers {
+		select {
+		case t.ch <- re:
+		default:
+		}
 	}
 }
 
@@ -38,43 +65,41 @@ func (d *daemon) note(format string, args ...any) {
 	d.do(func(st *state) { st.record(entry{at: time.Now(), note: msg}) })
 }
 
-// historyText is history newest first, an entry a line.
-func (d *daemon) historyText() string {
-	var b strings.Builder
-	d.do(func(st *state) {
-		for _, e := range slices.Backward(st.history) {
-			b.WriteString(e.String())
-			b.WriteByte('\n')
-		}
-	})
-	return b.String()
+// entries is history so far, oldest first.
+func (st *state) entries() []rpc.Entry {
+	es := make([]rpc.Entry, len(st.history))
+	for i, e := range st.history {
+		es[i] = e.rpc()
+	}
+	return es
 }
 
-// String prints e as a line of history:
-//
-//	10:42:01.123  call  user   client -> :greet/hello "ann"  (ok "hello, ann")  1.2ms
-func (e entry) String() string {
-	at := e.at.Format("15:04:05.000")
-	if e.note != "" {
-		return at + "  note  " + e.note
-	}
-	from := "client"
-	if e.from != "" {
-		from = ":" + e.from
-	}
-	target := "client"
-	if e.to != "" {
-		target = ":" + e.to
-	}
-	if args := e.args[1 : len(e.args)-1]; args != "" {
-		target += " " + args
-	}
-	line := fmt.Sprintf("%s  %-4s  %-5s  %s -> %s", at, e.kind, origin(e.user), from, target)
-	if e.reply != "" {
-		line += "  " + e.reply
-	}
-	if e.took > 0 {
-		line += "  " + e.took.Round(time.Microsecond).String()
-	}
-	return line
+// trace sends l's client each new entry of history until the connection
+// ends. The Response holds history so far: taken with the subscription in
+// one step, so no entry is missed or repeated between them.
+func (d *daemon) trace(l *link) (*tracer, rpc.Response) {
+	t := &tracer{ch: make(chan rpc.Entry, mailboxSize)}
+	var resp rpc.Response
+	d.do(func(st *state) {
+		resp.History = st.entries()
+		st.tracers[t] = true
+	})
+	go func() {
+		for {
+			select {
+			case e := <-t.ch:
+				if l.conn.Send(rpc.Response{Entry: &e}) != nil {
+					return
+				}
+			case <-l.gone:
+				return
+			}
+		}
+	}()
+	return t, resp
+}
+
+// untrace ends t.
+func (d *daemon) untrace(t *tracer) {
+	d.do(func(st *state) { delete(st.tracers, t) })
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -97,7 +98,7 @@ func TestEval(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", tt.src, err)
 		}
-		if got != tt.want {
+		if !reflect.DeepEqual(got, tt.want) {
 			t.Errorf("%s:\ngot  %+v\nwant %+v", tt.src, got, tt.want)
 		}
 	}

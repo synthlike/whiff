@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/synthlike/whiff/internal/rpc"
 )
 
 func TestReload(t *testing.T) {
@@ -92,11 +94,17 @@ func TestRestartAfterFault(t *testing.T) {
 	}
 }
 
+// historyOf is c's history as whiff history prints it.
+func historyOf(c *rpc.Client) (string, error) {
+	es, err := c.History()
+	return rpc.HistoryText(es), err
+}
+
 // historyHas waits until a line of history holds want.
-func historyHas(t *testing.T, c interface{ History() (string, error) }, want string) {
+func historyHas(t *testing.T, c *rpc.Client, want string) {
 	t.Helper()
 	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(5 * time.Millisecond) {
-		h, err := c.History()
+		h, err := historyOf(c)
 		if err != nil {
 			t.Fatal(err)
 		}

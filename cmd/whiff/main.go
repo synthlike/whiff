@@ -32,6 +32,7 @@ const usage = `usage:
   whiff eval code                 evaluate puff code in the daemon and print its value
   whiff repl                      evaluate forms as they're typed, in the daemon, keeping what they define
   whiff history                   print every message, newest first
+  whiff history -f                print the last 10, oldest first, then each new one until stopped
   whiff ls                        list every address's functions and their marks
   whiff reset service             forget a service's stored state, so it starts from its :state again
   whiff stop                      stop the daemon
@@ -81,7 +82,9 @@ func run(args []string, dir, services string, stdout, stderr io.Writer) int {
 	case len(args) == 2 && args[0] == "eval":
 		return eval(dir, args[1], stdout, stderr)
 	case len(args) == 1 && args[0] == "history":
-		return text(dir, (*rpc.Client).History, stdout, stderr)
+		return history(dir, false, stdout, stderr)
+	case len(args) == 2 && args[0] == "history" && args[1] == "-f":
+		return history(dir, true, stdout, stderr)
 	case len(args) == 1 && args[0] == "ls":
 		return text(dir, (*rpc.Client).Ls, stdout, stderr)
 	case len(args) == 2 && args[0] == "reset":
@@ -250,6 +253,37 @@ func sub(dir string, topics []string, stdout, stderr io.Writer) int {
 			from = ":" + e.From
 		}
 		fmt.Fprintf(stdout, "%s  :%s  %-5s  %s  %s\n", e.At.Local().Format("15:04:05.000"), e.Topic, e.Origin, from, e.Value)
+	}
+	return 0
+}
+
+// history prints history newest first; or, to follow it, the last 10
+// entries oldest first and then each new one, until the daemon stops.
+func history(dir string, follow bool, stdout, stderr io.Writer) int {
+	c := connect(dir, stderr)
+	if c == nil {
+		return 1
+	}
+	defer c.Close()
+	if !follow {
+		es, err := c.History()
+		if err != nil {
+			fmt.Fprintf(stderr, "whiff: %v\n", err)
+			return 1
+		}
+		io.WriteString(stdout, rpc.HistoryText(es))
+		return 0
+	}
+	es, err := c.Trace()
+	if err != nil {
+		fmt.Fprintf(stderr, "whiff: %v\n", err)
+		return 1
+	}
+	for _, e := range es[max(len(es)-10, 0):] {
+		fmt.Fprintln(stdout, e)
+	}
+	for e := range c.Entries() {
+		fmt.Fprintln(stdout, e)
 	}
 	return 0
 }

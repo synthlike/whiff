@@ -91,6 +91,7 @@ type state struct {
 	answers []answered                  // the latest answers, oldest first
 	waiters map[int64][]chan puff.Value // whiff waits, by the id they wait for
 	subs    map[*watcher]bool           // clients' subscriptions: whiff sub
+	tracers map[*tracer]bool            // clients following history: whiff history -f
 }
 
 // watcher is a client subscribed to topics, every topic if topics is nil.
@@ -104,7 +105,7 @@ type watcher struct {
 // route owns the state until the daemon stops; others reach it through do.
 func (d *daemon) route() {
 	st := &state{addrs: map[string]*service{}, jobs: map[int64]*job{}, waiters: map[int64][]chan puff.Value{},
-		subs: map[*watcher]bool{}}
+		subs: map[*watcher]bool{}, tracers: map[*tracer]bool{}}
 	for {
 		select {
 		case op := <-d.ops:
