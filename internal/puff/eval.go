@@ -510,21 +510,54 @@ func fill(t *thread, fr *frame, inits []expr) (*frame, error) {
 	return lf, nil
 }
 
-// let compiles (let [name value ...] body...).
+// letBinding is one pattern and value of a let: the value's match fills
+// the frame's slots from off on.
+type letBinding struct {
+	init  expr
+	match matcher
+	pos   Pos
+	off   int
+}
+
+// let compiles (let [pattern value ...] body...). Each pattern is one of
+// match's, so [a b] or {:k v} take a value apart; a value that doesn't
+// match faults. A pattern's names are in scope from the next value on.
 func (c *compiler) let(f *Form, s *scope, tail bool) (expr, error) {
+	if len(f.Items) < 2 || f.Items[1].Kind != FormVector || len(f.Items[1].Items)%2 != 0 {
+		return nil, errorf(f.Pos, "let wants [pattern value ...] bindings and a body")
+	}
 	ls := &scope{kind: scopeLet, parent: s}
-	inits, err := c.bindings(f, ls)
-	if err != nil {
-		return nil, err
+	items := f.Items[1].Items
+	bs := make([]letBinding, 0, len(items)/2)
+	for i := 0; i < len(items); i += 2 {
+		x, err := c.expr(items[i+1], ls, false)
+		if err != nil {
+			return nil, err
+		}
+		// Its own names, so a later binding can shadow an earlier one.
+		var names []string
+		m, err := c.pattern(items[i], &names)
+		if err != nil {
+			return nil, err
+		}
+		bs = append(bs, letBinding{x, m, items[i].Pos, len(ls.names)})
+		ls.names = append(ls.names, names...)
 	}
 	body, err := c.body("let", f.Pos, f.Items[2:], ls, tail)
 	if err != nil {
 		return nil, err
 	}
+	slots := len(ls.names)
 	return func(t *thread, fr *frame) (Value, error) {
-		lf, err := fill(t, fr, inits)
-		if err != nil {
-			return nil, err
+		lf := &frame{vals: make([]Value, slots), parent: fr}
+		for _, b := range bs {
+			v, err := b.init(t, lf)
+			if err != nil {
+				return nil, err
+			}
+			if !b.match(v, lf.vals[b.off:]) {
+				return nil, faultf(b.pos, "let: no match for %s", Print(v))
+			}
 		}
 		return body(t, lf)
 	}, nil

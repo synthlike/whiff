@@ -20,22 +20,21 @@
 
   ; step reads the next line into st: {:n :section :items :in-item}.
   (def (step st line)
-    (match st
-      [{:n n :section section :items items :in-item in-item}
-       (let [n (+ n 1)
-             next (map/set st :n n)]
-         (match [(regex/groups line item-re) (regex/groups line heading-re)]
-           [[(some [mark text]) _]
-            (map/merge next {:in-item #t :items (vector/append items
-              {:line n :done (not (= mark " ")) :text (string/trim text) :section section})})]
-           [[_ (some [h])] (map/merge next {:in-item #f :section (string/trim h)})]
-           [_ when (and in-item (string/starts-with? line "  ") (not (= (string/trim line) "")))
-            (map/set next :items (continue items line))]
-           [_ (map/set next :in-item #f)]))]))
+    (let [{:n n :section section :items items :in-item in-item} st
+          n (+ n 1)
+          next (map/set st :n n)]
+      (match [(regex/groups line item-re) (regex/groups line heading-re)]
+        [[(some [mark text]) _]
+         (map/merge next {:in-item #t :items (vector/append items
+           {:line n :done (not (= mark " ")) :text (string/trim text) :section section})})]
+        [[_ (some [h])] (map/merge next {:in-item #f :section (string/trim h)})]
+        [_ when (and in-item (string/starts-with? line "  ") (not (= (string/trim line) "")))
+         (map/set next :items (continue items line))]
+        [_ (map/set next :in-item #f)])))
 
   (def (parse text)
-    (match (vector/reduce (string/lines text) {:n 0 :section "" :items [] :in-item #f} step)
-      [{:items items} items]))
+    (let [{:items items} (vector/reduce (string/lines text) {:n 0 :section "" :items [] :in-item #f} step)]
+      items))
 
   (def (read) (file/read-text file))
 
