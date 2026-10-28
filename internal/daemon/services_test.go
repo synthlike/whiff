@@ -64,6 +64,11 @@ func TestGitService(t *testing.T) {
 	// trace is where branch's try passes git's error up, as file:line:col.
 	before, _, _ := strings.Cut(string(src), `(try (git ["branch"`)
 	trace := fmt.Sprintf("git.puff:%d:%d", strings.Count(before, "\n")+1, len(before)-strings.LastIndex(before, "\n"))
+	// git names the repository by its real path: /private/var on macOS.
+	root, err := filepath.EvalSymlinks(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
 	tests := []struct{ fn, dir, want string }{
 		{"branch", repo, `(ok "main")`},
 		{"status", repo, `(ok {:ahead 0 :behind 0 :branch (some "main") :files [` +
@@ -71,6 +76,11 @@ func TestGitService(t *testing.T) {
 			`{:index :renamed :path "new name.txt" :work :none} ` +
 			`{:index :added :path "new.txt" :work :none} ` +
 			`{:index :untracked :path "loose file.txt" :work :untracked}] :upstream (none)})`},
+		{"changes", repo, `(ok (locations [` +
+			`{:file "` + root + `/a.txt" :note "modified"} ` +
+			`{:file "` + root + `/new name.txt" :note "renamed"} ` +
+			`{:file "` + root + `/new.txt" :note "added"} ` +
+			`{:file "` + root + `/loose file.txt" :note "untracked"}]))`},
 		{"branch", dir, `(err {:exit 128 :kind :exit :message "git exited 128: fatal: not a git repository (or any of the parent directories): .git" :stderr "fatal: not a git repository (or any of the parent directories): .git\n" :stdout "" :trace ["` + trace + `"]})`},
 	}
 	for _, tt := range tests {
@@ -270,6 +280,11 @@ func TestTodoService(t *testing.T) {
 			`{:done #f :line 10 :section "v1" :text "nested"} ` +
 			`{:done #f :line 17 :section "v2" :text "last"} ` +
 			`{:done #f :line 18 :section "v2" :text "new one"}])`},
+		{"view", "[]", `(ok (items [` +
+			`{:action [:todo/done 3] :detail "TODO.md:3  TODO" :label "under the title"} ` +
+			`{:action [:todo/done 10] :detail "TODO.md:10  v1" :label "nested"} ` +
+			`{:action [:todo/done 17] :detail "TODO.md:17  v2" :label "last"} ` +
+			`{:action [:todo/done 18] :detail "TODO.md:18  v2" :label "new one"}]))`},
 		{"add", `["first"]`, `(ok 1)`}, // in dir, which has no TODO.md
 	}
 	for i, tt := range tests {

@@ -1,0 +1,35 @@
+package daemon
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestViews(t *testing.T) {
+	dir := tempDir(t)
+	start(t, dir)
+	c := dial(t, dir)
+	tests := []struct{ src, want string }{
+		{`(view/items [{:label "a" :detail "d" :action [:todo/done 1]} {:label "b" :extra 1}])`,
+			`(items [{:action [:todo/done 1] :detail "d" :label "a"} {:extra 1 :label "b"}])`},
+		{`(view/items [])`, `(items [])`},
+		{`(view/text "hi")`, `(text "hi")`},
+		{`(view/locations [{:file "a.go" :line 3 :col 1 :note "x"} {:file "b.go"}])`,
+			`(locations [{:col 1 :file "a.go" :line 3 :note "x"} {:file "b.go"}])`},
+		{`(view/items [{:detail "d"}])`, `has no :label`},
+		{`(view/items [{:label 1}])`, `want :label as a string, got 1`},
+		{`(view/items [{:label "a" :action ["todo/done" 1]}])`, `want :action as a message like [:todo/done 12]`},
+		{`(view/items {:label "a"})`, `want a vector of maps`},
+		{`(view/text 1)`, `want a string, got 1`},
+		{`(view/locations [{:file "a.go" :line 0}])`, `want :line as an int from 1, got 0`},
+	}
+	for _, tt := range tests {
+		resp, err := c.Eval(tt.src, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := resp.Value + resp.Error; !strings.Contains(got, tt.want) {
+			t.Errorf("%s = %s, want %s", tt.src, got, tt.want)
+		}
+	}
+}

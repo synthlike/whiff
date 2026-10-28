@@ -1,6 +1,7 @@
 ; git: the repository in the caller's directory. Read only.
 ;   whiff call git/status
 ;   whiff call git/branch
+;   whiff call git/changes    ; the changed files, as file: what changed
 
 (srv git
   ; git runs git with args: (ok stdout), or (err {:kind :exit}) with what
@@ -38,10 +39,26 @@
         [["?" & _] (with-file st {:path (after f 1) :index :untracked :work :untracked})]
         [_ st])))
 
-  (on (status) :read
-    "The branch, (some name) or (none) when detached; its upstream, an Option too; commits :ahead and :behind it; and each changed file, {:path :index :work}, with what changed in the index and the work tree: :none, :modified, :added, :deleted, :renamed, :copied, :unmerged or :untracked."
+  (def (status-of)
     (let [out (try (git ["status" "--porcelain=v2" "--branch"]))]
       (ok (vector/reduce (string/lines out) {:branch (none) :upstream (none) :ahead 0 :behind 0 :files []} add))))
+
+  ; what is what changed in a file, in a word: the work tree's change, or
+  ; the index's if the work tree has none.
+  (def (what f)
+    (match f
+      [{:index i :work :none} (string/slice (str i) 1)]
+      [{:work w} (string/slice (str w) 1)]))
+
+  (on (status) :read
+    "The branch, (some name) or (none) when detached; its upstream, an Option too; commits :ahead and :behind it; and each changed file, {:path :index :work}, with what changed in the index and the work tree: :none, :modified, :added, :deleted, :renamed, :copied, :unmerged or :untracked."
+    (status-of))
+
+  (on (changes) :read
+    "The changed files as a view of locations, each noted with what changed in it."
+    (let [root (string/trim (try (git ["rev-parse" "--show-toplevel"])))
+          {:files files} (try (status-of))]
+      (ok (view/locations (vector/map files (fn (f) (match f [{:path p} {:file (path/join root p) :note (what f)}])))))))
 
   (on (branch) :read
     "The current branch's name; (err {:kind :detached}) when HEAD isn't on one."

@@ -46,7 +46,10 @@ v0.3. `go install ./cmd/...` installs two binaries:
 
 Services keep state across restarts (`:state`, kept in `~/.whiff/whiff.db`;
 `whiff reset` forgets it), subscribe to topics, run long work as jobs and
-mark each function `:read` or `:write`. [services/](services/README.md) has
+mark each function `:read` or `:write`. A function can answer with a view, a
+plain value any client can show: items to pick from, each with an action,
+places in files, or text. The CLI prints items as lines for fzf, and `whiff
+act` sends the action of the one you pick. [services/](services/README.md) has
 the ones in daily use: `git`, `gh` (which watches your pull requests), `todo`,
 `reviewer` and `assistant`, a resident Claude agent you talk to through your
 inbox. [docs/stdlib.md](docs/stdlib.md) lists every function puff has, and

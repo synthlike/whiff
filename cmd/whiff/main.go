@@ -27,6 +27,7 @@ const usage = `usage:
   whiff pub topic value           publish value to the topic's subscribers
   whiff sub [topic...]            print what is published to the topics, every topic by default, until stopped
   whiff try file.puff fn args...  load a service file, call its function once and unload it
+  whiff act [line...]             send the action at the end of each line, an item as call prints it, or of stdin's
   whiff inbox [address]           list the messages waiting for a reply: yours, :me's, by default
   whiff reply id value            answer a message waiting for a reply
   whiff wait id                   print the answer to a pending message or job, waiting for it
@@ -54,6 +55,10 @@ until the session ends.
 Each arg of call, send, pub, try and reply is read as a puff value, or taken as
 a string if it doesn't read as one: 12 is 12, ann is "ann", '"12"' is "12".
 A reply that isn't (ok v) or (err e) is sent as (ok value).
+
+A view prints as lines: items as label, detail and action apart by tabs,
+locations as file:line:col: note, text as it is. Pick items with fzf and
+act on them: whiff call todo/view | fzf | whiff act
 `
 
 // stdin is what whiff repl reads; a var so tests can type into it.
@@ -92,6 +97,8 @@ func run(args []string, dir, services string, stdout, stderr io.Writer) int {
 			return rpc.SessionText(es, args[1]), err
 		}
 		return text(dir, session, stdout, stderr)
+	case len(args) >= 1 && args[0] == "act":
+		return act(dir, args[1:], stdin, stdout, stderr)
 	case len(args) == 1 && args[0] == "pending":
 		pending := func(c *rpc.Client) (string, error) { return c.Inbox("review") }
 		return text(dir, pending, stdout, stderr)
@@ -235,7 +242,9 @@ func result(op string, resp rpc.Response, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "whiff: %s\n", puff.Print(r.At(0)))
 		return 1
 	case op == "call" || op == "wait" || op == "accept" || op == "state":
-		if s, ok := r.At(0).(puff.String); ok {
+		if text, ok := viewText(r.At(0)); ok {
+			io.WriteString(stdout, text)
+		} else if s, ok := r.At(0).(puff.String); ok {
 			fmt.Fprintln(stdout, string(s))
 		} else {
 			fmt.Fprintln(stdout, puff.Print(r.At(0)))

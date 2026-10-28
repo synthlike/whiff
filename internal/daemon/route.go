@@ -224,7 +224,7 @@ func (st *state) publish(m message) {
 // a literal target or topic counts as its target's mark instead (see
 // marker), and under a :read mark they fault only on a :write target.
 func (d *daemon) builtins(cur *caller) []*puff.Builtin {
-	return []*puff.Builtin{
+	return append([]*puff.Builtin{
 		{Name: "describe", Args: "address", Mark: puff.MarkRead,
 			Doc: "(ok fns): address's functions, each {:fn :params :doc :mark :form}.",
 			Fn: func(_ *puff.Call, args []puff.Value) (puff.Value, error) {
@@ -415,7 +415,7 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 				})
 				return puff.Done, nil
 			}},
-	}
+	}, viewBuiltins()...)
 }
 
 // request sends m to addr for cur and waits for its reply: the target's

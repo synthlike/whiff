@@ -9,7 +9,8 @@ here reloads it:
 
 Or try one without installing it: `whiff try services/git.puff status`.
 
-- `git`: `status` and `branch` of the repository in the caller's directory.
+- `git`: `status` and `branch` of the repository in the caller's directory,
+  and `changes`, its changed files as a view of locations.
 - `gh`: open pull requests (`prs`) and their checks (`checks` for the current
   branch's, `checks-of 12`), through the gh CLI, as you're logged in to it.
   `watch` the repository you're in, and every 5 minutes it publishes
@@ -17,7 +18,9 @@ Or try one without installing it: `whiff try services/git.puff status`.
   gh/changed`); `unwatch`, `watching`, and `poll` to look now. What it
   watches and last saw is its state, kept across restarts.
 - `todo`: the checkbox items in `TODO.md` in the caller's directory (`items`,
-  `open`), `add text` and `done line`. The file is its state.
+  `open`), `add text` and `done line`. The file is its state. `view` is the
+  open items as a view: `whiff call todo/view | fzf | whiff act` ticks the
+  one you pick.
 - `reviewer`: `review` has Claude review the uncommitted changes (`git diff
   HEAD`) with no tools; it answers at once with a pending id, and `whiff wait
   <id>` gives the review. Needs the claude CLI.

@@ -29,7 +29,13 @@ func TestRun(t *testing.T) {
   (on (hello name) "Greets name."
     (ok (string/concat "hello, " name)))
   (on (echo x) "Returns x."
-    (ok x)))`
+    (ok x))
+  (on (pick) "Items to pick."
+    (ok (view/items [{:label "a" :action [:greet/hello "x"]} {:label "b\tc" :detail "d"}])))
+  (on (places) "Locations."
+    (ok (view/locations [{:file "a.go" :line 3 :col 2 :note "here"} {:file "b.go"}])))
+  (on (say) "Text."
+    (ok (view/text "two\nlines"))))`
 	if err := os.WriteFile(filepath.Join(services, "greet.puff"), []byte(greet), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -68,6 +74,13 @@ func TestRun(t *testing.T) {
 			wantErr: "whiff: {:kind :no-function :message \":greet has no function nope\"}\n"},
 		{name: "call a bad target", args: []string{"call", "greet"}, code: 1,
 			wantErr: "whiff: :greet has no address: only a service can leave it out, want :address/fn\n"},
+		{name: "items", args: []string{"call", "greet/pick"}, wantOut: "a\t\t[:greet/hello \"x\"]\nb c\td\n"},
+		{name: "locations", args: []string{"call", "greet/places"}, wantOut: "a.go:3:2: here\nb.go\n"},
+		{name: "text", args: []string{"call", "greet/say"}, wantOut: "two\nlines\n"},
+		{name: "act on a line", args: []string{"act", "a\t\t[:greet/hello \"x\"]"}, wantOut: "hello, x\n"},
+		{name: "act on stdin", args: []string{"act"}, stdin: "a\t\t[:greet/hello \"x\"]\n[:greet/hello \"y\"]\n", wantOut: "hello, x\nhello, y\n"},
+		{name: "act without an action", args: []string{"act", "b c\td"}, code: 1,
+			wantErr: "whiff: \"b c\\td\" has no action, want [:address/fn args...] at its end\n"},
 		{name: "try", args: []string{"try", trial, "hello", "dee"}, wantOut: "hi, dee\n"},
 		{name: "installed after try", args: []string{"call", "greet/hello", "dee"}, wantOut: "hello, dee\n"},
 		{name: "try err", args: []string{"try", trial, "nope"}, code: 1,

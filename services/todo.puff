@@ -3,6 +3,7 @@
 ;   whiff call todo/open
 ;   whiff call todo/add "write the docs"
 ;   whiff call todo/done 12
+;   whiff call todo/view | fzf | whiff act   ; pick an open item to tick
 
 (srv todo
   (def file "TODO.md")
@@ -54,6 +55,14 @@
   (on (open)
     "The items not done yet, as items gives them."
     (ok (vector/filter (parse (try (read))) (fn (it) (match it [{:done d} (not d)])))))
+
+  (on (view)
+    "The open items as a view: picking one ticks it."
+    (ok (view/items (vector/map (vector/filter (parse (try (read))) (fn (it) (match it [{:done d} (not d)])))
+      (fn (it)
+        (match it
+          [{:line l :text t :section s}
+           {:label t :detail (if (= s "") (str file ":" l) (str file ":" l "  " s)) :action [:todo/done l]}]))))))
 
   (on (add text)
     "Adds \"- [ ] text\" at the end of TODO.md, creating the file if there isn't one; (ok line), the item's line."
