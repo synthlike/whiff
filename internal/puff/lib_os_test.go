@@ -77,6 +77,11 @@ func TestProcLib(t *testing.T) {
 		{fmt.Sprintf(`(proc/run ["ls"] {:dir %q})`, dir), `(ok {:exit 0 :stderr "" :stdout "a.txt\n"})`},
 
 		{`(proc/run [])`, "1:1: proc/run: want a command and its arguments, got []"},
+		{`(proc/output ["echo" "hi"])`, `(ok "hi\n")`},
+		{`(proc/output ["sh" "-c" "echo o; echo e >&2; exit 3"])`, `(err {:exit 3 :kind :exit :message "sh exited 3: e" :stderr "e\n" :stdout "o\n"})`},
+		{`(proc/output ["sh" "-c" "exit 1"])`, `(err {:exit 1 :kind :exit :message "sh exited 1" :stderr "" :stdout ""})`},
+		{fmt.Sprintf(`(proc/output ["ls"] {:dir %q})`, dir), `(ok "a.txt\n")`},
+		{`(proc/output [])`, "1:1: proc/output: want a command and its arguments, got []"},
 		{`(proc/run ["ls"] {:timeout 5})`, "1:1: proc/run: want a positive :timeout duration, got 5"},
 	})
 	if got := load(NewEnv(), `(proc/run ["no-such-command-puff"])`); !strings.HasPrefix(got, "(err {:kind :not-found") {
@@ -122,7 +127,7 @@ func TestTimeLib(t *testing.T) {
 
 func TestEffectMarks(t *testing.T) {
 	for name, want := range map[string]Mark{
-		"file/write": MarkWrite, "file/write-atomic": MarkWrite, "proc/run": MarkWrite,
+		"file/write": MarkWrite, "file/write-atomic": MarkWrite, "proc/run": MarkWrite, "proc/output": MarkWrite,
 		"file/read-text": MarkRead, "io/println": MarkRead, "time/now": MarkRead,
 	} {
 		if got := markOf(t, NewEnv(), name); got != want {

@@ -3,12 +3,9 @@
 ;   whiff call git/branch
 
 (srv git
-  ; git runs git with args: (ok stdout), or (err {:kind :git}) with what it
-  ; said when it fails, outside a repository say.
-  (def (git args)
-    (match (try (proc/run (vector/concat ["git" "-c" "core.quotePath=false"] args)))
-      [{:exit 0 :stdout out} (ok out)]
-      [{:exit n :stderr e} (err {:kind :git :exit n :message (string/trim e)})]))
+  ; git runs git with args: (ok stdout), or (err {:kind :exit}) with what
+  ; it said when it fails, outside a repository say.
+  (def (git args) (proc/output (vector/concat ["git" "-c" "core.quotePath=false"] args)))
 
   ; change is one letter of a status's XY as a keyword.
   (def (change c)
@@ -22,7 +19,7 @@
   ; after is the fields from i on: a path, which may hold spaces.
   (def (after fields i) (string/join (vector/slice fields i) " "))
 
-  (def (number s) (match (int/from-string (string/slice s 1)) [(ok n) n]))
+  (def (number s) (unwrap (int/from-string (string/slice s 1))))
 
   (def (with-file st f)
     (match st [{:files fs} (map/set st :files (vector/append fs f))]))

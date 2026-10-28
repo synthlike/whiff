@@ -29,7 +29,7 @@
   ; gh is gh-in the caller's directory.
   (def (gh args ok-exits) (gh-in (os/cwd) args ok-exits))
 
-  (def (at s) (match (time/from-string s) [(ok t) t]))
+  (def (at s) (unwrap (time/from-string s)))
 
   (def (review s)
     (match s

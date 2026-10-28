@@ -15,22 +15,20 @@
 
 (srv assistant
   (def name (string/slice (value/to-string (self)) 1))
-  (def home (path/join (match (env/get "HOME") [(some h) h]) ".whiff" "agents" name))
+  (def home (path/join (unwrap (env/get "HOME")) ".whiff" "agents" name))
   (def session-file (path/join home "session")) ; the conversation's id
   (def started (path/join home "started"))      ; the id once it has begun
   (def turns (path/join home "turns"))          ; each turn's job id, a line each
   (def system (string/concat "You are " name ", a long-running agent living in whiff, the user's personal message daemon. The user leaves you messages, which arrive as turns of one conversation, sometimes days apart. You have no tools. Answer briefly and plainly: your answer is left in the user's inbox, and their reply to it is their next message."))
 
-  (def (read-file path) (match (file/read-text path) [(ok s) (string/trim s)] [_ ""]))
+  (def (read-file path) (string/trim (or-else (file/read-text path) "")))
 
   ; session is the conversation's id, made on its first turn.
   (def (session)
     (match [(read-file session-file) (read-file started)]
       [["" ""]
-       (match (try (proc/run ["uuidgen"]))
-         [{:exit 0 :stdout out}
-          (let [id (string/lower (string/trim out))]
-            (do (try (file/write session-file id)) (ok id)))])]
+       (let [id (string/lower (string/trim (try (proc/output ["uuidgen"]))))]
+         (do (try (file/write session-file id)) (ok id)))]
       [["" s] (ok s)] ; begun before there was a session file
       [[s _] (ok s)]))
 
@@ -38,7 +36,7 @@
     (vector/concat ["claude" "-p" "--tools" "" "--append-system-prompt" system]
       (if (= (read-file started) id) ["--resume" id] ["--session-id" id])))
 
-  (def (read-turns) (match (file/read-text turns) [(ok s) (string/lines s)] [_ []]))
+  (def (read-turns) (string/lines (or-else (file/read-text turns) "")))
 
   ; busy? is whether the last turn's job still runs.
   (def (busy?)
@@ -51,7 +49,7 @@
   (def (turn text)
     (if (busy?)
       (err {:kind :busy :message (string/concat name " is still answering your last message; send it again in a moment")})
-      (do (try (proc/run ["mkdir" "-p" home]))
+      (do (try (proc/output ["mkdir" "-p" home]))
           (match (call :jobs/run (claude (try (session))) {:stdin text :dir home :as :text :timeout 10m :origin :agent})
             [(err {:kind :pending :id id})
              (do (try (file/write turns (string/concat (string/join (vector/append (read-turns) (int/to-string id)) "\n") "\n")))

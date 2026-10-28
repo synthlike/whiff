@@ -194,6 +194,41 @@ func (w *capped) Write(p []byte) (int, error) {
 
 var procFns = []*Builtin{
 	{Name: "proc/run", Args: "cmd [opts]", Mark: MarkWrite, Doc: "Run cmd, a vector of the program and its arguments, without a shell: (ok {:exit :stdout :stderr}), whatever the exit code. Options: :stdin, a string; :dir; :timeout, a duration.", Fn: procRun},
+	{Name: "proc/output", Args: "cmd [opts]", Mark: MarkWrite, Doc: "Run cmd as proc/run does: (ok stdout) if it exits 0, else (err {:kind :exit :exit :stdout :stderr}) with its stderr in :message.", Fn: procOutput},
+}
+
+func procOutput(c *Call, args []Value) (Value, error) {
+	r, err := procRun(c, args)
+	if err != nil {
+		return nil, err
+	}
+	t := r.(Tag)
+	if t.Name() != "ok" {
+		return r, nil
+	}
+	out := t.At(0).(Map)
+	code, _ := out.Get(Keyword("exit"))
+	stdout, _ := out.Get(Keyword("stdout"))
+	stderr, _ := out.Get(Keyword("stderr"))
+	if code == Int(0) {
+		return Ok(stdout), nil
+	}
+	name := Print(args[0].(Vector).At(0))
+	if s, ok := args[0].(Vector).At(0).(String); ok {
+		name = string(s)
+	}
+	msg := fmt.Sprintf("%s exited %d", name, code)
+	if e := strings.TrimSpace(string(stderr.(String))); e != "" {
+		msg += ": " + e
+	}
+	e, _ := NewMap(
+		Entry{Keyword("kind"), Keyword("exit")},
+		Entry{Keyword("message"), String(msg)},
+		Entry{Keyword("exit"), code},
+		Entry{Keyword("stdout"), stdout},
+		Entry{Keyword("stderr"), stderr},
+	)
+	return NewTag("err", e), nil
 }
 
 func procRun(c *Call, args []Value) (Value, error) {

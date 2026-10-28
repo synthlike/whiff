@@ -67,7 +67,7 @@ func TestGitService(t *testing.T) {
 			`{:index :renamed :path "new name.txt" :work :none} ` +
 			`{:index :added :path "new.txt" :work :none} ` +
 			`{:index :untracked :path "loose file.txt" :work :untracked}] :upstream (none)})`},
-		{"branch", dir, `(err {:exit 128 :kind :git :message "fatal: not a git repository (or any of the parent directories): .git" :trace ["git.puff:52:25"]})`},
+		{"branch", dir, `(err {:exit 128 :kind :exit :message "git exited 128: fatal: not a git repository (or any of the parent directories): .git" :stderr "fatal: not a git repository (or any of the parent directories): .git\n" :stdout "" :trace ["git.puff:49:25"]})`},
 	}
 	for _, tt := range tests {
 		if got := call(tt.fn, tt.dir); got != tt.want {

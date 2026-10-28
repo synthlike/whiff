@@ -14,6 +14,8 @@ var coreFns = []*Builtin{
 	{Name: "some", Args: "v", Doc: "An Option with a value.", Fn: tagFn("some")},
 	{Name: "none", Doc: "An empty Option.", Fn: tagFn("none")},
 	{Name: "fail", Args: "e", Doc: "Stop with a fault, e as its message.", Fn: fail},
+	{Name: "unwrap", Args: "r", Doc: "v, from (ok v) or (some v); an (err e) or (none) stops with a fault.", Fn: unwrap},
+	{Name: "or-else", Args: "r default", Doc: "v, from (ok v) or (some v); default for an (err e) or (none).", Fn: orElse},
 	{Name: "help", Args: "[f]", Doc: "Print f's arguments, mark and doc, or list every builtin.", Fn: help},
 	{Name: "=", Args: "a b", Doc: "Whether a and b are the same value.", Fn: func(_ *Call, args []Value) (Value, error) {
 		return Bool(Equal(args[0], args[1])), nil
@@ -37,6 +39,35 @@ func fail(_ *Call, args []Value) (Value, error) {
 		return nil, errors.New(string(s))
 	}
 	return nil, errors.New(Print(args[0]))
+}
+
+// unwrapped returns v of (ok v) or (some v), and whether r is one; it
+// faults if r is neither a Result nor an Option.
+func unwrapped(r Value) (Value, bool, error) {
+	t, ok := r.(Tag)
+	switch {
+	case ok && t.Len() == 1 && (t.Name() == "ok" || t.Name() == "some"):
+		return t.At(0), true, nil
+	case ok && (t.Len() == 1 && t.Name() == "err" || t.Len() == 0 && t.Name() == "none"):
+		return nil, false, nil
+	}
+	return nil, false, fmt.Errorf("want a Result or an Option, got %s", Print(r))
+}
+
+func unwrap(_ *Call, args []Value) (Value, error) {
+	v, ok, err := unwrapped(args[0])
+	if err == nil && !ok {
+		err = fmt.Errorf("got %s", Print(args[0]))
+	}
+	return v, err
+}
+
+func orElse(_ *Call, args []Value) (Value, error) {
+	v, ok, err := unwrapped(args[0])
+	if err == nil && !ok {
+		v = args[1]
+	}
+	return v, err
 }
 
 func not(_ *Call, args []Value) (Value, error) {

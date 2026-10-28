@@ -28,6 +28,8 @@ In `puff` and in whiff alike. Names without a namespace are under core.
 - `(some v)`: An Option with a value.
 - `(none)`: An empty Option.
 - `(fail e)`: Stop with a fault, e as its message.
+- `(unwrap r)`: v, from (ok v) or (some v); an (err e) or (none) stops with a fault.
+- `(or-else r default)`: v, from (ok v) or (some v); default for an (err e) or (none).
 - `(help [f])`: Print f's arguments, mark and doc, or list every builtin.
 - `(= a b)`: Whether a and b are the same value.
 - `(not b)`: The other bool.
@@ -161,6 +163,7 @@ In `puff` and in whiff alike. Names without a namespace are under core.
 ### proc
 
 - `(proc/run cmd [opts])` `:write`: Run cmd, a vector of the program and its arguments, without a shell: (ok {:exit :stdout :stderr}), whatever the exit code. Options: :stdin, a string; :dir; :timeout, a duration.
+- `(proc/output cmd [opts])` `:write`: Run cmd as proc/run does: (ok stdout) if it exits 0, else (err {:kind :exit :exit :stdout :stderr}) with its stderr in :message.
 
 ### time
 

@@ -10,10 +10,9 @@
 
   ; diff is the uncommitted changes to tracked files, against HEAD.
   (def (diff)
-    (match (try (proc/run ["git" "diff" "HEAD"]))
-      [{:exit 0 :stdout ""} (err {:kind :nothing :message "no uncommitted changes to review"})]
-      [{:exit 0 :stdout d} (ok d)]
-      [{:exit n :stderr e} (err {:kind :git :exit n :message (string/trim e)})]))
+    (match (proc/output ["git" "diff" "HEAD"])
+      [(ok "") (err {:kind :nothing :message "no uncommitted changes to review"})]
+      [r r]))
 
   (on (review) :read
     "Reviews the uncommitted changes here (git diff HEAD) with Claude, without tools: pending at once; (ok review) when done, as text."

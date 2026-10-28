@@ -14,6 +14,18 @@ func testLib(t *testing.T, tests []struct{ src, want string }) {
 	}
 }
 
+func TestUnwrapLib(t *testing.T) {
+	testLib(t, []struct{ src, want string }{
+		{`[(unwrap (ok 1)) (unwrap (some 2))]`, `[1 2]`},
+		{`[(or-else (ok 1) 0) (or-else (some 2) 0) (or-else (err {:kind :x}) 3) (or-else (none) 4)]`, `[1 2 3 4]`},
+
+		{`(unwrap (none))`, "1:1: unwrap: got (none)"},
+		{`(unwrap (err {:kind :x}))`, "1:1: unwrap: got (err {:kind :x})"},
+		{`(unwrap 5)`, "1:1: unwrap: want a Result or an Option, got 5"},
+		{`(or-else "x" 0)`, `1:1: or-else: want a Result or an Option, got "x"`},
+	})
+}
+
 func TestStringLib(t *testing.T) {
 	testLib(t, []struct{ src, want string }{
 		{`(string/length "héllo")`, "5"},
