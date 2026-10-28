@@ -40,13 +40,18 @@ func (d *daemon) gated(st *state, s *service, m message) bool {
 func (d *daemon) publishGated(m message) puff.Value {
 	r := puff.Done
 	d.do(func(st *state) {
-		if !m.user && !m.reviewed && st.lets(m.from, "") {
-			m.reviewed = true
-		}
 		if !m.user && !m.reviewed {
 			mk := &marker{base: d.base, services: st.addrs, seen: map[string]bool{}}
-			if mk.topic(m.topic) == puff.MarkWrite {
+			write := mk.topic(m.topic) == puff.MarkWrite
+			switch {
+			case st.lets(m.from, ""):
+				m.reviewed = true
+				if write {
+					m.gate = "free"
+				}
+			case write:
 				r = d.hold(st, "", m)
+				st.record(entry{at: time.Now(), kind: "pub", from: m.from, to: "review on :" + m.topic, args: m.args, reply: puff.Print(r), gate: heldGate(r)})
 				return
 			}
 		}
@@ -74,7 +79,9 @@ func (d *daemon) hold(st *state, addr string, m message) puff.Value {
 // inbox as {:fn :eval :args [src]}: see queue. Accepting runs it.
 func (d *daemon) holdEval(st *state, from string, req rpc.Request) puff.Value {
 	a := &asked{ticket: ticket{from: from, dir: req.Dir}, fn: "eval", args: puff.NewVector(puff.String(req.Src)), src: req.Src}
-	return st.queue(a, "the agent's eval")
+	r := st.queue(a, "the agent's eval")
+	st.record(entry{at: time.Now(), kind: "eval", from: from, args: puff.Print(a.args), reply: puff.Print(r), gate: heldGate(r)})
+	return r
 }
 
 // queue puts a, which what names, in :review's inbox and publishes it on
@@ -118,10 +125,14 @@ func (d *daemon) accept(ctx context.Context, id int64) (puff.Value, error) {
 	}
 	if a.held == nil {
 		r := d.runHeld(ctx, a)
+		d.do(func(st *state) {
+			st.record(entry{at: a.at, kind: "eval", from: a.from, args: puff.Print(a.args), reply: puff.Print(r), gate: fmt.Sprintf("accepted %d", a.id)})
+		})
 		d.reviewed(a, r)
 		return r, ctx.Err()
 	}
 	m := *a.held
+	m.gate = fmt.Sprintf("accepted %d", a.id)
 	if m.topic != "" {
 		m.reviewed = true
 		d.publish(m)

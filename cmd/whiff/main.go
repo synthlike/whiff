@@ -36,6 +36,7 @@ const usage = `usage:
   whiff trust agent/n service...  let an agent session's messages to the services through, as if you accepted them
   whiff free agent/n              let everything an agent session sends, publishes and evaluates through
   whiff gate agent/n              hold an agent session's :write messages for review again, as by default
+  whiff session agent/n           what an agent session wrote, and how: held, accepted, trusted or free
   whiff eval code                 evaluate puff code in the daemon and print its value
   whiff repl                      evaluate forms as they're typed, in the daemon, keeping what they define
   whiff history                   print every message, newest first
@@ -85,6 +86,12 @@ func run(args []string, dir, services string, stdout, stderr io.Writer) int {
 		return message(dir, args[0], "", args[1:], stdout, stderr)
 	case len(args) >= 2 && (args[0] == "trust" && len(args) >= 3 || args[0] == "free" || args[0] == "gate"):
 		return setMode(dir, args[0], args[1], args[2:], stdout, stderr)
+	case len(args) == 2 && args[0] == "session":
+		session := func(c *rpc.Client) (string, error) {
+			es, err := c.History()
+			return rpc.SessionText(es, args[1]), err
+		}
+		return text(dir, session, stdout, stderr)
 	case len(args) == 1 && args[0] == "pending":
 		pending := func(c *rpc.Client) (string, error) { return c.Inbox("review") }
 		return text(dir, pending, stdout, stderr)

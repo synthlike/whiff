@@ -471,7 +471,7 @@ func (s *service) run(ctx context.Context) {
 			// Recorded before the reply, so the caller finds it in history.
 			s.d.do(func(st *state) {
 				st.record(entry{at: begin, kind: m.kind(), user: m.user, from: m.from, to: m.to(s.name),
-					args: m.args, reply: r, took: time.Since(begin)})
+					args: m.args, reply: r, took: time.Since(begin), gate: m.gate})
 			})
 			if m.reply != nil {
 				m.reply <- r

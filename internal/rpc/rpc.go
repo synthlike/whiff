@@ -18,7 +18,7 @@ import (
 
 // Version is the protocol version. Bump it when a message changes; hello and
 // stop must stay readable by every version, so an old daemon can be stopped.
-const Version = 15
+const Version = 16
 
 // Request is a client's message to the daemon. The daemon answers each with
 // a Response, in order, except an answer or a cancel, which have none.
@@ -56,19 +56,25 @@ type Response struct {
 // whiff itself, such as a service that failed to load.
 type Entry struct {
 	At     time.Time     `json:"at"`
-	Kind   string        `json:"kind"`             // "call", "send", "pub", "done" (a [:whiff/done id result]) or "note"
+	Kind   string        `json:"kind"`             // "call", "send", "pub", "done" (a [:whiff/done id result]), "eval" (an agent's that writes) or "note"
 	Origin string        `json:"origin,omitempty"` // "user" or "agent"
 	From   string        `json:"from,omitempty"`   // the sender's address; "" for a client
 	To     string        `json:"to,omitempty"`     // address/fn, or address on :topic; "" for a client
 	Args   string        `json:"args,omitempty"`   // a printed puff vector
 	Reply  string        `json:"reply,omitempty"`  // the printed Result; "" for a done no service handled
 	Took   time.Duration `json:"took,omitempty"`   // in nanoseconds
-	Note   string        `json:"note,omitempty"`
+	// Gate is how the review gate treated an agent's write: "held 12" (it
+	// waits for review), "refused" (it couldn't wait), "accepted 12"
+	// (delivered once you accepted it), or "trusted" or "free", which
+	// the session's mode let through; "" for anything else.
+	Gate string `json:"gate,omitempty"`
+	Note string `json:"note,omitempty"`
 }
 
 // String is e as a line of whiff history:
 //
 //	10:42:01.123  call  user   client -> :greet/hello "ann"  (ok "hello, ann")  1.2ms
+//	10:42:02.456  eval  agent  :agent/1 -> eval "(file/write \"x\" \"y\")"  (ok :done)  [free]
 func (e Entry) String() string {
 	at := e.At.Local().Format("15:04:05.000")
 	if e.Kind == "note" {
@@ -79,7 +85,10 @@ func (e Entry) String() string {
 		from = ":" + e.From
 	}
 	target := "client"
-	if e.To != "" {
+	switch {
+	case e.Kind == "eval":
+		target = "eval"
+	case e.To != "":
 		target = ":" + e.To
 	}
 	if len(e.Args) > 2 {
@@ -92,7 +101,92 @@ func (e Entry) String() string {
 	if e.Took > 0 {
 		line += "  " + e.Took.Round(time.Microsecond).String()
 	}
+	if e.Gate != "" {
+		line += "  [" + e.Gate + "]"
+	}
 	return line
+}
+
+// SessionText is what the agent session addr did, from es, oldest first:
+// each write it made, with how the review gate treated it, the answers it
+// got and the notes about it, such as its mode changing; then a summary:
+//
+//	agent/3: 3 writes went through (1 trusted, 1 free, 1 accepted); 1 rejected; 1 waits for review
+func SessionText(es []Entry, addr string) string {
+	addr = strings.TrimPrefix(addr, ":")
+	var b strings.Builder
+	count := map[string]int{}
+	held := map[string]bool{} // ids that wait, until accepted or answered
+	var order []string
+	for _, e := range es {
+		switch {
+		case e.Kind == "note" && (strings.HasPrefix(e.Note, ":"+addr+" ") || strings.HasPrefix(e.Note, ":"+addr+"'s ")):
+		case e.Kind == "done" && e.To == addr+"/whiff/done":
+			id, _, _ := strings.Cut(strings.TrimPrefix(e.Args, "["), " ")
+			if held[id] {
+				delete(held, id)
+				if strings.Contains(e.Args, ":kind :rejected") {
+					count["rejected"]++
+				}
+			}
+		case e.From == addr && e.Gate != "":
+			kind, id, _ := strings.Cut(e.Gate, " ")
+			switch kind {
+			case "held":
+				held[id] = true
+				order = append(order, id)
+			case "accepted":
+				delete(held, id)
+			}
+			count[kind]++
+		default:
+			continue
+		}
+		b.WriteString(e.String())
+		b.WriteByte('\n')
+	}
+	if b.Len() == 0 {
+		return fmt.Sprintf("%s: no writes in history\n", addr)
+	}
+	went := count["trusted"] + count["free"] + count["accepted"]
+	var parts []string
+	for _, k := range []string{"trusted", "free", "accepted"} {
+		if count[k] > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", count[k], k))
+		}
+	}
+	fmt.Fprintf(&b, "%s: %d %s went through", addr, went, plural(went, "write"))
+	if len(parts) > 0 {
+		fmt.Fprintf(&b, " (%s)", strings.Join(parts, ", "))
+	}
+	if n := count["rejected"]; n > 0 {
+		fmt.Fprintf(&b, "; %d rejected", n)
+	}
+	if n := count["refused"]; n > 0 {
+		fmt.Fprintf(&b, "; %d refused", n)
+	}
+	waiting := 0
+	for _, id := range order {
+		if held[id] {
+			waiting++
+		}
+	}
+	if waiting > 0 {
+		fmt.Fprintf(&b, "; %d %s for review", waiting, plural(waiting, "waits", "wait"))
+	}
+	b.WriteByte('\n')
+	return b.String()
+}
+
+// plural is one, or many (one+"s" if not given), for n.
+func plural(n int, one string, many ...string) string {
+	switch {
+	case n == 1:
+		return one
+	case len(many) > 0:
+		return many[0]
+	}
+	return one + "s"
 }
 
 // HistoryText is es as whiff history prints them: newest first, a line each.

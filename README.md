@@ -58,7 +58,9 @@ as a tool, and `eval`, `wait` and `inbox`. What they write waits for your
 review: follow it with `whiff sub review/pending`, list it with `whiff
 pending`, and answer with `whiff accept` or `whiff reject`; or let a session
 through, to the services you name (`whiff trust agent/1 todo`) or entirely
-(`whiff free agent/1 --for 2h`), until `whiff gate agent/1`.
+(`whiff free agent/1 --for 2h`), until `whiff gate agent/1`. `whiff session
+agent/1` is the review at the end: every write the session made, and whether
+it waited, you accepted it or its mode let it through.
 
 ## License
 

@@ -37,6 +37,9 @@ type message struct {
 	// reviewed is whether you accepted m, or a message earlier in its
 	// chain, at the review gate, which lets it through.
 	reviewed bool
+	// gate is how the review gate let an agent's write through, for
+	// history: trusted, free or accepted <id>; "" for anything else.
+	gate string
 	// reply gets the printed Result, nil for a send. It has room for it, so
 	// the service never waits on a caller that has gone.
 	reply chan string
@@ -155,12 +158,17 @@ func (d *daemon) put(st *state, addr string, m message) puff.Value {
 	// An agent session's mode may let its message through, as accepted.
 	if !m.user && !m.reviewed && st.lets(m.from, addr) {
 		m.reviewed = true
+		if s := st.addrs[addr]; s != nil && m.topic == "" && (&marker{base: d.base, services: st.addrs}).mark(s, m.fn) == puff.MarkWrite {
+			m.gate = st.modeOf(m.from).name()
+		}
 	}
+	gate := m.gate
 	switch s := st.addrs[addr]; {
 	case s == nil:
 		res = puff.Errorf("no-address", "no address :%s", addr)
 	case d.gated(st, s, m):
 		res = d.hold(st, addr, m)
+		gate = heldGate(res)
 	case m.topic == "" && s.fns[m.fn].ask:
 		res = d.ask(st, s, m)
 	default:
@@ -171,7 +179,7 @@ func (d *daemon) put(st *state, addr string, m message) puff.Value {
 			res = puff.Errorf("full", ":%s's mailbox is full", addr)
 		}
 	}
-	st.record(entry{at: time.Now(), kind: m.kind(), user: m.user, from: m.from, to: m.to(addr), args: m.args, reply: puff.Print(res)})
+	st.record(entry{at: time.Now(), kind: m.kind(), user: m.user, from: m.from, to: m.to(addr), args: m.args, reply: puff.Print(res), gate: gate})
 	return res
 }
 
@@ -206,7 +214,7 @@ func (st *state) publish(m message) {
 		case s.mailbox <- m:
 		default:
 			res := puff.Errorf("full", ":%s's mailbox is full", addr)
-			st.record(entry{at: time.Now(), kind: m.kind(), user: m.user, from: m.from, to: m.to(addr), args: m.args, reply: puff.Print(res)})
+			st.record(entry{at: time.Now(), kind: m.kind(), user: m.user, from: m.from, to: m.to(addr), args: m.args, reply: puff.Print(res), gate: m.gate})
 		}
 	}
 }

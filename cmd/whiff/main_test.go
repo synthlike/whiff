@@ -88,6 +88,7 @@ func TestRun(t *testing.T) {
 			wantErr: "whiff: {:kind :stateless :message \":greet has no state\"}\n"},
 		{name: "free no session", args: []string{"free", "agent/9"}, code: 1,
 			wantErr: "whiff: {:kind :no-address :message \"no agent session :agent/9\"}\n"},
+		{name: "session with no writes", args: []string{"session", "agent/9"}, wantOut: "agent/9: no writes in history\n"},
 		{name: "trust nothing", args: []string{"trust", "agent/9"}, code: 2, wantErr: usage},
 		{name: "free for a bad while", args: []string{"free", "agent/9", "--for", "soon"}, code: 2, wantErr: usage},
 		{name: "gate for a while", args: []string{"gate", "agent/9", "--for", "1h"}, code: 2, wantErr: usage},

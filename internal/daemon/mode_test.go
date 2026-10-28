@@ -124,9 +124,88 @@ func TestModes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"note  :agent/1 is trusted :notes", "note  :agent/1 is free", "note  :agent/1 is gated"} {
+	for _, want := range []string{"note  :agent/1 is trusted :notes", "note  :agent/1 is free", "note  :agent/1 is gated", "note  :agent/1's free mode ran out: it is gated"} {
 		if !strings.Contains(h, want) {
 			t.Errorf("history has no %q", want)
 		}
+	}
+}
+
+func TestSession(t *testing.T) {
+	dir := tempDir(t)
+	file := filepath.Join(dir, "notes")
+	writeServices(t, dir, map[string]string{
+		"notes": `(srv notes
+  (on (add text) "Appends text." (file/append "` + file + `" text))
+  (on (list) "Reads them." (file/read-text "` + file + `")))`,
+		"tally": `(srv tally
+  (on :t/x (v) (call :notes/add v)))`,
+	})
+	start(t, dir)
+	you := dial(t, dir)
+	if _, err := you.Sub("review/pending"); err != nil {
+		t.Fatal(err)
+	}
+	agent := dial(t, dir)
+	agent.Agent = true
+	if resp, err := agent.Claim("agent", `(ask (tell text) "Asks the agent.")`); err != nil || resp.Value != "(ok :agent/1)" {
+		t.Fatalf("claim = %+v %v", resp, err)
+	}
+	do := func(c *rpc.Client, op, target, args string) {
+		t.Helper()
+		if _, err := c.Message(op, target, args, ""); err != nil {
+			t.Fatalf("%s %s: %v", op, target, err)
+		}
+	}
+	eval := func(src string) {
+		t.Helper()
+		if resp, err := agent.Eval(src, ""); err != nil || resp.Error != "" {
+			t.Fatalf("%s: %+v %v", src, resp, err)
+		}
+	}
+
+	do(agent, "call", "notes/add", `["a"]`) // held 1, accepted
+	do(you, "accept", "", "[1]")
+	do(agent, "call", "notes/add", `["b"]`) // held 2, rejected
+	do(you, "reject", "", `[2 "no"]`)
+	do(agent, "call", "notes/add", `["c"]`) // held 3, waits
+	eval(`(call :notes/add "e")`)           // held 4, waits
+	if _, err := you.Mode("agent/1", "trusted", []string{"notes"}, 0); err != nil {
+		t.Fatal(err)
+	}
+	do(agent, "call", "notes/add", `["d"]`)
+	do(agent, "call", "notes/list", `[]`) // a read: not in the session
+	if _, err := you.Mode("agent/1", "free", nil, 0); err != nil {
+		t.Fatal(err)
+	}
+	eval(`(file/append "` + file + `" "f")`)
+	eval(`(publish :t/x "g")`)
+	eventually(t, "the writes", func() string { b, _ := os.ReadFile(file); return string(b) }, "adfg")
+
+	es, err := you.History()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := rpc.SessionText(es, ":agent/1")
+	for _, want := range []string{
+		`call  agent  :agent/1 -> :notes/add "a"  (err {:id 1 :kind :pending`, "[held 1]",
+		`call  agent  :agent/1 -> :notes/add "a"  (ok :done)`, "[accepted 1]",
+		`done  agent  :notes -> :agent/1/whiff/done 2 (err {:kind :rejected`,
+		`eval  agent  :agent/1 -> eval "(call :notes/add \"e\")"`, "[held 4]",
+		"note  :agent/1 is trusted :notes",
+		`:agent/1 -> :notes/add "d"  (ok :done)`, "[trusted]",
+		`eval  agent  :agent/1 -> eval "(file/append`, "[free]",
+		`eval  agent  :agent/1 -> eval "(publish :t/x \"g\")"  (ok :done)`,
+		"agent/1: 4 writes went through (1 trusted, 2 free, 1 accepted); 1 rejected; 2 wait for review\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("session has no %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "notes/list") {
+		t.Errorf("session has a read:\n%s", got)
+	}
+	if got := rpc.SessionText(es, "agent/9"); got != "agent/9: no writes in history\n" {
+		t.Errorf("an unknown session = %q", got)
 	}
 }

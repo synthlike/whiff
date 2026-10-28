@@ -342,17 +342,38 @@ func (d *daemon) eval(ctx context.Context, from string, free bool, req rpc.Reque
 // a whole; the rest runs under :read. A free session's runs as it is.
 func (d *daemon) evalIn(ctx context.Context, env *puff.Env, out *strings.Builder, file, from string, free bool, req rpc.Request) rpc.Response {
 	env.Dir = req.Dir
-	if req.Agent && !free {
+	// A free session's eval that writes goes in history, as it runs.
+	freeWrite := false
+	if req.Agent {
 		if forms, err := puff.Read(file, req.Src); err == nil {
-			if d.evalMark(env, from, forms) == puff.MarkWrite {
+			write := d.evalMark(env, from, forms) == puff.MarkWrite
+			switch {
+			case free:
+				freeWrite = write
+			case write:
 				var r puff.Value
 				d.do(func(st *state) { r = d.holdEval(st, from, req) })
 				return rpc.Response{Value: puff.Print(r)}
+			default:
+				ctx = puff.WithMark(ctx, "the agent's eval", puff.MarkRead)
 			}
-			ctx = puff.WithMark(ctx, "the agent's eval", puff.MarkRead)
 		}
 	}
+	begin := time.Now()
 	v, err := env.Load(ctx, file, req.Src)
+	if freeWrite {
+		reply := "(ok :done)"
+		switch {
+		case err != nil:
+			reply = puff.Print(puff.Errorf("fault", "%v", err))
+		case v != nil:
+			reply = puff.Print(v)
+		}
+		d.do(func(st *state) {
+			st.record(entry{at: begin, kind: "eval", from: from, args: puff.Print(puff.NewVector(puff.String(req.Src))),
+				reply: reply, took: time.Since(begin), gate: "free"})
+		})
+	}
 	resp := rpc.Response{Out: out.String()}
 	if err != nil {
 		var fault *puff.Fault

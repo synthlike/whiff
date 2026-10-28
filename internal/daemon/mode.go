@@ -41,15 +41,34 @@ func (m *mode) String() string {
 	return s
 }
 
+// name is m's name in history: trusted or free.
+func (m *mode) name() string {
+	if m.free {
+		return "free"
+	}
+	return "trusted"
+}
+
 // modeOf is addr's mode, or nil if it is gated; a mode that has run out
-// is gone.
+// is gone, and history notes it.
 func (st *state) modeOf(addr string) *mode {
 	m := st.modes[addr]
 	if m != nil && !m.until.IsZero() && !time.Now().Before(m.until) {
 		delete(st.modes, addr)
+		st.record(entry{at: m.until, note: fmt.Sprintf(":%s's %s mode ran out: it is gated", addr, m.name())})
 		return nil
 	}
 	return m
+}
+
+// heldGate is the gate of a message the review gate held, for history:
+// held <id>, or refused if it couldn't wait (nobody reviews, or the inbox
+// is full).
+func heldGate(r puff.Value) string {
+	if id, ok := pendingID(r); ok {
+		return fmt.Sprintf("held %d", id)
+	}
+	return "refused"
 }
 
 // lets says whether from's mode lets its message to addr through, as if

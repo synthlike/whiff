@@ -15,13 +15,14 @@ const historySize = 1000
 // whiff itself, such as a service that failed to load.
 type entry struct {
 	at    time.Time
-	kind  string // "call", "send", "pub" or "done"
+	kind  string // "call", "send", "pub", "done" or "eval", an agent's that writes
 	user  bool   // the origin: whether the chain began with the user
 	from  string // the sender's address; "" for a client
 	to    string // address/fn, or address on :topic; "" for a client
 	args  string // a printed vector
 	reply string // the printed Result; "" for a done no service handled
 	took  time.Duration
+	gate  string // how the review gate treated an agent's write: see rpc.Entry
 	note  string
 }
 
@@ -31,7 +32,7 @@ func (e entry) rpc() rpc.Entry {
 		return rpc.Entry{At: e.at, Kind: "note", Note: e.note}
 	}
 	return rpc.Entry{At: e.at, Kind: e.kind, Origin: string(origin(e.user)), From: e.from, To: e.to,
-		Args: e.args, Reply: e.reply, Took: e.took}
+		Args: e.args, Reply: e.reply, Took: e.took, Gate: e.gate}
 }
 
 // tracer is a client following history: whiff history -f, sniff. Its
