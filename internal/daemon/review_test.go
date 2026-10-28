@@ -20,6 +20,7 @@ func TestReviewGate(t *testing.T) {
   (on (list) "Reads them." (file/read-text "` + file + `")))`,
 		"asker": `(srv asker
   (on (go) "Asks you." (call :me/ask "add y?"))
+  (on (agent) "Asks the agent." (call :agent/1/tell "add y?"))
   (on (whiff/done id r) "Adds y." (call :notes/add "y")))`,
 		"batch": `(srv batch
   (on (twice text) "Adds text twice." (do (try (call :notes/add text)) (call :notes/add text))))`,
@@ -97,10 +98,11 @@ func TestReviewGate(t *testing.T) {
 		t.Errorf("notes before the review = %q", got)
 	}
 	// Only accept or reject answer it, and an agent can't.
-	for _, cl := range []*rpc.Client{c, agent} {
-		if r := msg(cl, "reply", "", "["+n+" (ok :done)]"); kind(r) != ":bad-call" {
-			t.Errorf("reply to a held message = %s", r)
-		}
+	if r := msg(c, "reply", "", "["+n+" (ok :done)]"); kind(r) != ":bad-call" {
+		t.Errorf("reply to a held message = %s", r)
+	}
+	if r := msg(agent, "reply", "", "["+n+" (ok :done)]"); !strings.Contains(r, "only its own inbox") {
+		t.Errorf("agent's reply to a held message = %s", r)
 	}
 	if r := msg(agent, "accept", "", "["+n+"]"); r != "error: an agent can't review its own messages" {
 		t.Errorf("agent's accept = %s", r)
@@ -164,9 +166,18 @@ func TestReviewGate(t *testing.T) {
 		}
 		return notes()
 	}, "y added")
+	// An agent can't answer the question to you; its answer in its own
+	// inbox goes straight through, and what it leads to waits.
 	n = id(msg(agent, "call", "asker/go", `[]`))
+	if r := msg(agent, "reply", "", "["+n+" (ok :yes)]"); !strings.Contains(r, "only its own inbox") {
+		t.Errorf("agent's reply to your question = %s", r)
+	}
+	if resp, err := agent.Claim("agent", `(ask (tell text) "Asks the agent.")`); err != nil || resp.Value != "(ok :agent/1)" {
+		t.Fatalf("claim = %+v %v", resp, err)
+	}
+	n = id(msg(c, "call", "asker/agent", `[]`))
 	if r := msg(agent, "reply", "", "["+n+" (ok :yes)]"); r != "(ok :done)" {
-		t.Errorf("agent's reply = %s", r)
+		t.Errorf("agent's reply in its inbox = %s", r)
 	}
 	if e := next(); e.Topic != "review/pending" || !strings.Contains(e.Value, `:args ["y"]`) || !strings.Contains(e.Value, ":from :asker") {
 		t.Errorf("after the agent's reply = %+v", e)

@@ -1,11 +1,8 @@
 package daemon
 
 import (
-	"fmt"
 	"strings"
 	"testing"
-
-	"github.com/synthlike/whiff/internal/puff"
 )
 
 func TestOrigin(t *testing.T) {
@@ -80,31 +77,16 @@ func TestOrigin(t *testing.T) {
 	}
 	inHistory(`done  agent  client -> :relay/whiff/done ` + id + ` (ok 1)  (ok (ok 1))`)
 
-	// An agent's answer to the user's message is the agent's: by an agent
-	// client, or by a service handling an agent's message.
+	// An agent client answers only its own inbox, not todo's.
 	id = run(false, `(match (call :relay/ask) [(err {:kind :pending :id id}) id])`)
-	if _, err := agent.Message("reply", "", "["+id+" (ok 2)]", ""); err != nil {
-		t.Fatal(err)
+	if _, err := agent.Message("reply", "", "["+id+" (ok 2)]", ""); err == nil || !strings.Contains(err.Error(), "only its own inbox") {
+		t.Errorf("an agent's reply to todo's inbox = %v, want it refused", err)
 	}
-	inHistory(`done  agent  client -> :relay/whiff/done ` + id + ` (ok 2)  (ok (ok 2))`)
-	// todo/answer replies, which is :write: the gate holds the agent's call
-	// until you accept it.
-	reviewer := dial(t, dir)
-	if _, err := reviewer.Sub("review/pending"); err != nil {
-		t.Fatal(err)
-	}
-	id = run(false, `(match (call :relay/ask) [(err {:kind :pending :id id}) id])`)
-	resp, err := agent.Message("call", "todo/answer", "["+id+"]", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	v, _ := puff.ReadValue(resp.Value)
-	held, ok := pendingID(v)
-	if !ok {
-		t.Fatalf("agent's todo/answer = %s, want it held", resp.Value)
-	}
-	if _, err := user.Message("accept", "", fmt.Sprintf("[%d]", held), ""); err != nil {
-		t.Fatal(err)
+	// A service handling an agent's message answers as the agent, and goes
+	// straight through: reply is :read, as what the answer leads to is
+	// gated anyway.
+	if got := run(true, `(call :todo/answer `+id+`)`); got != "(ok :done)" {
+		t.Errorf("agent's todo/answer = %s, want (ok :done)", got)
 	}
 	inHistory(`done  agent  :todo -> :relay/whiff/done ` + id + ` (ok :from-todo)  (ok (ok :from-todo))`)
 	// The user's answer to the user's message stays the user's.

@@ -22,7 +22,7 @@ const mcpInstructions = `whiff is the user's message daemon: small services writ
 
 Each tool named address_fn calls that service function. Its arguments are puff values written as strings: 12, :key, [1 2], {:a 1}, "text" with quotes; anything that doesn't read as a value is taken as a string. A :read function answers at once. A :write one waits for the user to review it: you get a pending id at once, and wait gives you the result once they accept or reject it. So does an ask, which waits for a person to answer.
 
-eval runs puff code in the daemon, under the same rule: code that reaches anything :write waits for review as a whole. inbox lists the messages sent to you; answer one with eval (reply id (ok value)), which waits for review too.`
+eval runs puff code in the daemon, under the same rule: code that reaches anything :write waits for review as a whole. inbox lists the messages sent to you; answer one with eval (reply id (ok value)), which goes straight through.`
 
 // agentIface is what an agent's address offers others: messages to it wait
 // in its inbox.
@@ -321,7 +321,7 @@ func (a *agent) addFixed() {
 			return a.wait(ctx, in.ID, wait), nil
 		})
 	a.server.AddTool(&mcp.Tool{Name: "inbox",
-		Description: "Lists the messages sent to you that wait for your answer, oldest first, each {:id :fn :args :from :origin :cwd :at}. Answer one with eval (reply id (ok value)), which waits for the user's review.",
+		Description: "Lists the messages sent to you that wait for your answer, oldest first, each {:id :fn :args :from :origin :cwd :at}. Answer one with eval (reply id (ok value)).",
 		InputSchema: obj(map[string]any{}),
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
 		func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {

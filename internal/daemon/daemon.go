@@ -265,7 +265,7 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 		case "inbox":
 			resp.Out = d.inboxText(strings.TrimPrefix(req.Target, ":"))
 		case "reply":
-			resp = d.clientReply(req)
+			resp = d.clientReply(from, req)
 		case "accept", "reject":
 			resp = d.clientReview(ctx, req)
 		case "wait":

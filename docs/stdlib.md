@@ -192,7 +192,7 @@ mark rather than `:write`, and `publish` to a literal topic as its subscribers'.
 - `(addresses)`: (ok addrs): every address, sorted, each {:address :client :state}: :client for a client's, :state for a service with :state.
 - `(state service)`: (ok state): service's state as it last committed it; (err {:kind :stateless}) for a service without :state, (err {:kind :no-address}) if there is none.
 - `(inbox [fn])`: This service's messages waiting for a reply, oldest first, each {:id :fn :args :from :cwd :at}; only fn's, a keyword, if given.
-- `(reply id result)` `:write`: Answer the message id in this service's inbox with result: its sender gets [:whiff/done id result]. (err {:kind :no-id}) if it isn't there.
+- `(reply id result)`: Answer the message id in this service's inbox with result: its sender gets [:whiff/done id result]. (err {:kind :no-id}) if it isn't there.
 - `(self)`: This service's address, as a keyword: :assistant, or :try/3/assistant in whiff try.
 - `(hand-on r)`: r; if r is the pending of a job or ask this service started, its answer goes to the caller of the message being handled instead. (err {:kind :no-id}) for another pending.
 - `(publish topic v)` `:write`: Send v to every service subscribed to topic, a keyword: :done at once; pending if the review gate holds it.

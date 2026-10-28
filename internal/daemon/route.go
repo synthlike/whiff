@@ -289,9 +289,14 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 				})
 				return puff.NewVector(items...), nil
 			}},
-		{Name: "reply", Args: "id result", Mark: puff.MarkWrite,
+		// reply is :read: an answer from an agent's chain is :agent's and
+		// not reviewed, so what its sender does with it is gated there.
+		{Name: "reply", Args: "id result", Mark: puff.MarkRead,
 			Doc: "Answer the message id in this service's inbox with result: its sender gets [:whiff/done id result]. (err {:kind :no-id}) if it isn't there.",
 			Fn: func(_ *puff.Call, args []puff.Value) (puff.Value, error) {
+				if cur.addr == "" {
+					return nil, errors.New("only a service has an inbox to reply from: a client answers with whiff reply")
+				}
 				return d.reply(cur.addr, cur.user, args[0], args[1])
 			}},
 		{Name: "self", Mark: puff.MarkRead,

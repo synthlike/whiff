@@ -349,15 +349,23 @@ func (d *daemon) clientWait(ctx context.Context, req rpc.Request) rpc.Response {
 	return rpc.Response{Value: puff.Print(r)}
 }
 
-// clientReply answers a message in any inbox for a client; req.Args is
-// the printed vector [id result].
-func (d *daemon) clientReply(req rpc.Request) rpc.Response {
+// clientReply answers a message for a client; req.Args is the printed
+// vector [id result]. Yours may answer any inbox; an agent's only that of
+// the address it holds (from), so it can't answer a question to you.
+func (d *daemon) clientReply(from string, req rpc.Request) rpc.Response {
 	v, err := puff.ReadValue(req.Args)
 	vec, ok := v.(puff.Vector)
 	if err != nil || !ok || vec.Len() != 2 {
 		return rpc.Response{Error: fmt.Sprintf("want [id result], got %s", req.Args)}
 	}
-	r, err := d.reply("", !req.Agent, vec.At(0), vec.At(1))
+	by := ""
+	if req.Agent {
+		if from == "" {
+			return rpc.Response{Error: "an agent answers only its own inbox, and this connection holds no address"}
+		}
+		by = from
+	}
+	r, err := d.reply(by, !req.Agent, vec.At(0), vec.At(1))
 	if err != nil {
 		return rpc.Response{Error: err.Error()}
 	}

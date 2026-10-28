@@ -10,6 +10,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/synthlike/whiff/internal/puff"
 	"github.com/synthlike/whiff/internal/rpc"
 )
 
@@ -112,11 +113,21 @@ func TestMCP(t *testing.T) {
 	if got, isError := call("wait", map[string]any{"id": 1}); got != "[1 :a]" || isError {
 		t.Errorf("wait for the accepted save = %q, error %v", got, isError)
 	}
-	if _, err := you.Message("call", "agent/1/tell", `["hi"]`, ""); err != nil {
+	told, err := you.Message("call", "agent/1/tell", `["hi"]`, "")
+	if err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := call("inbox", nil); !strings.Contains(got, `:fn :tell`) || !strings.Contains(got, `["hi"]`) {
 		t.Errorf("inbox = %q, want the tell", got)
+	}
+	// Its answer goes straight through, without a review.
+	v, _ := puff.ReadValue(told.Value)
+	n := puff.Print(field(v.(puff.Tag).At(0), "id"))
+	if got, isError := call("eval", map[string]any{"code": "(reply " + n + ` (ok "hello"))`}); got != ":done" || isError {
+		t.Errorf("reply = %q, error %v", got, isError)
+	}
+	if got, _ := call("inbox", nil); got != "no messages" {
+		t.Errorf("inbox after the reply = %q", got)
 	}
 
 	cs.Close()
