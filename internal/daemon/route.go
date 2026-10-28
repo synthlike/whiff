@@ -320,6 +320,13 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 				}
 				return puff.Keyword(cur.addr), nil
 			}},
+		{Name: "mode", Mark: puff.MarkRead,
+			Doc: "(ok m): this agent session's mode, {:mode :gated}, {:mode :free} or {:mode :trusted :services [:todo ...]}, with :until, a time, if it runs out. (err {:kind :no-session}) for anyone else.",
+			Fn: func(_ *puff.Call, _ []puff.Value) (puff.Value, error) {
+				var r puff.Value
+				d.do(func(st *state) { r = st.modeValue(cur.addr) })
+				return r, nil
+			}},
 		{Name: "hand-on", Args: "r", Mark: puff.MarkRead,
 			Doc: "r; if r is the pending of a job or ask this service started, its answer goes to the caller of the message being handled instead. (err {:kind :no-id}) for another pending.",
 			Fn: func(_ *puff.Call, args []puff.Value) (puff.Value, error) {
@@ -467,7 +474,9 @@ func (cur *caller) message(dir string, args []puff.Value) (message, string, erro
 }
 
 // readOnly is an error if ctx runs under a :read mark and m, a message to
-// addr, is :write. A target that doesn't exist is left for m to fail.
+// addr, is :write, unless its sender's mode lets it through, as it does a
+// trusted session's eval's. A target that doesn't exist is left for m to
+// fail.
 func (d *daemon) readOnly(ctx context.Context, addr string, m message) error {
 	what, ok := puff.ReadOnly(ctx)
 	if !ok {
@@ -479,6 +488,11 @@ func (d *daemon) readOnly(ctx context.Context, addr string, m message) error {
 		return nil
 	}
 	if _, ok := s.fns[m.fn]; !ok || mk.msgMark(s, m) == puff.MarkRead {
+		return nil
+	}
+	var lets bool
+	d.do(func(st *state) { lets = !m.user && st.lets(m.from, addr) })
+	if lets {
 		return nil
 	}
 	return fmt.Errorf(":%s/%s is :write, and %s is :read", addr, m.fn, what)

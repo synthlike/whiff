@@ -26,6 +26,9 @@ type marker struct {
 	services map[string]*service
 	modes    map[string]string // agent sessions' modes, as ls shows them
 	base     *puff.Env         // for builtins' marks, and an eval's earlier defs'
+	// trusted is the services an eval's session trusts: a message to one
+	// is :read, as it goes through as accepted.
+	trusted map[string]bool
 
 	seen map[string]bool
 	// strict leaves out :read claims: what a function reaches whatever its
@@ -146,7 +149,7 @@ func (mk *marker) form(s *service, f *puff.Form) puff.Mark {
 			return mk.forms(s, f.Items)
 		}
 		target, ok := mk.resolve(s, f.Items[i])
-		if !ok || mk.node(target.s, target.fn) == puff.MarkWrite &&
+		if !ok || !mk.trusted[target.s.name] && mk.node(target.s, target.fn) == puff.MarkWrite &&
 			!(target.s.fns[target.fn].cmd && len(f.Items) > i+1 && readOnlyCommand(f.Items[i+1])) {
 			return mk.write(f.Items[i])
 		}
@@ -185,7 +188,8 @@ func (mk *marker) msgMark(s *service, m message) puff.Mark {
 
 // evalMark is the mark of forms, code evaluated in env for from (an
 // address, "" for none), as if they were a service's: what their defs,
-// env's earlier ones and the targets they name reach.
+// env's earlier ones and the targets they name reach. A literal target in
+// a service from's trusted mode lets through is :read.
 func (d *daemon) evalMark(env *puff.Env, from string, forms []*puff.Form) puff.Mark {
 	s := &service{name: from, code: map[string][]*puff.Form{}}
 	for _, f := range forms {
@@ -195,6 +199,11 @@ func (d *daemon) evalMark(env *puff.Env, from string, forms []*puff.Form) puff.M
 	}
 	mk := d.marker()
 	mk.base, mk.seen = env, map[string]bool{}
+	d.do(func(st *state) {
+		if m := st.modeOf(from); m != nil {
+			mk.trusted = maps.Clone(m.trust)
+		}
+	})
 	return mk.forms(s, forms)
 }
 

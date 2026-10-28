@@ -78,6 +78,30 @@ func (st *state) lets(from, addr string) bool {
 	return m != nil && (m.free || addr != "" && m.trust[addr])
 }
 
+// modeValue is addr's mode as (mode) gives it: (ok {:mode ...}), or (err
+// {:kind :no-session}) if addr isn't an agent session.
+func (st *state) modeValue(addr string) puff.Value {
+	if s := st.addrs[addr]; s == nil || !s.client || !strings.HasPrefix(addr, "agent/") {
+		return puff.Errorf("no-session", "only an agent session has a mode")
+	}
+	es := []puff.Entry{{Key: puff.Keyword("mode"), Val: puff.Keyword("gated")}}
+	if m := st.modeOf(addr); m != nil {
+		es[0].Val = puff.Keyword(m.name())
+		if !m.free {
+			var services []puff.Value
+			for _, name := range slices.Sorted(maps.Keys(m.trust)) {
+				services = append(services, puff.Keyword(name))
+			}
+			es = append(es, puff.Entry{Key: puff.Keyword("services"), Val: puff.NewVector(services...)})
+		}
+		if !m.until.IsZero() {
+			es = append(es, puff.Entry{Key: puff.Keyword("until"), Val: puff.NewTime(m.until)})
+		}
+	}
+	v, _ := puff.NewMap(es...)
+	return puff.Ok(v)
+}
+
 // clientMode sets an agent session's mode for a client: req.Target is the
 // session's address, and req.Args a printed map {:mode :gated|:trusted|:free
 // :services [:todo ...] :for 2h}, with :services for trusted and :for

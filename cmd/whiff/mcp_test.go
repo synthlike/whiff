@@ -130,6 +130,29 @@ func TestMCP(t *testing.T) {
 		t.Errorf("inbox after the reply = %q", got)
 	}
 
+	// Once you trust it with :greet, the next call notices, and the tools
+	// say what goes through.
+	if r, err := you.Mode("agent/1", "trusted", []string{"greet"}, 0); err != nil || r.Value != "(ok :done)" {
+		t.Fatalf("trust = %+v %v", r, err)
+	}
+	call("greet_hello", map[string]any{"name": "ann"})
+	list, err = cs.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{
+		"greet_save": "Your session's mode lets it through without review: it runs at once.",
+		"eval":       "Your session trusts :greet: your calls and sends to them go through without review",
+	} {
+		i := slices.IndexFunc(list.Tools, func(tool *mcp.Tool) bool { return tool.Name == name })
+		if i < 0 || !strings.Contains(list.Tools[i].Description, want) {
+			t.Errorf("%s's description doesn't say %q", name, want)
+		}
+	}
+	if got, isError := call("greet_save", map[string]any{"x": "2"}); got != "2" || isError {
+		t.Errorf("trusted save = %q, error %v", got, isError)
+	}
+
 	cs.Close()
 	if err := <-served; err != nil {
 		t.Errorf("mcpServe = %v", err)

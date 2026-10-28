@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -22,7 +23,9 @@ const mcpInstructions = `whiff is the user's message daemon: small services writ
 
 Each tool named address_fn calls that service function. Its arguments are puff values written as strings: 12, :key, [1 2], {:a 1}, "text" with quotes; anything that doesn't read as a value is taken as a string. A :read function answers at once. A :write one waits for the user to review it: you get a pending id at once, and wait gives you the result once they accept or reject it. So does an ask, which waits for a person to answer.
 
-eval runs puff code in the daemon, under the same rule: code that reaches anything :write waits for review as a whole. inbox lists the messages sent to you; answer one with eval (reply id (ok value)), which goes straight through.`
+eval runs puff code in the daemon, under the same rule: code that reaches anything :write waits for review as a whole. inbox lists the messages sent to you; answer one with eval (reply id (ok value)), which goes straight through.
+
+The user may trust your session with some services, or free it, for a while: then the tools' descriptions say what goes straight through, and change when the mode does.`
 
 // agentIface is what an agent's address offers others: messages to it wait
 // in its inbox.
@@ -64,6 +67,62 @@ type agent struct {
 	c     *rpc.Client
 	addr  string            // its :agent/<n>, without the colon
 	tools map[string]string // the function tools listed, by name: their JSON, to see a change
+	mode  string            // the session's mode as the tools describe it, printed
+}
+
+// sessionMode is the agent's mode, as (mode) gives it: what it lets
+// through without review.
+type sessionMode struct {
+	printed string
+	free    bool
+	trust   map[string]bool // trusted: the services whose messages go through
+	until   string          // when it runs out, or ""
+}
+
+func (m sessionMode) lets(addr string) bool { return m.free || m.trust[addr] }
+
+// sessionMode asks the daemon for the agent's mode.
+func (a *agent) sessionMode() (sessionMode, error) {
+	v, err := a.eval("(mode)")
+	if err != nil {
+		return sessionMode{}, err
+	}
+	v = okValue(v)
+	kind, _ := field(v, "mode").(puff.Keyword)
+	m := sessionMode{printed: puff.Print(v), free: kind == "free", trust: map[string]bool{}}
+	services, _ := field(v, "services").(puff.Vector)
+	for i := range services.Len() {
+		if k, ok := services.At(i).(puff.Keyword); ok {
+			m.trust[string(k)] = true
+		}
+	}
+	if t := field(v, "until"); t != nil {
+		m.until = puff.Print(t)
+	}
+	return m, nil
+}
+
+// says is what m lets through, for the eval tool's description; "" if it
+// is gated.
+func (m sessionMode) says() string {
+	var s string
+	switch {
+	case m.free:
+		s = "Your session is free: everything you send, publish and evaluate goes through without review"
+	case len(m.trust) > 0:
+		var names []string
+		for name := range m.trust {
+			names = append(names, ":"+name)
+		}
+		slices.Sort(names)
+		s = "Your session trusts " + strings.Join(names, " ") + ": your calls and sends to them go through without review, and so does code whose only :write is those"
+	default:
+		return ""
+	}
+	if m.until != "" {
+		s += ", until " + m.until
+	}
+	return s + "."
 }
 
 // client is the agent's connection, dialled and claimed if there is none
@@ -139,8 +198,9 @@ type fnTool struct {
 	params []string
 }
 
-// functions are every address's functions as tools, but the agent's own.
-func (a *agent) functions() ([]fnTool, error) {
+// functions are every address's functions as tools, but the agent's own,
+// described as mode treats them.
+func (a *agent) functions(mode sessionMode) ([]fnTool, error) {
 	v, err := a.eval("(addresses)")
 	if err != nil {
 		return nil, err
@@ -182,6 +242,8 @@ func (a *agent) functions() ([]fnTool, error) {
 			switch {
 			case form == "ask":
 				how = "An ask: it waits for a person to answer, so you get a pending id; wait gives the answer."
+			case mark == "write" && mode.lets(string(addr)):
+				how = "Your session's mode lets it through without review: it runs at once."
 			case mark == "write":
 				how = "It waits for the user's review, so you get a pending id; wait gives the result."
 			}
@@ -207,14 +269,23 @@ func toolName(target string) string {
 }
 
 // refresh lists the functions as they are now, adding the tools that are
-// new or changed and removing the ones that have gone.
+// new or changed and removing the ones that have gone, and describes eval
+// for the session's mode.
 func (a *agent) refresh() error {
-	fns, err := a.functions()
+	mode, err := a.sessionMode()
+	if err != nil {
+		return err
+	}
+	fns, err := a.functions(mode)
 	if err != nil {
 		return err
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if mode.printed != a.mode {
+		a.mode = mode.printed
+		a.addEval(mode)
+	}
 	now := map[string]bool{}
 	for _, f := range fns {
 		now[f.tool.Name] = true
@@ -264,22 +335,39 @@ func (a *agent) callTool(f fnTool) mcp.ToolHandler {
 		if err != nil {
 			return failed("%v", err), nil
 		}
+		a.noticeMode()
 		return resultOf(resp.Value), nil
 	}
 }
 
-// addFixed adds the tools that aren't a service's: eval, wait and inbox.
-func (a *agent) addFixed() {
-	obj := func(props map[string]any, required ...string) map[string]any {
-		schema := map[string]any{"type": "object", "properties": props, "additionalProperties": false}
-		if len(required) > 0 {
-			schema["required"] = required
+// noticeMode refreshes the tools if the session's mode has changed since
+// they were described, so the agent hears what goes through now.
+func (a *agent) noticeMode() {
+	mode, err := a.sessionMode()
+	if err != nil {
+		return
+	}
+	a.mu.Lock()
+	changed := mode.printed != a.mode
+	a.mu.Unlock()
+	if changed {
+		a.refresh()
+	}
+}
+
+// addEval adds eval, described for mode.
+func (a *agent) addEval(mode sessionMode) {
+	how := "Code that reaches anything :write waits for the user's review as a whole: you get a pending id, and wait gives the result."
+	if s := mode.says(); s != "" {
+		how = s + " Other code that reaches :write waits for the user's review as a whole: you get a pending id, and wait gives the result."
+		if mode.free {
+			how = s
 		}
-		return schema
 	}
 	a.server.AddTool(&mcp.Tool{Name: "eval",
-		Description: "Evaluates puff code in the daemon, in your working directory, and gives its value and what it printed. Code that reaches anything :write waits for the user's review as a whole: you get a pending id, and wait gives the result.",
-		InputSchema: obj(map[string]any{"code": map[string]any{"type": "string", "description": "puff code, such as (call :git/status)"}}, "code")},
+		Description: "Evaluates puff code in the daemon, in your working directory, and gives its value and what it printed. " + how,
+		InputSchema: map[string]any{"type": "object", "additionalProperties": false, "required": []string{"code"},
+			"properties": map[string]any{"code": map[string]any{"type": "string", "description": "puff code, such as (call :git/status)"}}}},
 		func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			var in struct{ Code string }
 			if err := json.Unmarshal(req.Params.Arguments, &in); err != nil {
@@ -296,12 +384,25 @@ func (a *agent) addFixed() {
 			case resp.Error != "":
 				return failed("%s%s", resp.Out, resp.Error), nil
 			}
+			a.noticeMode()
 			r := resultOf(resp.Value)
 			if resp.Out != "" {
 				r.Content = append([]mcp.Content{&mcp.TextContent{Text: resp.Out}}, r.Content...)
 			}
 			return r, nil
 		})
+}
+
+// addFixed adds the tools that aren't a service's and don't change with
+// the mode: wait and inbox. refresh adds eval.
+func (a *agent) addFixed() {
+	obj := func(props map[string]any, required ...string) map[string]any {
+		schema := map[string]any{"type": "object", "properties": props, "additionalProperties": false}
+		if len(required) > 0 {
+			schema["required"] = required
+		}
+		return schema
+	}
 	a.server.AddTool(&mcp.Tool{Name: "wait",
 		Description: "Waits for the result of a pending message, eval or job, by its id, up to seconds (30 by default); if it is still pending then, it says so, and you can wait again later. Ids last across reconnects.",
 		InputSchema: obj(map[string]any{

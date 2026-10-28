@@ -77,6 +77,10 @@ func TestModes(t *testing.T) {
 	if r, err := you.Mode("agent/9", "free", nil, 0); err != nil || !strings.Contains(r.Value, ":no-address") {
 		t.Errorf("free for no session = %+v %v", r, err)
 	}
+	expect("the agent's mode", eval(`(mode)`), "(ok {:mode :gated})")
+	if r, err := you.Eval(`(mode)`, ""); err != nil || r.Value != `(err {:kind :no-session :message "only an agent session has a mode"})` {
+		t.Errorf("your (mode) = %+v %v", r, err)
+	}
 
 	// Trusted: messages to notes go through; to relay, which isn't
 	// trusted, they still wait.
@@ -86,9 +90,12 @@ func TestModes(t *testing.T) {
 	// What a trusted service does for the agent goes through too.
 	expect("trust relay", mode(you, "trusted", []string{"relay"}, 0), "(ok :done)")
 	expect("trusted relay", call("relay/add", `["d"]`), "ok")
-	// An eval that reaches :write still waits, and so does a publish.
+	expect("the trusted mode", eval(`(mode)`), "(ok {:mode :trusted :services [:relay]})")
+	// An eval whose only writes are messages to relay runs; one that
+	// reaches another :write still waits, and so does a publish.
 	expect("trusted eval", eval(`(match (call :notes/list) [(err {:kind k}) k] [_ :ran])`), ":ran")
-	for _, src := range []string{`(call :notes/add "e")`, `(publish :t/x "e")`} {
+	expect("trusted eval to relay", eval(`(call :relay/add "r")`), "(ok :done)")
+	for _, src := range []string{`(call :notes/add "e")`, `(do (call :relay/add "e") (call :notes/add "e"))`, `(publish :t/x "e")`} {
 		if got := eval(src); !strings.Contains(got, "the agent's eval waits for your review") {
 			t.Errorf("trusted %s = %s, want it held", src, got)
 		}
@@ -101,7 +108,7 @@ func TestModes(t *testing.T) {
 	expect("free", mode(you, "free", nil, 0), "(ok :done)")
 	expect("free eval", eval(`(file/append "`+file+`" "f")`), "(ok :done)")
 	expect("free publish", eval(`(publish :t/x "g")`), "(ok :done)")
-	eventually(t, "the free session's writes", func() string { b, _ := os.ReadFile(file); return string(b) }, "bdfg")
+	eventually(t, "the free session's writes", func() string { b, _ := os.ReadFile(file); return string(b) }, "bdrfg")
 
 	// Gate puts it back, and a mode for a while runs out.
 	expect("gate", mode(you, "gated", nil, 0), "(ok :done)")

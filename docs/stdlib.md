@@ -219,6 +219,7 @@ mark rather than `:write`, and `publish` to a literal topic as its subscribers'.
 - `(inbox [fn])`: This service's messages waiting for a reply, oldest first, each {:id :fn :args :from :cwd :at}; only fn's, a keyword, if given.
 - `(reply id result)`: Answer the message id in this service's inbox with result: its sender gets [:whiff/done id result]. (err {:kind :no-id}) if it isn't there.
 - `(self)`: This service's address, as a keyword: :assistant, or :try/3/assistant in whiff try.
+- `(mode)`: (ok m): this agent session's mode, {:mode :gated}, {:mode :free} or {:mode :trusted :services [:todo ...]}, with :until, a time, if it runs out. (err {:kind :no-session}) for anyone else.
 - `(hand-on r)`: r; if r is the pending of a job or ask this service started, its answer goes to the caller of the message being handled instead. (err {:kind :no-id}) for another pending.
 - `(publish topic v)` `:write`: Send v to every service subscribed to topic, a keyword: :done at once; pending if the review gate holds it.
 - `(call target [arg] ...)` `:write`: Send target, :address/fn, a message and wait for its Result; (err {:kind :timeout}) after 5s.
