@@ -12,6 +12,10 @@ Or try one without installing it: `whiff try services/git.puff status`.
 - `git`: `status` and `branch` of the repository in the caller's directory.
 - `gh`: open pull requests (`prs`) and their checks (`checks` for the current
   branch's, `checks-of 12`), through the gh CLI, as you're logged in to it.
+  `watch` the repository you're in, and every 5 minutes it publishes
+  `:gh/changed {:dir :prs}` when its open pull requests change (`whiff sub
+  gh/changed`); `unwatch`, `watching`, and `poll` to look now. What it
+  watches and last saw is its state, kept across restarts.
 - `todo`: the checkbox items in `TODO.md` in the caller's directory (`items`,
   `open`), `add text` and `done line`. The file is its state.
 - `reviewer`: `review` has Claude review the uncommitted changes (`git diff

@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/synthlike/whiff/internal/puff"
 )
 
 // TestGitService tries services/git.puff, as whiff try does, in a scratch
@@ -131,6 +134,79 @@ esac
 		if err != nil || resp.Error != "" || resp.Value != tt.want {
 			t.Errorf("gh/%s %s = %s %s %v\nwant %s", tt.fn, tt.args, resp.Value, resp.Error, err, tt.want)
 		}
+	}
+}
+
+// TestGhWatch runs services/gh.puff, polling every 20ms, on a repository
+// whose fake gh prints its prs.json.
+func TestGhWatch(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "..", "services", "gh.puff"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := tempDir(t)
+	bin := filepath.Join(dir, "bin")
+	os.Mkdir(bin, 0o700)
+	fake := `#!/bin/sh
+case "$*" in
+"pr list "*) cat prs.json ;;
+*) echo "unexpected: $*" >&2; exit 1 ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(fake), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	repo := filepath.Join(dir, "repo")
+	os.Mkdir(repo, 0o700)
+	prs := func(json string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(repo, "prs.json"), []byte(json), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pr12 := `{"author":{"login":"ann"},"createdAt":"2026-10-27T17:35:19Z","headRefName":"ann/fix","isDraft":false,"number":12,"reviewDecision":"APPROVED","title":"Fix it","url":"u12"}`
+	pr13 := `{"author":{"login":"bob"},"createdAt":"2026-10-28T08:00:00Z","headRefName":"bob/new","isDraft":true,"number":13,"reviewDecision":"","title":"New","url":"u13"}`
+	prs("[" + pr12 + "]")
+	writeServices(t, dir, map[string]string{
+		"gh": strings.Replace(string(src), "(def every 5m)", "(def every 20ms)", 1),
+		"seen": `(srv seen :state []
+  (on :gh/changed (s v) :update (ok (vector/append s v)))
+  (on (numbers s) "The numbers of each change's pull requests."
+    (ok (vector/map s (fn (v) (match v [{:prs ps} (vector/map ps (fn (p) (match p [{:number n} n])))]))))))`,
+	})
+	start(t, dir)
+	c := dial(t, dir)
+
+	eval := func(src, wd, want string) {
+		t.Helper()
+		if resp, err := c.Eval(src, wd); err != nil || resp.Value != want {
+			t.Errorf("%s in %s = %s %s %v, want %s", src, wd, resp.Value, resp.Error, err, want)
+		}
+	}
+	numbers := func() string {
+		resp, _ := c.Eval(`(call :seen/numbers)`, "")
+		return resp.Value
+	}
+	eval(`(call :gh/watch)`, repo, `(ok :watching)`)
+	eval(`(call :gh/watching)`, "", `(ok [`+puff.Print(puff.String(repo))+`])`)
+	// Watching takes what is there now; only a change is published.
+	time.Sleep(100 * time.Millisecond)
+	if got := numbers(); got != `(ok [])` {
+		t.Errorf("seen before a change: %s", got)
+	}
+	prs("[" + pr13 + "," + pr12 + "]")
+	eventually(t, "the change", numbers, `(ok [[13 12]])`)
+	eval(`(call :gh/poll)`, "", `(ok [])`)
+
+	// A directory gh fails in isn't watched.
+	eval(`(match (call :gh/watch) [(err {:kind k}) k])`, dir, `:gh`)
+	eval(`(call :gh/unwatch)`, repo, `(ok :done)`)
+	eval(`(call :gh/watching)`, "", `(ok [])`)
+	prs("[]")
+	time.Sleep(100 * time.Millisecond)
+	if got := numbers(); got != `(ok [[13 12]])` {
+		t.Errorf("seen after unwatch: %s", got)
 	}
 }
 
