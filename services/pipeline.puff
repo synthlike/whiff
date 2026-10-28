@@ -1,0 +1,206 @@
+; pipeline: a small dev pipeline of two Claudes. A dev Claude makes a
+; change in a git worktree of its own, whiff runs your check there, and a
+; reviewer Claude, with no tools, reviews the diff. Until the reviewer
+; approves and the check passes, the review goes back to the dev, in the
+; same session, for up to 3 rounds. Then the work is committed on the
+; run's branch and how it went lands in your inbox. Your working tree is
+; never touched: merge the branch yourself. Needs git and the claude CLI.
+;   whiff call pipeline/start "add a --verbose flag" '["go" "test" "./..."]'
+;   whiff call pipeline/runs        ; each run and where it is
+;   whiff call pipeline/view        ; the same as items: picking one cancels it
+;   whiff call pipeline/cancel 1
+;   whiff inbox                     ; how a run ended
+;   whiff sub pipeline/done
+;
+; A run's worktree is ~/.whiff/pipelines/<repo>-<n>, on branch whiff/<n>.
+; Its state is the runs and the jobs they wait for; a run whose job was
+; running when whiff stopped stays where it was (jobs don't survive a
+; restart yet): cancel it.
+
+(srv pipeline :state {:next 1 :runs {} :jobs {}}
+  (def rounds 3)
+  (def home (path/join (unwrap (env/get "HOME")) ".whiff" "pipelines"))
+
+  (def dev-system "You are the developer in a small pipeline. Make the change you are asked for in this repository, keeping to its style, and add or update tests. You can read and edit files and run the check command. Don't commit. End with a short summary of what you changed.")
+
+  (def review-prompt "You are the reviewer in a small pipeline. Below are the task, the result of the project's check and the diff the developer made. List the real problems (bugs, missing tests, the task not done), most important first, each with its file and line and why. Skip style nits. End with one line on its own: VERDICT: approve, if it is ready to commit, or VERDICT: changes, if it needs another round.\n\n")
+
+  (def (git dir args) (proc/output (vector/concat ["git" "-C" dir] args)))
+
+  (def (run-of state n) (unwrap (map/get (map/get-or state :runs {}) n)))
+
+  ; set-run sets run n's fields to those of m.
+  (def (set-run state n m)
+    (map/update state :runs (fn (rs) (map/update rs n (fn (run) (map/merge run m))))))
+
+  ; started is (ok id), the id of the job r says has started, or r.
+  (def (started r)
+    (match r
+      [(err {:kind :pending :id id}) (ok id)]
+      [e e]))
+
+  ; waiting notes that run n waits for job id at step.
+  (def (waiting state n step id)
+    (-> state
+      (map/update :jobs (fn (js) (map/set js id [n step])))
+      (set-run n {:step step :job id})))
+
+  ; dev-cmd is the dev's claude: its session's first turn, or a later one.
+  ; It may run the check, as it is or with more arguments, and no MCP
+  ; servers: none of your own Claude setup's.
+  (def (dev-cmd run)
+    (match run
+      [{:session s :round r :check check}
+       (vector/concat
+         ["claude" "-p" "--strict-mcp-config" "--tools" "Read,Edit,Write,Glob,Grep,Bash"
+          "--allowedTools" (str "Bash(" (string/join check " ") ")") (str "Bash(" (string/join check " ") ":*)")
+          "--permission-mode" "acceptEdits" "--append-system-prompt" dev-system]
+         (if (= r 1) ["--session-id" s] ["--resume" s]))]))
+
+  (def (dev state n input)
+    (let [run (run-of state n)
+          id (try (started (call :jobs/run (dev-cmd run) {:stdin input :dir (map/get-or run :dir "") :as :text :timeout 30m})))]
+      (ok (waiting state n :dev id))))
+
+  (def (check state n)
+    (let [{:check cmd :dir dir} (run-of state n)
+          id (try (started (call :jobs/run cmd {:dir dir :timeout 10m})))]
+      (ok (waiting state n :check id))))
+
+  (def (passed? checked) (match checked [{:exit 0} #t] [_ #f]))
+
+  ; tail is the last 4000 characters of s.
+  (def (tail s)
+    (let [n (string/length s)]
+      (if (> n 4000) (string/slice s (- n 4000)) s)))
+
+  (def (check-text checked)
+    (match checked
+      [{:exit 0} "passed"]
+      [{:exit n :stdout out :stderr e} (str "failed with exit " n ":\n" (tail (str out e)))]))
+
+  (def (review state n checked)
+    (let [{:dir dir :base base :task task} (run-of state n)
+          _ (try (git dir ["add" "-A"]))
+          diff (try (git dir ["diff" "--cached" base]))]
+      (if (= diff "")
+        (finish state n :failed "The developer changed nothing.")
+        (let [input (str review-prompt "Task: " task "\n\nThe check " (check-text checked) "\n\nThe diff:\n" diff)
+              id (try (started (call :jobs/run ["claude" "-p" "--strict-mcp-config" "--tools" "" "--no-session-persistence"]
+                                 {:stdin input :dir dir :as :text :timeout 10m})))]
+          (ok (waiting (set-run state n {:checked checked}) n :review id))))))
+
+  ; subject is task's first sentence, as a commit's subject: at most 72
+  ; characters. The whole task goes in the commit's body.
+  (def (subject task)
+    (let [first (match (string/split (string/trim task) ". ") [[f & _] f])
+          first (if (string/ends-with? first ".") (string/slice first 0 (- (string/length first) 1)) first)]
+      (if (> (string/length first) 72) (str (string/slice first 0 71) "…") first)))
+
+  (def (reviewed state n text)
+    (let [{:round round :checked checked :dir dir :task task :branch branch} (run-of state n)
+          state (set-run state n {:review text})
+          approved (string/contains? text "VERDICT: approve")]
+      (cond
+        [(and (passed? checked) approved)
+         (do (try (git dir ["commit" "-q" "-m" (subject task) "-m" task]))
+             (finish state n :ready (str "Committed on " branch " in " dir ", after " round " rounds. The last review:\n\n" text)))]
+        [(>= round rounds)
+         (finish state n :gave-up (str "Not approved after " round " rounds; the work is in " dir ". The last review:\n\n" text))]
+        [#t
+         (dev (set-run state n {:round (+ round 1)}) n
+           (str (if approved "" (str "The reviewer asked for changes:\n\n" text "\n\n"))
+                (if (passed? checked) "" (str "The check " (check-text checked) "\n\n"))
+                "Fix what needs fixing."))])))
+
+  ; finish ends run n as status, telling you in your inbox unless it is
+  ; quiet, and on :pipeline/done.
+  (def (finish state n status note)
+    (let [{:task task :branch branch :dir dir :quiet quiet} (run-of state n)]
+      ; :me/tell answers pending, as it waits in your inbox.
+      (do (if quiet :quiet (or-else (call :me/tell (str "pipeline " n ", " task ": " (string/slice (str status) 1) ". " note)) :told))
+          (publish :pipeline/done {:run n :status status :branch branch :dir dir :note note})
+          (ok (set-run state n {:step status})))))
+
+  ; step-done takes run n on from the result r of the job it waited for at
+  ; step; a run cancelled meanwhile stays as it is.
+  (def (step-done state n step r)
+    (let [run (run-of state n)]
+      (cond
+        [(not (= (map/get-or run :step :none) step)) (ok state)]
+        [(= step :dev)
+         (match r
+           [(ok _) (check state n)]
+           [(err e) (finish state n :failed (str "The developer failed: " (value/to-string e)))])]
+        [(= step :check)
+         (match r
+           [(ok checked) (review state n checked)]
+           [(err e) (finish state n :failed (str "The check didn't run: " (value/to-string e)))])]
+        [#t
+         (match r
+           [(ok text) (reviewed state n text)]
+           [(err e) (finish state n :failed (str "The reviewer failed: " (value/to-string e)))])])))
+
+  (def (active? step) (vector/contains? [:dev :check :review] step))
+
+  ; begin starts a run on task in repo, from base, a commit or branch: [n
+  ; state], or the err it couldn't start for.
+  (def (begin state repo base task check quiet)
+    (let [base (string/trim (try (git repo ["rev-parse" base])))
+          n (map/get-or state :next 1)
+          dir (path/join home (str (path/base repo) "-" n))
+          branch (str "whiff/" n)
+          session (string/lower (string/trim (try (proc/output ["uuidgen"]))))
+          _ (try (file/mkdir home))
+          _ (try (git repo ["worktree" "add" "-q" "-b" branch dir base]))
+          run {:task task :repo repo :dir dir :branch branch :base base :check check :round 1 :session session :step :starting :quiet quiet}
+          state (map/merge state {:next (+ n 1) :runs (map/set (map/get-or state :runs {}) n run)})]
+      ; A run that can't start leaves no worktree or branch behind.
+      (match (dev state n (str "Task: " task))
+        [(ok s) (ok [n s])]
+        [(err e)
+         (do (or-else (git repo ["worktree" "remove" "--force" dir]) "")
+             (or-else (git repo ["branch" "-D" branch]) "")
+             (err e))])))
+
+  (on (start state task check) :write :update
+    "Starts a run on task in the repository here: a dev Claude makes the change in a worktree of its own, check (a command, like [\"go\" \"test\" \"./...\"]) runs there, and a reviewer Claude reviews the diff, for up to 3 rounds; then it is committed on the run's branch and you hear how it went in your inbox. (ok n), the run's number."
+    (begin state (string/trim (try (proc/output ["git" "rev-parse" "--show-toplevel"]))) "HEAD" task check #f))
+
+  (on (start-on state repo base task check) :write :update
+    "Starts a run as start does, in the repository at repo, from base, a commit or branch such as an earlier run's, without telling you how it ends (:pipeline/done still does): how a planner stacks runs. (ok n)."
+    (begin state repo base task check #t))
+
+  (on (runs state) :read
+    "Every run, oldest first: {:run :task :step :round :branch :dir}, with :step one of :dev, :check, :review, :ready, :gave-up, :failed or :cancelled."
+    (ok (vector/map (map/entries (map/get-or state :runs {}))
+      (fn (e)
+        (match e
+          [[n {:task t :step s :round r :branch b :dir d}] {:run n :task t :step s :round r :branch b :dir d}])))))
+
+  (on (view state) :read
+    "The runs as a view: picking one still running cancels it."
+    (ok (view/items (vector/map (map/entries (map/get-or state :runs {}))
+      (fn (e)
+        (match e
+          [[n {:task t :step s :round r :branch b}]
+           (let [item {:label (str n "  " t) :detail (str (string/slice (str s) 1) ", round " r ", " b)}]
+             (if (active? s) (map/set item :action [:pipeline/cancel n]) item))]))))))
+
+  (on (cancel state n) :write :update
+    "Cancels run n: kills the job it waits for and leaves its worktree as it is. (err {:kind :no-run}) if there is no such run, or it has ended."
+    (match (map/get (map/get-or state :runs {}) n)
+      [(some {:step s :job id}) when (active? s)
+       (do (or-else (call :jobs/cancel id) :gone)
+           (ok [:cancelled (set-run state n {:step :cancelled})]))]
+      [_ (err {:kind :no-run :message (str "no run " n " is going")})]))
+
+  (on (whiff/done state id r) :update
+    "A job a run waited for is done: the run takes its next step."
+    (match (map/get (map/get-or state :jobs {}) id)
+      [(none) (ok state)]
+      [(some [n step])
+       (let [state (map/update state :jobs (fn (js) (map/delete js id)))]
+         (match (step-done state n step r)
+           [(ok s) (ok s)]
+           [(err e) (ok (or-else (finish state n :failed (value/to-string e)) state))]))])))

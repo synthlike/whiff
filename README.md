@@ -52,8 +52,11 @@ places in files, or text. The CLI prints items as lines for fzf, and `whiff
 act` sends the action of the one you pick. [services/](services/README.md) has
 the ones in daily use: `git`, `gh` (which watches your pull requests), `todo`,
 `reviewer` and `assistant`, a resident Claude agent you talk to through your
-inbox. [docs/stdlib.md](docs/stdlib.md) lists every function puff has, and
-whiff's own.
+inbox, plus `pipeline` and `plan`: a planner, a developer and a reviewer
+Claude building a goal task by task. [docs/use-cases.md](docs/use-cases.md)
+shows whiff in use, [docs/design.md](docs/design.md) how it works, and
+[docs/stdlib.md](docs/stdlib.md) lists every function puff has, and whiff's
+own.
 
 Agents connect through `whiff mcp` (`claude mcp add whiff -- whiff mcp`):
 each session gets an address of its own, `:agent/<n>`, every service function

@@ -482,3 +482,219 @@ echo "$mode in $(basename "$PWD"): $msg"
 		t.Errorf("helper resumed %q, want old-id", id)
 	}
 }
+
+// TestPipelineService runs services/pipeline.puff with a fake claude on
+// PATH: the dev writes feature.txt in its first turn and test.txt when
+// resumed; the reviewer approves, or, once picky, never does.
+func TestPipelineService(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	src, err := os.ReadFile(filepath.Join("..", "..", "services", "pipeline.puff"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := tempDir(t)
+	fake := filepath.Join(dir, "fake")
+	bin := filepath.Join(dir, "bin")
+	os.Mkdir(fake, 0o700)
+	os.Mkdir(bin, 0o700)
+	claude := `#!/bin/sh
+if [ "$1 $2 $3 $4" = "-p --strict-mcp-config --tools " ]; then
+  cat > "$FAKE/review-input"
+  echo "review $(basename "$PWD")" >> "$FAKE/log"
+  if [ -f "$FAKE/picky" ]; then echo "needs work"; echo "VERDICT: changes"; else echo "looks good"; echo "VERDICT: approve"; fi
+  exit 0
+fi
+cat > /dev/null
+case " $* " in
+  *" --resume "*) echo "dev resume $(basename "$PWD")" >> "$FAKE/log"; echo t > test.txt ;;
+  *" --session-id "*) echo "dev new $(basename "$PWD")" >> "$FAKE/log"; echo f > feature.txt ;;
+  *) echo "want a session, got $*" >&2; exit 9 ;;
+esac
+echo "changed things"
+`
+	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(claude), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("FAKE", fake)
+	t.Setenv("HOME", dir)
+	writeServices(t, dir, map[string]string{"pipeline": string(src)})
+	start(t, dir)
+	c := dial(t, dir)
+	if _, err := c.Sub("pipeline/done"); err != nil {
+		t.Fatal(err)
+	}
+
+	repo := filepath.Join(dir, "repo")
+	os.Mkdir(repo, 0o700)
+	git := func(dir string, args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return string(out)
+	}
+	git(repo, "init", "-q", "-b", "main")
+	git(repo, "commit", "-q", "--allow-empty", "-m", "first")
+	t.Setenv("GIT_AUTHOR_NAME", "t")
+	t.Setenv("GIT_AUTHOR_EMAIL", "t@example.com")
+	t.Setenv("GIT_COMMITTER_NAME", "t")
+	t.Setenv("GIT_COMMITTER_EMAIL", "t@example.com")
+
+	call := func(fn, args string) string {
+		t.Helper()
+		resp, err := c.Message("call", "pipeline/"+fn, args, repo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.Value
+	}
+	done := func() string {
+		t.Helper()
+		select {
+		case e := <-c.Events():
+			return e.Value
+		case <-time.After(5 * time.Second):
+			h, _ := historyOf(c)
+			log, _ := os.ReadFile(filepath.Join(fake, "log"))
+			t.Fatalf("no :pipeline/done; claude ran:\n%s\nhistory:\n%s", log, h)
+			return ""
+		}
+	}
+	// The check wants test.txt, which the dev writes only in its second
+	// round: an approving review doesn't end a run whose check fails.
+	check := `["sh" "-c" "test -f test.txt"]`
+	if got := call("start", `["add a feature" `+check+`]`); got != "(ok 1)" {
+		t.Fatalf("start = %s", got)
+	}
+	wt := filepath.Join(dir, ".whiff", "pipelines", "repo-1")
+	if got := done(); !strings.Contains(got, ":status :ready") || !strings.Contains(got, `:branch "whiff/1"`) {
+		t.Errorf("done = %s", got)
+	}
+	if b, _ := os.ReadFile(filepath.Join(fake, "log")); string(b) != "dev new repo-1\nreview repo-1\ndev resume repo-1\nreview repo-1\n" {
+		t.Errorf("claude was run:\n%s", b)
+	}
+	if got := git(repo, "show", "--name-only", "--format=%s", "whiff/1"); got != "add a feature\n\nfeature.txt\ntest.txt\n" {
+		t.Errorf("whiff/1's commit = %q", got)
+	}
+	if got := git(repo, "status", "--porcelain"); got != "" {
+		t.Errorf("the working tree changed: %q", got)
+	}
+	if b, _ := os.ReadFile(filepath.Join(fake, "review-input")); !strings.Contains(string(b), "Task: add a feature") ||
+		!strings.Contains(string(b), "The check passed") || !strings.Contains(string(b), "+t") {
+		t.Errorf("the last review was given:\n%s", b)
+	}
+	if text, _ := c.Inbox("me"); !strings.Contains(text, "pipeline 1, add a feature: ready. Committed on whiff/1 in "+wt+", after 2 rounds.") {
+		t.Errorf("your inbox = %s", text)
+	}
+
+	// A picky reviewer: the run gives up after 3 rounds.
+	os.WriteFile(filepath.Join(fake, "picky"), nil, 0o600)
+	if got := call("start", `["another" `+check+`]`); got != "(ok 2)" {
+		t.Fatalf("start = %s", got)
+	}
+	if got := done(); !strings.Contains(got, ":status :gave-up") {
+		t.Errorf("done = %s", got)
+	}
+	if got := call("runs", "[]"); !strings.Contains(got, `{:branch "whiff/1" :dir "`+wt+`" :round 2 :run 1 :step :ready :task "add a feature"}`) ||
+		!strings.Contains(got, ":round 3 :run 2 :step :gave-up") {
+		t.Errorf("runs = %s", got)
+	}
+	if got := call("view", "[]"); !strings.Contains(got, `{:detail "gave-up, round 3, whiff/2" :label "2  another"}`) {
+		t.Errorf("view = %s", got)
+	}
+	if got := call("cancel", "[2]"); !strings.Contains(got, ":no-run") {
+		t.Errorf("cancel of an ended run = %s", got)
+	}
+
+	// Outside a repository nothing starts.
+	resp, err := c.Message("call", "pipeline/start", `["x" `+check+`]`, dir)
+	if err != nil || !strings.Contains(resp.Value, "not a git repository") {
+		t.Errorf("start outside a repository = %+v %v", resp, err)
+	}
+}
+
+// TestPlanService runs services/plan.puff over services/pipeline.puff
+// with a fake claude: the planner answers two tasks in a code fence, the
+// dev writes a file named after its task, and the reviewer approves.
+func TestPlanService(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	srcs := map[string]string{}
+	for _, name := range []string{"plan", "pipeline"} {
+		src, err := os.ReadFile(filepath.Join("..", "..", "services", name+".puff"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		srcs[name] = string(src)
+	}
+	dir := tempDir(t)
+	bin := filepath.Join(dir, "bin")
+	os.Mkdir(bin, 0o700)
+	claude := `#!/bin/sh
+case "$4" in
+  Read,Glob,Grep) cat > /dev/null; printf 'Here is the plan:\n` + "```" + `json\n["one", "two"]\n` + "```" + `\n' ;;
+  "") cat > /dev/null; echo "VERDICT: approve" ;;
+  *) task=$(sed -n 's/^Task: //p'); echo "$task" > "$task.txt"; echo "wrote $task.txt" ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(claude), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("HOME", dir)
+	for _, k := range []string{"GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"} {
+		t.Setenv(k, "t")
+	}
+	for _, k := range []string{"GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"} {
+		t.Setenv(k, "t@example.com")
+	}
+	writeServices(t, dir, srcs)
+	start(t, dir)
+	c := dial(t, dir)
+
+	repo := filepath.Join(dir, "repo")
+	os.Mkdir(repo, 0o700)
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return string(out)
+	}
+	git("init", "-q", "-b", "main")
+	git("commit", "-q", "--allow-empty", "-m", "first")
+
+	resp, err := c.Message("call", "plan/start", `["two files" ["true"]]`, repo)
+	if err != nil || resp.Value != "(ok 1)" {
+		t.Fatalf("plan/start = %+v %v", resp, err)
+	}
+	// Only the plan tells you: its runs are quiet.
+	want := `:plan -> :me/tell "plan 1, two files: done. All 2 tasks built; whiff/2 has them all."` + "\n"
+	eventually(t, "the plan", func() string {
+		text, _ := c.Inbox("me")
+		if _, tell, ok := strings.Cut(text, "  "); ok && strings.Count(text, "\n") == 1 {
+			return tell
+		}
+		return text
+	}, want)
+	if got := git("log", "--format=%s", "whiff/2"); got != "two\none\nfirst\n" {
+		t.Errorf("whiff/2's log = %q", got)
+	}
+	if got := git("show", "--name-only", "--format=", "whiff/2"); got != "two.txt\n" {
+		t.Errorf("whiff/2's own commit = %q", got)
+	}
+	resp, err = c.Message("call", "plan/plans", "[]", repo)
+	if err != nil || !strings.Contains(resp.Value, `:step :done :task 1 :tasks ["one" "two"]`) {
+		t.Errorf("plans = %+v %v", resp, err)
+	}
+}
