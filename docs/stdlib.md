@@ -189,8 +189,8 @@ In `puff` and in whiff alike. Names without a namespace are under core.
 
 ### proc
 
-- `(proc/run cmd [opts])` `:write`: Run cmd, a vector of the program and its arguments, without a shell: (ok {:exit :stdout :stderr}), whatever the exit code. Options: :stdin, a string; :dir; :timeout, a duration.
-- `(proc/output cmd [opts])` `:write`: Run cmd as proc/run does: (ok stdout) if it exits 0, else (err {:kind :exit :exit :stdout :stderr}) with its stderr in :message.
+- `(proc/run cmd [opts])` `:write`: Run cmd, a vector of the program and its arguments, without a shell: (ok {:exit :stdout :stderr}), whatever the exit code. Options: :stdin, a string; :dir; :timeout, a duration. :read for a literal cmd in the table of read-only commands, such as ["git" "status"].
+- `(proc/output cmd [opts])` `:write`: Run cmd as proc/run does: (ok stdout) if it exits 0, else (err {:kind :exit :exit :stdout :stderr}) with its stderr in :message. :read as proc/run is.
 
 ### http
 

@@ -158,7 +158,7 @@ func (d *daemon) put(st *state, addr string, m message) puff.Value {
 	// An agent session's mode may let its message through, as accepted.
 	if !m.user && !m.reviewed && st.lets(m.from, addr) {
 		m.reviewed = true
-		if s := st.addrs[addr]; s != nil && m.topic == "" && (&marker{base: d.base, services: st.addrs}).mark(s, m.fn) == puff.MarkWrite {
+		if s := st.addrs[addr]; s != nil && m.topic == "" && (&marker{base: d.base, services: st.addrs}).msgMark(s, m) == puff.MarkWrite {
 			m.gate = st.modeOf(m.from).name()
 		}
 	}
@@ -361,7 +361,7 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 			Fn: func(c *puff.Call, args []puff.Value) (puff.Value, error) {
 				m, addr, err := cur.message(c.Env.Dir, args)
 				if err == nil {
-					err = d.readOnly(c.Ctx, addr, m.fn)
+					err = d.readOnly(c.Ctx, addr, m)
 				}
 				if err != nil {
 					return nil, err
@@ -373,7 +373,7 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 			Fn: func(c *puff.Call, args []puff.Value) (puff.Value, error) {
 				m, addr, err := cur.message(c.Env.Dir, args)
 				if err == nil {
-					err = d.readOnly(c.Ctx, addr, m.fn)
+					err = d.readOnly(c.Ctx, addr, m)
 				}
 				if err != nil {
 					return nil, err
@@ -392,7 +392,7 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 				}
 				m, addr, err := cur.message(c.Env.Dir, args[1:])
 				if err == nil {
-					err = d.readOnly(c.Ctx, addr, m.fn)
+					err = d.readOnly(c.Ctx, addr, m)
 				}
 				if err != nil {
 					return nil, err
@@ -466,9 +466,9 @@ func (cur *caller) message(dir string, args []puff.Value) (message, string, erro
 	return message{from: cur.addr, fn: fn, args: msg, dir: dir, user: cur.user, reviewed: cur.reviewed}, addr, nil
 }
 
-// readOnly is an error if ctx runs under a :read mark and addr's fn is
-// :write. A target that doesn't exist is left for its message to fail.
-func (d *daemon) readOnly(ctx context.Context, addr, fn string) error {
+// readOnly is an error if ctx runs under a :read mark and m, a message to
+// addr, is :write. A target that doesn't exist is left for m to fail.
+func (d *daemon) readOnly(ctx context.Context, addr string, m message) error {
 	what, ok := puff.ReadOnly(ctx)
 	if !ok {
 		return nil
@@ -478,10 +478,10 @@ func (d *daemon) readOnly(ctx context.Context, addr, fn string) error {
 	if !ok {
 		return nil
 	}
-	if _, ok := s.fns[fn]; !ok || mk.mark(s, fn) == puff.MarkRead {
+	if _, ok := s.fns[m.fn]; !ok || mk.msgMark(s, m) == puff.MarkRead {
 		return nil
 	}
-	return fmt.Errorf(":%s/%s is :write, and %s is :read", addr, fn, what)
+	return fmt.Errorf(":%s/%s is :write, and %s is :read", addr, m.fn, what)
 }
 
 // target splits :address/fn at its last slash: :gh/prs, :agent/1/inbox.

@@ -98,13 +98,19 @@ only ever handling one message.
   table (`file/write` is `:write`); a handler's is inferred from what it
   reaches: a `:write` builtin, a def that does, or the function a literal
   target names. Computed targets are `:write`, and so is an `:update`
-  handler or subscriber: the state it changes is yours. A handler can claim
-  `:read` over what it reaches (git status runs `proc/run`, which is
-  `:write`; gh's poll only caches): that claim is an override, listed by
-  `whiff ls`, and the only place a mark is trusted rather than inferred. A
-  `:write` claim only raises a mark, so it needs no trust. At run time, a `:read` handler that reaches a
-  `:write` without an override faults, whoever called it: the backstop for
-  what inference missed.
+  handler or subscriber: the state it changes is yours. A program run with
+  `proc/run`, `proc/output` or `:jobs/run` is `:write`, unless it is a
+  literal command in the table of read-only commands
+  (`internal/puff/commands.go`, which `whiff ls` names): `["git" "status"]`
+  or `["gh" "pr" "list"]` with only the flags listed, and `git branch`
+  without arguments, so not `git branch -D x`. A handler can claim `:read`
+  over what it reaches (gh's poll only caches, and runs gh with computed
+  arguments): that claim is an override, listed by `whiff ls`, and the only
+  place a mark is trusted rather than inferred. A `:write` claim only
+  raises a mark, so it needs no trust. At run time, a `:read` handler that
+  reaches a `:write`, or runs a command outside the table, without an
+  override faults, whoever called it: the backstop for what inference
+  missed.
 
 ## Services
 
@@ -197,7 +203,11 @@ the end of a run instead of one per message.
 with a shell runs as your OS user and can run `whiff accept` as you; what
 closes that is a sandbox that keeps its shell off the socket. A job's
 program, `claude` with edit tools say, does what its own permissions let it:
-whiff decides when it runs and where, not what it does to files.
+whiff decides when it runs and where, not what it does to files. The table
+of read-only commands narrows the trust rather than removing it: a
+program's config and hooks (git's `core.fsmonitor`, a diff driver) or a
+different binary of the same name earlier on `PATH` can still write, and
+`git status` may refresh the index.
 
 ## Agents
 

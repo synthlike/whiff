@@ -228,8 +228,8 @@ func (w *capped) Write(p []byte) (int, error) {
 }
 
 var procFns = []*Builtin{
-	{Name: "proc/run", Args: "cmd [opts]", Mark: MarkWrite, Doc: "Run cmd, a vector of the program and its arguments, without a shell: (ok {:exit :stdout :stderr}), whatever the exit code. Options: :stdin, a string; :dir; :timeout, a duration.", Fn: procRun},
-	{Name: "proc/output", Args: "cmd [opts]", Mark: MarkWrite, Doc: "Run cmd as proc/run does: (ok stdout) if it exits 0, else (err {:kind :exit :exit :stdout :stderr}) with its stderr in :message.", Fn: procOutput},
+	{Name: "proc/run", Args: "cmd [opts]", Mark: MarkWrite, MarkByArgs: true, Doc: "Run cmd, a vector of the program and its arguments, without a shell: (ok {:exit :stdout :stderr}), whatever the exit code. Options: :stdin, a string; :dir; :timeout, a duration. :read for a literal cmd in the table of read-only commands, such as [\"git\" \"status\"].", Fn: procRun},
+	{Name: "proc/output", Args: "cmd [opts]", Mark: MarkWrite, MarkByArgs: true, Doc: "Run cmd as proc/run does: (ok stdout) if it exits 0, else (err {:kind :exit :exit :stdout :stderr}) with its stderr in :message. :read as proc/run is.", Fn: procOutput},
 }
 
 func procOutput(c *Call, args []Value) (Value, error) {
@@ -274,6 +274,9 @@ func procRun(c *Call, args []Value) (Value, error) {
 	argv, err := strs(v.items)
 	if err != nil {
 		return nil, err
+	}
+	if what, ok := ReadOnly(c.Ctx); ok && !ReadOnlyCommand(v) {
+		return nil, fmt.Errorf("%s isn't a read-only command, and %s is :read", Print(v), what)
 	}
 	if len(argv) == 0 {
 		return nil, errors.New("want a command and its arguments, got []")

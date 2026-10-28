@@ -14,8 +14,14 @@ var markServices = map[string]string{
 	"files": `(service files
   (on (save path text) "Writes a file." (file/write path text))
   (on (peek path) "Reads a file." (file/read-text path))
-  (on (status) :read "Runs git status, which only reads." (proc/run ["git" "status"]))
+  (on (status) :read "Runs make status, which only reads." (proc/run ["make" "status"]))
   (on (remember x) :write "Keeps x." (ok x)))`,
+	"cmds": `(service cmds
+  (on (status) "Runs git status." (proc/output ["git" "status" "--porcelain"]))
+  (on (push) "Runs git push." (proc/run ["git" "push"]))
+  (on (computed args) "Runs git with args." (proc/run (vector/concat ["git"] args)))
+  (on (log) "Starts git log." (call :jobs/run ["git" "log" "--oneline"] {:dir "/"}))
+  (on (build) "Starts go build." (call :jobs/run ["go" "build"])))`,
 	"user": `(service user
   (def (writer path) (call :files/save path "x"))
   (on (via-helper path) "Saves through a helper." (writer path))
@@ -75,6 +81,11 @@ func TestDescribe(t *testing.T) {
 		{"count", `:cache :read
 :get :read
 :keep :write`},
+		{"cmds", `:build :write
+:computed :write
+:log :read
+:push :write
+:status :read`},
 	}
 	for _, tt := range tests {
 		if got := marks(tt.addr); got != tt.want {
@@ -118,18 +129,19 @@ func TestLs(t *testing.T) {
   (peek path)       :read   Reads a file.
   (remember x)      :write  Keeps x.
   (save path text)  :write  Writes a file.
-  (status)          :read   Runs git status, which only reads.
+  (status)          :read   Runs make status, which only reads.
 :greet
   (hello name)  :read   Greets name.
   (lost)        :write  Calls targets that don't exist.
 :jobs
   (cancel id)       :write  Kill job id and everything it started.
   (list)            :read   The running jobs, each {:id :cmd :cwd :from}.
-  (run cmd [opts])  :write  Run cmd, [program args...], here; pending now, {:exit :stdout :stderr} when done. Options: :timeout (1h); :stdin, a string; :dir, where it runs; :as :text answers (ok stdout), or (err {:kind :exit}) unless it exits 0; :origin :agent, for a job whose output a model writes, answers as :agent's.
+  (run cmd [opts])  :write  Run cmd, [program args...], here; pending now, {:exit :stdout :stderr} when done. Options: :timeout (1h); :stdin, a string; :dir, where it runs; :as :text answers (ok stdout), or (err {:kind :exit}) unless it exits 0; :origin :agent, for a job whose output a model writes, answers as :agent's. :read for a read-only command, as whiff ls lists them.
 :me
   ask (ask question)  :read  Asks you question: pending now, your answer when you reply.
   ask (tell text)     :read  Tells you text, a report: it waits in your inbox until you reply, which dismisses it.
-override: ` + files + `:4:3: :files/status is marked :read, but reaches proc/run at 4:60
+read-only commands (internal/puff/commands.go): ` + strings.Join(puff.ReadOnlyCommands(), ", ") + `
+override: ` + files + `:4:3: :files/status is marked :read, but reaches proc/run at 4:61
 warning: ` + greet + `:5:15: :nobody/x doesn't exist
 warning: ` + greet + `:5:32: :hello2 doesn't exist
 `

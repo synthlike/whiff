@@ -16,10 +16,12 @@ import (
 // the function a literal target of call, send or send-after names. A
 // computed target, a target that doesn't exist, and call or send used as a
 // value are :write, and so is an :update handler or subscriber: the state
-// it changes is yours. A handler marked :write is :write whatever it reaches.
-// One marked :read is :read too: a claim, reviewed with its file, which is
-// an override when it lowers what the handler reaches (proc/run running git
-// status). whiff's own functions have the marks they say.
+// it changes is yours. proc/run, proc/output and a call or send to :jobs/run
+// of a literal command in puff's table of read-only commands are :read. A
+// handler marked :write is :write whatever it reaches. One marked :read is
+// :read too: a claim, reviewed with its file, which is an override when it
+// lowers what the handler reaches (gh's poll, which only caches). whiff's
+// own functions have the marks they say.
 type marker struct {
 	services map[string]*service
 	modes    map[string]string // agent sessions' modes, as ls shows them
@@ -134,17 +136,51 @@ func (mk *marker) form(s *service, f *puff.Form) puff.Mark {
 			}
 			return mk.forms(s, f.Items[2:])
 		}
+		if (isList(f, "proc/run") || isList(f, "proc/output")) && len(f.Items) > 1 && readOnlyCommand(f.Items[1]) {
+			if _, ok := s.code[f.Items[0].Name]; !ok {
+				return mk.forms(s, f.Items[2:])
+			}
+		}
 		i := targetAt(f)
 		if i == 0 {
 			return mk.forms(s, f.Items)
 		}
 		target, ok := mk.resolve(s, f.Items[i])
-		if !ok || mk.node(target.s, target.fn) == puff.MarkWrite {
+		if !ok || mk.node(target.s, target.fn) == puff.MarkWrite &&
+			!(target.s.fns[target.fn].cmd && len(f.Items) > i+1 && readOnlyCommand(f.Items[i+1])) {
 			return mk.write(f.Items[i])
 		}
 		return mk.forms(s, slices.Concat(f.Items[1:i], f.Items[i+1:]))
 	}
 	return puff.MarkRead
+}
+
+// readOnlyCommand says whether f is a literal vector of strings in puff's
+// table of read-only commands.
+func readOnlyCommand(f *puff.Form) bool {
+	if f.Kind != puff.FormVector {
+		return false
+	}
+	argv := make([]puff.Value, len(f.Items))
+	for i, it := range f.Items {
+		if it.Kind != puff.FormLiteral {
+			return false
+		}
+		argv[i] = it.Val
+	}
+	return puff.ReadOnlyCommand(puff.NewVector(argv...))
+}
+
+// msgMark is the mark of m, a message to s: its function's, or :read for a
+// read-only command to a function that runs one, :jobs/run.
+func (mk *marker) msgMark(s *service, m message) puff.Mark {
+	if mk.mark(s, m.fn) == puff.MarkRead {
+		return puff.MarkRead
+	}
+	if v, err := puff.ReadValue(m.args); err == nil && s.fns[m.fn].readsCmd(v.(puff.Vector)) {
+		return puff.MarkRead
+	}
+	return puff.MarkWrite
 }
 
 // evalMark is the mark of forms, code evaluated in env for from (an
@@ -276,14 +312,15 @@ func (mk *marker) describe(addr string) puff.Value {
 	return puff.Ok(puff.NewVector(fns...))
 }
 
-// ls is every address's functions and subscriptions, then the overrides,
-// and the literal targets that don't exist:
+// ls is every address's functions and subscriptions, then the read-only
+// commands, the overrides, and the literal targets that don't exist:
 //
 //	:greet
 //	  (hello name)        :read  Greets name.
-//	  (status)            :read  Runs git status.
+//	  (status)            :read  Runs make status.
 //	  ask (approve text)  :read  Waits for a person.
 //	  on :git/changed (v) :read
+//	read-only commands (internal/puff/commands.go): git status, git log, ...
 //	override: greet.puff:6:3: :greet/status is marked :read, but reaches proc/run at 7:6
 //	warning: greet.puff:4:11: :nobody/x doesn't exist
 func (mk *marker) ls() string {
@@ -327,6 +364,7 @@ func (mk *marker) ls() string {
 		warnings = append(warnings, mk.missing(s)...)
 	}
 	tw.Flush()
+	fmt.Fprintf(&b, "read-only commands (internal/puff/commands.go): %s\n", strings.Join(puff.ReadOnlyCommands(), ", "))
 	for _, o := range overrides {
 		fmt.Fprintf(&b, "override: %s\n", o)
 	}

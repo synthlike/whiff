@@ -72,6 +72,15 @@ type handler struct {
 	// body. Its error replies (err {:kind :bad-call}).
 	native   func(m message, args []puff.Value) (puff.Value, error)
 	optional int // native: how many of the last params can be left out
+	// cmd is for a native that runs its first argument, a command: :read
+	// for one in puff's table of read-only commands.
+	cmd bool
+}
+
+// readsCmd says whether h is :read for args, whatever its mark: they start
+// with a read-only command that it runs.
+func (h handler) readsCmd(args puff.Vector) bool {
+	return h.cmd && args.Len() > 0 && puff.ReadOnlyCommand(args.At(0))
 }
 
 // loadService reads and evaluates a service file: one (service name forms...),

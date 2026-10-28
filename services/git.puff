@@ -3,11 +3,11 @@
 ;   whiff call git/branch
 ;   whiff call git/changes    ; the changed files, as file: what changed
 
-(service git
-  ; git runs git with args: (ok stdout), or (err {:kind :exit}) with what
-  ; it said when it fails, outside a repository say.
-  (def (git args) (proc/output (vector/concat ["git" "-c" "core.quotePath=false"] args)))
+; It runs git with literal commands, which whiff knows only read, so its
+; functions are :read without claiming it; git fails with (err {:kind
+; :exit}) and what it said, outside a repository say.
 
+(service git
   ; change is one letter of a status's XY as a keyword.
   (def (change c)
     (match c
@@ -54,7 +54,7 @@
     (= (add {:branch (none)} "# branch.head (detached)") {:branch (none)}))
 
   (def (status-of)
-    (let [out (try (git ["status" "--porcelain=v2" "--branch"]))]
+    (let [out (try (proc/output ["git" "-c" "core.quotePath=false" "status" "--porcelain=v2" "--branch"]))]
       (ok (vector/reduce (string/lines out) {:branch (none) :upstream (none) :ahead 0 :behind 0 :files []} add))))
 
   ; what is what changed in a file, in a word: the work tree's change, or
@@ -64,18 +64,18 @@
       [{:index i :work :none} (keyword/name i)]
       [{:work w} (keyword/name w)]))
 
-  (on (status) :read
+  (on (status)
     "The branch, (some name) or (none) when detached; its upstream, an Option too; commits :ahead and :behind it; and each changed file, {:path :index :work}, with what changed in the index and the work tree: :none, :modified, :added, :deleted, :renamed, :copied, :unmerged or :untracked."
     (status-of))
 
-  (on (changes) :read
+  (on (changes)
     "The changed files as a view of locations, each noted with what changed in it."
-    (let [root (string/trim (try (git ["rev-parse" "--show-toplevel"])))
+    (let [root (string/trim (try (proc/output ["git" "rev-parse" "--show-toplevel"])))
           {:files files} (try (status-of))]
       (ok (view/locations (vector/map files (fn (f) (match f [{:path p} {:file (path/join root p) :note (what f)}])))))))
 
-  (on (branch) :read
+  (on (branch)
     "The current branch's name; (err {:kind :detached}) when HEAD isn't on one."
-    (match (string/trim (try (git ["branch" "--show-current"])))
+    (match (string/trim (try (proc/output ["git" "branch" "--show-current"])))
       ["" (err {:kind :detached :message "HEAD isn't on a branch"})]
       [b (ok b)])))

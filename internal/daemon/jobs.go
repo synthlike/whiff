@@ -34,8 +34,8 @@ type job struct {
 func (d *daemon) jobsService() *service {
 	return &service{name: "jobs", d: d, cur: caller{addr: "jobs"},
 		fns: map[string]handler{
-			"run": {params: []string{"cmd", "opts"}, optional: 1, mark: puff.MarkWrite, marked: true, native: d.runJob,
-				doc: "Run cmd, [program args...], here; pending now, {:exit :stdout :stderr} when done. Options: :timeout (1h); :stdin, a string; :dir, where it runs; :as :text answers (ok stdout), or (err {:kind :exit}) unless it exits 0; :origin :agent, for a job whose output a model writes, answers as :agent's."},
+			"run": {params: []string{"cmd", "opts"}, optional: 1, mark: puff.MarkWrite, marked: true, native: d.runJob, cmd: true,
+				doc: "Run cmd, [program args...], here; pending now, {:exit :stdout :stderr} when done. Options: :timeout (1h); :stdin, a string; :dir, where it runs; :as :text answers (ok stdout), or (err {:kind :exit}) unless it exits 0; :origin :agent, for a job whose output a model writes, answers as :agent's. :read for a read-only command, as whiff ls lists them."},
 			"list": {mark: puff.MarkRead, marked: true, native: d.listJobs,
 				doc: "The running jobs, each {:id :cmd :cwd :from}."},
 			"cancel": {params: []string{"id"}, mark: puff.MarkWrite, marked: true, native: d.cancelJob,

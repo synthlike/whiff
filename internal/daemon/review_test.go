@@ -69,6 +69,13 @@ func TestReviewGate(t *testing.T) {
 	if r := msg(agent, "call", "notes/list", `[]`); r != `(ok "a")` {
 		t.Errorf("agent's list = %s", r)
 	}
+	// A job is :read when its command is, so only the job's own pending.
+	if r := msg(agent, "call", "jobs/run", `[["pwd"]]`); kind(r) != ":pending" {
+		t.Errorf("agent's read-only job = %s", r)
+	}
+	if r := msg(agent, "call", "jobs/run", `[["touch" "`+file+`"]]`); kind(r) != ":no-reviewer" {
+		t.Errorf("agent's job with no reviewer = %s", r)
+	}
 
 	reviewer := dial(t, dir)
 	if _, err := reviewer.Sub("review/pending", "review/done"); err != nil {
@@ -238,6 +245,7 @@ func TestEvalGate(t *testing.T) {
 		`(file/read-text "` + file + `")`:        `(ok "a")`,
 		`(call :notes/list)`:                     `(ok "a")`,
 		`(def (peek) (call :notes/list)) (peek)`: `(ok "a")`,
+		`(proc/output ["pwd"] {:dir "/"})`:       `(ok "/\n")`,
 	} {
 		if r := eval(agent, src); r != want {
 			t.Errorf("agent's %s = %s, want %s", src, r, want)
@@ -252,6 +260,7 @@ func TestEvalGate(t *testing.T) {
 		`(call :notes/add "z")`,
 		`(def (w) ` + write + `) (w)`,
 		`(vector/map ["z"] (fn (s) (call :notes/add s)))`,
+		`(proc/output ["touch" "` + file + `"])`,
 	} {
 		n := held(src)
 		if r, err := c.Message("reject", "", "["+n+` "no"]`, ""); err != nil || r.Value != "(ok :done)" {

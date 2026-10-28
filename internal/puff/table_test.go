@@ -141,6 +141,9 @@ func TestWithMark(t *testing.T) {
 		{read, `(file/write "` + file + `" "x")`, `1:1: file/write is :write, and :a/f is :read`},
 		{read, `(vector/map ["x"] (fn (s) (file/write "` + file + `" s)))`, `1:27: file/write is :write, and :a/f is :read`},
 		{WithMark(read, ":a/g", MarkWrite), `(file/write "` + file + `" "x")`, `(ok :done)`},
+		// proc/run runs a read-only command under :read, and only that.
+		{read, `(match (proc/run ["pwd"] {:dir "/"}) [(ok {:stdout out}) out])`, `"/\n"`},
+		{read, `(proc/output ["git" "push"])`, `1:1: proc/output: ["git" "push"] isn't a read-only command, and :a/f is :read`},
 	}
 	for _, tt := range tests {
 		if got := loadCtx(tt.ctx, NewEnv(), tt.src); got != tt.want {

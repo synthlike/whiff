@@ -62,7 +62,7 @@ func TestGitService(t *testing.T) {
 		return resp.Value
 	}
 	// trace is where branch's try passes git's error up, as file:line:col.
-	before, _, _ := strings.Cut(string(src), `(try (git ["branch"`)
+	before, _, _ := strings.Cut(string(src), `(try (proc/output ["git" "branch"`)
 	trace := fmt.Sprintf("git.puff:%d:%d", strings.Count(before, "\n")+1, len(before)-strings.LastIndex(before, "\n"))
 	// git names the repository by its real path: /private/var on macOS.
 	root, err := filepath.EvalSymlinks(repo)

@@ -29,7 +29,7 @@ func (d *daemon) gated(st *state, s *service, m message) bool {
 		return false
 	}
 	mk := &marker{base: d.base, services: st.addrs}
-	return mk.mark(s, m.fn) == puff.MarkWrite
+	return mk.msgMark(s, m) == puff.MarkWrite
 }
 
 // publishGated publishes m, as publish and whiff pub do: :done, or the
