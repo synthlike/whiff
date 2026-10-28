@@ -134,7 +134,7 @@ func TestTimeLib(t *testing.T) {
 func TestEffectMarks(t *testing.T) {
 	for name, want := range map[string]Mark{
 		"file/write": MarkWrite, "file/write-atomic": MarkWrite, "proc/run": MarkWrite, "proc/output": MarkWrite,
-		"file/append": MarkWrite, "file/mkdir": MarkWrite,
+		"file/append": MarkWrite, "file/mkdir": MarkWrite, "http/request": MarkWrite, "http/get": MarkWrite,
 		"file/read-text": MarkRead, "io/println": MarkRead, "time/now": MarkRead,
 	} {
 		if got := markOf(t, NewEnv(), name); got != want {

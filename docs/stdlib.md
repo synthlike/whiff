@@ -172,6 +172,11 @@ In `puff` and in whiff alike. Names without a namespace are under core.
 - `(proc/run cmd [opts])` `:write`: Run cmd, a vector of the program and its arguments, without a shell: (ok {:exit :stdout :stderr}), whatever the exit code. Options: :stdin, a string; :dir; :timeout, a duration.
 - `(proc/output cmd [opts])` `:write`: Run cmd as proc/run does: (ok stdout) if it exits 0, else (err {:kind :exit :exit :stdout :stderr}) with its stderr in :message.
 
+### http
+
+- `(http/request url [opts])` `:write`: Send an HTTP request to url: (ok {:status :headers :body}), whatever the status, with header names in lower case. Options: :method, a keyword (:get unless given); :headers, a map of names to strings; :body, a string; :timeout, a duration (30s unless given). A request that fails to get an answer is (err {:kind :http}), or :timeout or :too-big.
+- `(http/get url [opts])` `:write`: GET url as http/request does: (ok body) for a 2xx status, else (err {:kind :status :status :body}).
+
 ### time
 
 - `(time/now)`: The time now: 2026-10-27T18:25:00.123456Z.

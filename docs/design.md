@@ -117,6 +117,11 @@ subscribers and private `def`s.
   at once, `{:exit :stdout :stderr}` as its `whiff/done`, the last 64KiB of
   each stream kept. `:as :text` answers stdout as text, or an err unless it
   exits 0. This is how services run `claude -p`, `gh` or a build.
+- **HTTP.** `(http/get url {:headers {...}})` answers the body of a 2xx, and
+  `http/request` any method and the whole response. Both are `:write`: a
+  request leaves the machine, and a GET can carry out in its URL whatever a
+  handler read. A request blocks its service, 30s at most unless it says
+  otherwise; a slow API is better polled with `send-after`.
 
 ## Views
 
@@ -200,6 +205,5 @@ the stream.
   loses them, and a job running when whiff stops never answers. Service
   state is stored. (v0.5 stores the rest.)
 - A call waits 5s; anything longer is a job or an ask.
-- No HTTP or calendar maths in puff: a service shells out to `curl`, and
-  `1d` is 24 hours.
+- No calendar maths in puff: `1d` is 24 hours.
 - One machine. Peers over SSH are an idea, not a plan yet.
