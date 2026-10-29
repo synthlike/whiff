@@ -27,6 +27,12 @@
      follows. */}}
 {{define "panel"}}{{template "said" .Said}}<div class="shown" data-topics="{{.Topics}}">{{template "shown" .Reply}}</div>{{end}}
 
+{{/* An items view's first item, and a link to its page for the rest:
+     the oldest write waiting for your review, over Activity. Nothing for
+     none. */}}
+{{define "first"}}{{template "said" .Said}}{{with .Reply.View}}{{if and (eq .Kind "items") .Items}}<div class="view first">{{template "item" index .Items 0}}
+{{- with slice .Items 1}}<a class="more" href="{{$.Page}}">{{len .}} more</a>{{end}}</div>{{end}}{{end}}{{end}}
+
 {{define "said"}}{{with .}}<p class="said {{if .OK}}ok{{else}}err{{end}}">Sent <code>{{.Sends}}</code>: {{.Reply}}</p>{{end}}{{end}}
 
 {{/* A reply: its view, with the reply folded under it as puff; or the reply. */}}

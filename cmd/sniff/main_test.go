@@ -283,7 +283,7 @@ func TestViews(t *testing.T) {
 	s, base, _ := sniffing(t, map[string]string{
 		"board": `(service board :state {:n 0}
   (on (show s) :read "A view."
-    (ok (view/items [{:label (str "n " (map/get-or s :n 0)) :action [:board/bump 2]}] {:changed :board/changed})))
+    (ok (view/items [{:label (str "n " (map/get-or s :n 0)) :action [:board/bump 2]} {:label "next"}] {:changed :board/changed})))
   (on (times s k) :read "n times k, as text."
     (ok (view/text (str (* (map/get-or s :n 0) k)))))
   (on (bump s k) :write :update "Adds k."
@@ -440,6 +440,15 @@ func TestViews(t *testing.T) {
 		!strings.Contains(b, `<div class="shown" data-topics="board/changed">`) || !strings.Contains(b, `<p class="said ok">`) ||
 		!strings.Contains(b, `name="back" value="/view/board/show"`) {
 		t.Errorf("the view as a tab: %s %s", r.Status, b)
+	}
+	// The review banner gets the first item, and a link to the rest.
+	if r, b := do("GET", "/view/board/show?part=first&said=1", "", ""); r.StatusCode != http.StatusOK || !strings.Contains(b, `<p class="said ok">`) ||
+		!strings.Contains(b, `<div class="view first"><div class="item"><span>n 2</span>`) || strings.Contains(b, "<span>next</span>") ||
+		!strings.Contains(b, `<a class="more" href="/view/board/show">1 more</a>`) {
+		t.Errorf("the first item: %s %s", r.Status, b)
+	}
+	if r, b := do("GET", "/view/board/times?args=%5B3%5D&part=first", "", ""); r.StatusCode != http.StatusOK || strings.TrimSpace(b) != "" {
+		t.Errorf("the first item of a text view: %s %q", r.Status, b)
 	}
 	// One that asks gets your answer as its last argument; back never
 	// leaves sniff.

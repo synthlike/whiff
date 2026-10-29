@@ -184,6 +184,47 @@ h1 { font-size: 15px; margin: 0; letter-spacing: .02em; }
   .side .group { flex: 1 1 140px; }
 }
 
+/* The review banner: the oldest write waiting for you, over Activity, on
+   one line: what it would do, who sent it from where, and its actions. */
+.banner {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px 12px;
+  margin: 10px 12px 0;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--err) 45%, transparent);
+  border-radius: 6px;
+  background: var(--note-bg);
+}
+.banner-title { font-weight: 600; white-space: nowrap; }
+.banner-body { flex: 1; min-width: 0; }
+.banner .said { margin: 0 0 4px; }
+.banner .view.first { display: flex; align-items: center; gap: 12px; }
+.banner .view.first .item { flex: 1; min-width: 0; flex-wrap: nowrap; align-items: center; border-top: 0; padding: 0; font: 12px var(--mono); }
+.banner .item > :first-child { flex: 0 1 auto; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.banner .item .detail { flex: 1 1 0; min-width: 0; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.banner .item .actions { flex: none; max-width: none; flex-wrap: nowrap; align-items: center; }
+/* Reject's box for why opens beside it, not under it. */
+.banner details.asks[open] { display: flex; align-items: center; gap: 4px; }
+.banner .ask { margin: 0; }
+.banner .ask input { flex: none; width: 220px; }
+/* Its actions are :review's own, so their targets go without saying. */
+.banner .action .to { display: none; }
+.banner .more { color: var(--accent); font-size: 12px; white-space: nowrap; }
+/* Its keys, a and r, beside what they do. */
+.banner form.act:has(input[value^="[:review/accept "]) .action::after,
+.banner details.asks:has(input[value^="[:review/reject "]) > summary::after {
+  margin-left: 6px;
+  font: 10px var(--mono);
+  opacity: .7;
+}
+.banner form.act:has(input[value^="[:review/accept "]) .action::after { content: "a"; }
+.banner details.asks:has(input[value^="[:review/reject "]) > summary::after { content: "r"; }
+@media (max-width: 760px) {
+  .banner, .banner .view.first, .banner .view.first .item { flex-wrap: wrap; }
+}
+
 main { flex: 1; display: flex; min-height: 0; }
 #trace { flex: 1; overflow: auto; position: relative; min-width: 0; }
 aside {

@@ -522,8 +522,10 @@ func (s *server) fetch(target, args string) (string, map[string]string, int, err
 // /view/address/fn?args=[...], fetched again each time one of its topics
 // fires: ?on=topic, as often as needed, or the ones the view names, or
 // address/changed. ?part=view draws only the view, for the page to swap
-// in, and ?part=panel the view with its topics, for a tab of the main page;
-// ?said=n shows what the action sent from it answered.
+// in, ?part=panel the view with its topics, for a tab of the main page, and
+// ?part=first only an items view's first item, and a link here for the rest,
+// for its review banner; ?said=n shows what the action sent from it
+// answered.
 func (s *server) page(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	target := strings.TrimPrefix(r.URL.Path, "/view/")
@@ -543,9 +545,10 @@ func (s *server) page(w http.ResponseWriter, r *http.Request) {
 	}
 	data := struct {
 		Shown, On, Topics, Error string
+		Page                     string // the page itself
 		Reply                    shown
 		Said                     *said
-	}{Shown: title}
+	}{Shown: title, Page: back}
 	reply, ms, code, err := s.fetch(target, args)
 	if err != nil {
 		if part != "" {
@@ -573,8 +576,8 @@ func (s *server) page(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	switch part {
 	case "":
-	case "panel":
-		pages.ExecuteTemplate(w, "panel", data)
+	case "panel", "first":
+		pages.ExecuteTemplate(w, part, data)
 		return
 	default:
 		pages.ExecuteTemplate(w, "shown", data.Reply)

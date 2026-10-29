@@ -434,12 +434,12 @@ events.onerror = () => setStatus({ connected: false, why: "sniff stopped" });
 const waiting = {};
 
 // followQueue keeps how many items target's view has beside the sidebar's
-// link of class name, and in the browser tab's title, fetching it each
-// time one of topics fires. Following :review/pending so, while sniff is
+// link of class name, and in the browser tab's title, fetching it, and
+// calling then if given, each time one of topics fires. Following :review/pending so, while sniff is
 // open, it reviews: agents' writes wait for you rather than failing with
 // :no-reviewer. A watch that sniff refuses, while whiff isn't running, is
 // tried again.
-function followQueue(name, target, topics) {
+function followQueue(name, target, topics, then) {
   const link = document.querySelector(".side ." + name);
   const label = link.textContent;
   const count = async () => {
@@ -459,14 +459,18 @@ function followQueue(name, target, topics) {
     const all = Object.values(waiting).reduce((a, b) => a + b, 0);
     document.title = (all ? `(${all}) ` : "") + "sniff";
   };
+  const changed = () => {
+    count();
+    if (then) then();
+  };
   const w = new EventSource("api/watch?" + topics.map((t) => "topic=" + t).join("&"));
-  w.addEventListener("open", count);
-  w.addEventListener("changed", count);
+  w.addEventListener("open", changed);
+  w.addEventListener("changed", changed);
   w.onerror = () => {
-    if (w.readyState === EventSource.CLOSED) setTimeout(() => followQueue(name, target, topics), 2000);
+    if (w.readyState === EventSource.CLOSED) setTimeout(() => followQueue(name, target, topics, then), 2000);
   };
 }
-followQueue("review", "review/pending", ["review/pending", "review/done"]);
+followQueue("review", "review/pending", ["review/pending", "review/done"], () => loadBanner());
 followQueue("inbox", "me/inbox", ["me/changed"]);
 
 // Tabs: Activity, then a view per tab, each its /view page's href, drawn
@@ -582,6 +586,7 @@ function activate(t) {
   }
   store.set("active", t ? t.href : "");
   markSide();
+  showBanner();
   if (!t) return;
   if (t.topics.length) watch(t); // it loads when the watch opens
   else load(t);
@@ -651,17 +656,92 @@ function stopWatch(t) {
 // shows the view drawn again with what it answered.
 async function send(t, ev) {
   ev.preventDefault();
-  const body = new URLSearchParams(new FormData(ev.target));
-  body.set("back", part(t.href));
   try {
-    const r = await fetch("/act", { method: "POST", body });
-    const html = await r.text();
-    if (!r.ok) throw new Error(html.trim());
-    fill(t, html);
+    fill(t, await act(ev.target, part(t.href)));
   } catch (err) {
     setTabStatus(t, err.message, false);
   }
 }
+
+// act sends what form picked, as its page's form would, and answers the
+// part of a page it goes back to, back, which shows what it answered.
+async function act(form, back) {
+  const body = new URLSearchParams(new FormData(form));
+  body.set("back", back);
+  const r = await fetch("/act", { method: "POST", body });
+  const html = await r.text();
+  if (!r.ok) throw new Error(html.trim());
+  return html;
+}
+
+// The review banner: over Activity, the oldest write that waits for your
+// review, with its actions and a link to the rest, fetched each time the
+// queue changes. Being where you look is what keeps an open sniff a
+// reviewer.
+const banner = $("banner");
+const bannerBody = $("banner-body");
+const queue = "/view/review/pending?part=first";
+let bannerStale = false; // a change came while you typed why
+
+async function loadBanner() {
+  if (bannerBody.contains(document.activeElement) && document.activeElement.tagName === "INPUT") {
+    bannerStale = true;
+    return;
+  }
+  bannerStale = false;
+  try {
+    const r = await fetch(queue);
+    if (!r.ok) throw new Error(await r.text());
+    fillBanner(await r.text());
+  } catch {
+    fillBanner(""); // the sidebar says whiff isn't running
+  }
+}
+
+function fillBanner(html) {
+  bannerBody.innerHTML = html; // sniff drew it, escaping what it shows
+  // What the last one answered shows a moment, if none waits after it.
+  if (!bannerBody.querySelector(".item") && bannerBody.querySelector(".said")) setTimeout(loadBanner, 3000);
+  showBanner();
+}
+
+function showBanner() {
+  banner.hidden = active !== null || !bannerBody.querySelector(".item, .said");
+}
+
+bannerBody.addEventListener("focusout", () => setTimeout(() => { if (bannerStale) loadBanner(); }, 0));
+bannerBody.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  try {
+    fillBanner(await act(ev.target, queue));
+  } catch (err) {
+    bannerBody.prepend(el("p", "said err", err.message));
+  }
+});
+
+// a accepts the write the banner shows, r opens Reject's box for why, and
+// Esc there leaves it unsent; never while you type elsewhere.
+document.addEventListener("keydown", (ev) => {
+  if (banner.hidden || ev.metaKey || ev.ctrlKey || ev.altKey) return;
+  const typing = ev.target.closest?.("input, textarea, select, [contenteditable]");
+  if (typing) {
+    if (ev.key === "Escape" && bannerBody.contains(typing)) {
+      typing.closest("details")?.removeAttribute("open");
+      typing.blur();
+    }
+    return;
+  }
+  const action = (fn) => bannerBody.querySelector(`input[name=action][value^="[:review/${fn} "]`);
+  if (ev.key === "a" && action("accept")) {
+    ev.preventDefault();
+    action("accept").form.requestSubmit();
+  } else if (ev.key === "r" && action("reject")) {
+    ev.preventDefault();
+    const asks = action("reject").closest("details");
+    asks.open = true;
+    asks.querySelector("input[name=answer]").focus();
+  }
+});
 
 function togglePin(href) {
   pins = pins.includes(href) ? pins.filter((p) => p !== href) : [...pins, href];
