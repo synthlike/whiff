@@ -126,7 +126,7 @@ func runFile(ctx context.Context, file string, args []string, stdout, stderr io.
 
 // test loads each file and runs its tests, printing each that fails and
 // how many passed: 0 if they all did, 1 if any failed or a file didn't
-// load.
+// load. A file that isn't formatted, as puff -f would, fails too.
 func test(ctx context.Context, files []string, stdout, stderr io.Writer) int {
 	passed, failed := 0, 0
 	for _, file := range files {
@@ -135,6 +135,11 @@ func test(ctx context.Context, files []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "puff: %v\n", err)
 			failed++
 			continue
+		}
+		// A file that doesn't read is left for Load to say why.
+		if out, err := puff.Format(file, string(src)); err == nil && out != string(src) {
+			fmt.Fprintf(stdout, "FAIL %s: not formatted; puff -f %s\n", file, file)
+			failed++
 		}
 		env := newEnv(stdout)
 		if _, err := env.Load(ctx, file, string(src)); err != nil {

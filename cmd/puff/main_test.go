@@ -23,8 +23,9 @@ func TestRun(t *testing.T) {
 	errMain := write("err.puff", `(def (main args) (err {:kind :bad}))`)
 	oddMain := write("odd.puff", `(def (main args) 5)`)
 	faultMain := write("faultmain.puff", "(def (main args)\n  (+ 1 1.0))")
-	tested := write("tested.puff", "(def (sq n) (* n n))\n(test \"sq\" (= (sq 3) 9))\n(test \"wrong\" (= (sq 3) 6))\n(test \"fault\" (= (sq \"x\") 1))")
-	passing := write("passing.puff", "(test \"one\" (= 1 1))")
+	tested := write("tested.puff", "(def (sq n) (* n n))\n(test \"sq\" (= (sq 3) 9))\n(test \"wrong\" (= (sq 3) 6))\n(test \"fault\" (= (sq \"x\") 1))\n")
+	passing := write("passing.puff", "(test \"one\" (= 1 1))\n")
+	messy := write("messy.puff", "(def (sq n)\n(* n n))\n(test \"sq\" (= (sq 3) 9))\n")
 
 	tests := []struct {
 		name             string
@@ -108,6 +109,12 @@ func TestRun(t *testing.T) {
 			name:    "tests that pass",
 			args:    []string{"-t", passing},
 			wantOut: "1 passed, 0 failed\n",
+		},
+		{
+			name:    "tests of an unformatted file",
+			args:    []string{"-t", messy},
+			code:    1,
+			wantOut: "FAIL " + messy + ": not formatted; puff -f " + messy + "\n1 passed, 1 failed\n",
 		},
 		{
 			name:    "tests of a broken file",
