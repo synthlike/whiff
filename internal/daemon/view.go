@@ -13,12 +13,12 @@ import (
 // it.
 
 // itemFields are an item's fields, in items and in a board's columns.
-var itemFields = map[string]check{"label": isString, "detail": isString, "action": isAction}
+var itemFields = map[string]check{"label": isString, "detail": isString, "action": isAction, "actions": isActions}
 
 func viewBuiltins() []*puff.Builtin {
 	return []*puff.Builtin{
 		{Name: "view/items", Args: "items", Mark: puff.MarkRead,
-			Doc: "(items items): a view of items to pick from, each {:label \"...\"} with an optional :detail string and :action, a message as [:address/fn args...] that picking it sends.",
+			Doc: "(items items): a view of items to pick from, each {:label \"...\"} with an optional :detail string and :actions, what can be done with it, each {:label \"Move to Done\" :action [:address/fn args...]}, the message picking it sends; :action alone is one action without a label.",
 			Fn: func(_ *puff.Call, args []puff.Value) (puff.Value, error) {
 				return view("items", args[0], itemFields, "label")
 			}},
@@ -80,6 +80,13 @@ func isAction(v puff.Value) string {
 	}
 	if _, ok := vec.At(0).(puff.Keyword); !ok {
 		return "a message like [:todo/done 12]"
+	}
+	return ""
+}
+
+func isActions(v puff.Value) string {
+	if _, err := view("actions", v, map[string]check{"label": isString, "action": isAction}, "label", "action"); err != nil {
+		return fmt.Sprintf("a vector of {:label \"...\" :action [:address/fn args...]} (%v)", err)
 	}
 	return ""
 }

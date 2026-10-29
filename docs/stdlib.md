@@ -225,7 +225,7 @@ mark rather than `:write`, and `publish` to a literal topic as its subscribers'.
 - `(call target [arg] ...)` `:write`: Send target, :address/fn, a message and wait for its Result; (err {:kind :timeout}) after 5s.
 - `(send target [arg] ...)` `:write`: Send target, :address/fn, a message without waiting: :done once it is in the mailbox.
 - `(send-after d target [arg] ...)` `:write`: Send target a message once d has passed; :done at once.
-- `(view/items items)`: (items items): a view of items to pick from, each {:label "..."} with an optional :detail string and :action, a message as [:address/fn args...] that picking it sends.
+- `(view/items items)`: (items items): a view of items to pick from, each {:label "..."} with an optional :detail string and :actions, what can be done with it, each {:label "Move to Done" :action [:address/fn args...]}, the message picking it sends; :action alone is one action without a label.
 - `(view/text text)`: (text text): a view of text, shown as it is.
 - `(view/locations locations)`: (locations locations): a view of places in files, each {:file "..."} with an optional :line and :col, counting from 1, and :note string.
 - `(view/board columns)`: (board columns): a view of items in columns, each {:title "..." :items [...]}, its items as view/items has them.

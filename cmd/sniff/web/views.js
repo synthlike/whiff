@@ -142,22 +142,31 @@ function showView(view, reply, acted) {
   return f;
 }
 
-// item is an item of a view; clicking its action sends it as you, as whiff
-// act does, and shows the reply under it.
+// item is an item of a view, with a button for each thing that can be done
+// with it: its :actions, each saying what it does, and its :action, which
+// shows the message it sends. Clicking one sends it as you, as whiff act
+// does, and shows the reply under the item.
 function item(m, acted) {
   const r = el("div", "item");
   r.append(el("span", "", str(m, "label")));
   if (str(m, "detail")) r.append(el("span", "detail", str(m, "detail")));
-  const a = field(m, "action");
-  if (a) {
-    const b = el("button", "action", print(a));
-    b.title = "send " + print(a) + " as you";
-    const out = el("div", "reply");
+  const actions = [];
+  if (field(m, "action")) actions.push({ label: "", action: field(m, "action") });
+  for (const a of field(m, "actions")?.v || []) {
+    if (a.t === "map" && field(a, "action")) actions.push({ label: str(a, "label"), action: field(a, "action") });
+  }
+  if (!actions.length) return r;
+  const buttons = el("span", "actions");
+  const out = el("div", "reply");
+  for (const { label, action } of actions) {
+    const b = el("button", label ? "action labelled" : "action", label || print(action));
+    b.title = "sends " + print(action) + " as you";
     b.onclick = async () => {
-      b.disabled = true;
+      buttons.querySelectorAll("button").forEach((x) => { x.disabled = true; });
+      out.className = "reply";
       out.replaceChildren("…");
       try {
-        const reply = await act(a);
+        const reply = await act(action);
         out.className = "reply " + (reply.t === "tag" && reply.n === "ok" ? "ok" : "err");
         out.replaceChildren(inline(reply));
         if (acted) acted();
@@ -165,10 +174,11 @@ function item(m, acted) {
         out.className = "reply err";
         out.textContent = err.message;
       }
-      b.disabled = false;
+      buttons.querySelectorAll("button").forEach((x) => { x.disabled = false; });
     };
-    r.append(b, out);
+    buttons.append(b);
   }
+  r.append(buttons, out);
   return r;
 }
 

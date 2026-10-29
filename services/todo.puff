@@ -69,7 +69,7 @@
     "The open items as a view: picking one ticks it."
     (ok (view/items (vector/map (vector/filter (parse (try (read))) (fn ({:done d}) (not d)))
                       (fn ({:line l :text t :section s})
-                        {:label t :detail (if (= s "") (str file ":" l) (str file ":" l "  " s)) :action [:todo/done l]})))))
+                        {:label t :detail (if (= s "") (str file ":" l) (str file ":" l "  " s)) :actions [{:label "Tick it" :action [:todo/done l]}]})))))
 
   ; columns is items as a board's columns: a column per heading, in the order
   ; they first come, each item ticking itself when picked.
@@ -79,15 +79,15 @@
         (fn (h)
           {:title (if (= h "") file h)
            :items (vector/map (vector/filter items (fn ({:section s}) (= s h)))
-                    (fn ({:line l :text t}) {:label t :detail (str file ":" l) :action [:todo/done l]}))}))))
+                    (fn ({:line l :text t}) {:label t :detail (str file ":" l) :actions [{:label "Tick it" :action [:todo/done l]}]}))}))))
 
   (test "a column per heading, in the order they first come"
     (= (columns [{:line 1 :done #f :text "a" :section ""}
                  {:line 3 :done #f :text "b" :section "Now"}
                  {:line 5 :done #f :text "c" :section ""}])
-      [{:title "TODO.md" :items [{:label "a" :detail "TODO.md:1" :action [:todo/done 1]}
-                                 {:label "c" :detail "TODO.md:5" :action [:todo/done 5]}]}
-       {:title "Now" :items [{:label "b" :detail "TODO.md:3" :action [:todo/done 3]}]}]))
+      [{:title "TODO.md" :items [{:label "a" :detail "TODO.md:1" :actions [{:label "Tick it" :action [:todo/done 1]}]}
+                                 {:label "c" :detail "TODO.md:5" :actions [{:label "Tick it" :action [:todo/done 5]}]}]}
+       {:title "Now" :items [{:label "b" :detail "TODO.md:3" :actions [{:label "Tick it" :action [:todo/done 3]}]}]}]))
 
   (on (board)
     "The open items as a board, a column per heading: picking one ticks it."

@@ -114,14 +114,19 @@
                         [_ (none)])]
               (match run
                 [(some {:run r :step s :round rd :branch b})
-                 {:step s :item {:label task :detail (str where ", round " rd ", " b)
-                                 :action (if (vector/contains? [:dev :check :review] s) [:pipeline/cancel r] [:pipeline/show r])}}]
+                 (let [show {:label "Show review and diff" :action [:pipeline/show r]}]
+                   {:step s :item {:label task :detail (str where ", round " rd ", " b)
+                                   :actions (if (vector/contains? [:dev :check :review] s)
+                                              [show {:label "Cancel the run" :action [:pipeline/cancel r]}]
+                                              [show])}})]
                 [_ {:step (if (= step :building) :planned :skipped) :item {:label task :detail where}}])))))))
 
   (test "a ticket per task, at its run's step"
     (= (tickets 1 {:goal "g" :step :building :tasks ["a" "b"] :built [7]}
          [{:run 7 :step :review :round 2 :branch "whiff/7"}])
-      [{:step :review :item {:label "a" :detail "plan 1, task 1 of 2, round 2, whiff/7" :action [:pipeline/cancel 7]}}
+      [{:step :review :item {:label "a" :detail "plan 1, task 1 of 2, round 2, whiff/7"
+                             :actions [{:label "Show review and diff" :action [:pipeline/show 7]}
+                                       {:label "Cancel the run" :action [:pipeline/cancel 7]}]}}
        {:step :planned :item {:label "b" :detail "plan 1, task 2 of 2"}}]))
 
   (test "the goal while it has no tasks, and the tasks a failed plan didn't start"
@@ -131,7 +136,7 @@
       [[{:step :planning :item {:label "g" :detail "plan 2, planning"}}] [:gave-up :skipped]]))
 
   (on (board state) :read
-    "Every plan's tasks as a board, a ticket each in a column by where it is: Planned, Dev, Check, Review, Done or Failed. Picking a ticket cancels its run while it runs, and shows its last review and diff once it has ended."
+    "Every plan's tasks as a board, a ticket each in a column by where it is: Planned, Dev, Check, Review, Done or Failed. A ticket with a run shows its last review and diff, and cancels it while it runs."
     (let [runs (try (call :pipeline/runs))
           ts (vector/reduce (map/entries (map/get-or state :plans {})) []
                (fn (acc [n p]) (vector/concat acc (tickets n p runs))))]

@@ -253,8 +253,8 @@ aside h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; co
 .view .copied .at::after { content: "  copied"; color: var(--muted); }
 .view .detail { color: var(--muted); }
 .view .item { flex-wrap: wrap; }
+.view .actions { margin-left: auto; display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; max-width: 60%; }
 .view .action {
-  margin-left: auto;
   font: 11px var(--mono);
   color: var(--accent);
   background: none;
@@ -264,10 +264,11 @@ aside h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; co
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 45%;
+  max-width: 100%;
   cursor: pointer;
 }
 .view .action:hover { border-color: var(--accent); }
+.view .action.labelled { font: 12px var(--sans); }
 .view .action:disabled { color: var(--muted); cursor: progress; }
 .view .reply { flex-basis: 100%; font: 11px var(--mono); color: var(--muted); word-break: break-word; }
 .view .reply:empty { display: none; }
@@ -276,7 +277,7 @@ aside h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; co
 .view.board { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
 .view .column h4 { font-size: 12px; margin: 0 0 4px; }
 .view .column .item { gap: 2px 10px; }
-.view .column .action { max-width: 100%; margin-left: 0; }
+.view .column .actions { max-width: 100%; margin-left: 0; justify-content: flex-start; }
 .raw { margin-top: 8px; }
 .raw > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
 .pin { display: inline-block; margin-top: 10px; color: var(--accent); }

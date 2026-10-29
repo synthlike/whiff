@@ -281,15 +281,15 @@ func TestTodoService(t *testing.T) {
 			`{:done #f :line 17 :section "v2" :text "last"} ` +
 			`{:done #f :line 18 :section "v2" :text "new one"}])`},
 		{"view", "[]", `(ok (items [` +
-			`{:action [:todo/done 3] :detail "TODO.md:3  TODO" :label "under the title"} ` +
-			`{:action [:todo/done 10] :detail "TODO.md:10  v1" :label "nested"} ` +
-			`{:action [:todo/done 17] :detail "TODO.md:17  v2" :label "last"} ` +
-			`{:action [:todo/done 18] :detail "TODO.md:18  v2" :label "new one"}]))`},
+			`{:actions [{:action [:todo/done 3] :label "Tick it"}] :detail "TODO.md:3  TODO" :label "under the title"} ` +
+			`{:actions [{:action [:todo/done 10] :label "Tick it"}] :detail "TODO.md:10  v1" :label "nested"} ` +
+			`{:actions [{:action [:todo/done 17] :label "Tick it"}] :detail "TODO.md:17  v2" :label "last"} ` +
+			`{:actions [{:action [:todo/done 18] :label "Tick it"}] :detail "TODO.md:18  v2" :label "new one"}]))`},
 		{"board", "[]", `(ok (board [` +
-			`{:items [{:action [:todo/done 3] :detail "TODO.md:3" :label "under the title"}] :title "TODO"} ` +
-			`{:items [{:action [:todo/done 10] :detail "TODO.md:10" :label "nested"}] :title "v1"} ` +
-			`{:items [{:action [:todo/done 17] :detail "TODO.md:17" :label "last"} ` +
-			`{:action [:todo/done 18] :detail "TODO.md:18" :label "new one"}] :title "v2"}]))`},
+			`{:items [{:actions [{:action [:todo/done 3] :label "Tick it"}] :detail "TODO.md:3" :label "under the title"}] :title "TODO"} ` +
+			`{:items [{:actions [{:action [:todo/done 10] :label "Tick it"}] :detail "TODO.md:10" :label "nested"}] :title "v1"} ` +
+			`{:items [{:actions [{:action [:todo/done 17] :label "Tick it"}] :detail "TODO.md:17" :label "last"} ` +
+			`{:actions [{:action [:todo/done 18] :label "Tick it"}] :detail "TODO.md:18" :label "new one"}] :title "v2"}]))`},
 		{"add", `["first"]`, `(ok 1)`}, // in dir, which has no TODO.md
 	}
 	for i, tt := range tests {
@@ -610,7 +610,7 @@ echo "changed things"
 		!strings.Contains(got, ":round 3 :run 2 :step :gave-up") {
 		t.Errorf("runs = %s", got)
 	}
-	if got := call("view", "[]"); !strings.Contains(got, `{:detail "gave-up, round 3, whiff/2" :label "2  another"}`) {
+	if got := call("view", "[]"); !strings.Contains(got, `{:actions [{:action [:pipeline/show 2] :label "Show review and diff"}] :detail "gave-up, round 3, whiff/2" :label "2  another"}`) {
 		t.Errorf("view = %s", got)
 	}
 	if got := call("cancel", "[2]"); !strings.Contains(got, ":no-run") {
@@ -707,8 +707,8 @@ esac
 		t.Errorf("plans = %+v %v", resp, err)
 	}
 	resp, err = c.Message("call", "plan/board", "[]", repo)
-	done := `{:items [{:action [:pipeline/show 1] :detail "plan 1, task 1 of 2, round 1, whiff/1" :label "one"} ` +
-		`{:action [:pipeline/show 2] :detail "plan 1, task 2 of 2, round 1, whiff/2" :label "two"}] :title "Done"}`
+	done := `{:items [{:actions [{:action [:pipeline/show 1] :label "Show review and diff"}] :detail "plan 1, task 1 of 2, round 1, whiff/1" :label "one"} ` +
+		`{:actions [{:action [:pipeline/show 2] :label "Show review and diff"}] :detail "plan 1, task 2 of 2, round 1, whiff/2" :label "two"}] :title "Done"}`
 	if err != nil || !strings.Contains(resp.Value, `{:items [] :title "Planned"}`) || !strings.Contains(resp.Value, done) {
 		t.Errorf("board = %+v %v", resp, err)
 	}

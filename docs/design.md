@@ -151,12 +151,21 @@ subscribers and private `def`s.
 ## Views
 
 A function can answer with a view, a plain value any client can show:
-`(items [...])` to pick from, each `{:label :detail :action}` with its
-action a message, `[:todo/done 12]`; `(locations [...])`, places in files;
-`(text "...")`; `(board [...])`, columns of items. `view/items` and friends
-build them and check their shape. They are data like any other answer, so
-history and agents see them as they are; the CLI prints items as lines for
-fzf, and `whiff act` sends the action of the one you pick.
+`(items [...])` to pick from, each `{:label :detail :actions}`;
+`(locations [...])`, places in files; `(text "...")`; `(board [...])`,
+columns of items. `view/items` and friends build them and check their
+shape. They are data like any other answer, so history and agents see them
+as they are.
+
+A view carries what can be done next, as hypertext carries its links: an
+item's `:actions` are what its service offers for it now, each a label
+saying what it does and the message that does it, `{:label "Cancel the
+run" :action [:pipeline/cancel 3]}` (`:action` alone is one without a
+label). A client knows nothing of tickets or runs: it shows the buttons and
+sends the one you pick, as an ordinary message under the ordinary rules. An
+action is an offer, not a permission: its handler checks again, so one from
+a stale view fails as any message would. The CLI prints a line per action,
+for fzf, and `whiff act` sends the one you pick.
 
 sniff draws them, and pins one as a page of its own, `/view/plan/board`:
 it calls the function as you, only if it is `:read`, and again each time

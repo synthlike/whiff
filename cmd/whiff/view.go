@@ -12,7 +12,9 @@ import (
 
 // viewText is v as the CLI shows a view, and true; false if v isn't one:
 //
-//	items      a line each, label, detail and action apart by tabs, for fzf
+//	items      a line each, label, detail and action apart by tabs, for fzf;
+//	           an item with :actions has a line for each, with its label
+//	           before the action
 //	text       as it is
 //	locations  file:line:col: note, a line each, as compilers print them
 //	board      a column each, "# title" and its items' lines, a blank line apart
@@ -28,15 +30,24 @@ func viewText(v puff.Value) (string, bool) {
 	var b strings.Builder
 	items := func(vs puff.Vector) {
 		for i := range vs.Len() {
-			line := str(vs.At(i), "label")
-			action := field(vs.At(i), "action")
-			if d := str(vs.At(i), "detail"); d != "" || action != nil {
+			it := vs.At(i)
+			line := str(it, "label")
+			action := field(it, "action")
+			actions, _ := field(it, "actions").(puff.Vector)
+			if d := str(it, "detail"); d != "" || action != nil || actions.Len() > 0 {
 				line += "\t" + d
 			}
-			if action != nil {
-				line += "\t" + puff.Print(action)
+			if action != nil || actions.Len() == 0 {
+				if action != nil {
+					b.WriteString(line + "\t" + puff.Print(action) + "\n")
+				} else {
+					b.WriteString(line + "\n")
+				}
 			}
-			b.WriteString(line + "\n")
+			for j := range actions.Len() {
+				a := actions.At(j)
+				b.WriteString(line + "\t" + str(a, "label") + "\t" + puff.Print(field(a, "action")) + "\n")
+			}
 		}
 	}
 	switch vs, _ := t.At(0).(puff.Vector); {
