@@ -275,3 +275,111 @@ func TestSniff(t *testing.T) {
 		t.Errorf("an unknown session = %s", got)
 	}
 }
+
+// TestViews follows a view pinned as a page: fetched as you while it is
+// :read, an action sent as you, and the topic that says to fetch it again.
+func TestViews(t *testing.T) {
+	s, base, _ := sniffing(t, map[string]string{
+		"board": `(service board :state {:n 0}
+  (on (show s) :read "A view."
+    (ok (view/items [{:label (str "n " (map/get-or s :n 0)) :action [:board/bump 2]}])))
+  (on (bump s k) :write :update "Adds k."
+    (do (publish :board/changed {})
+      (ok [:done (map/update s :n (fn (n) (+ n k)))]))))`,
+	})
+	cookie := &http.Cookie{Name: fmt.Sprintf("sniff-%d", s.port), Value: s.token}
+	do := func(method, path, ctype, body string, header ...string) (*http.Response, string) {
+		t.Helper()
+		req, _ := http.NewRequest(method, base+path, strings.NewReader(body))
+		req.AddCookie(cookie)
+		if ctype != "" {
+			req.Header.Set("Content-Type", ctype)
+		}
+		for i := 0; i+1 < len(header); i += 2 {
+			req.Header.Set(header[i], header[i+1])
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp, string(b)
+	}
+	if r, b := do("GET", "/view/board/show", "", ""); r.StatusCode != http.StatusOK || !strings.Contains(b, "page.js") {
+		t.Errorf("the page: %s %s", r.Status, b)
+	}
+	view := func() string {
+		t.Helper()
+		// Until sniff's daemon has loaded :board, it may have no such address.
+		var b string
+		for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+			var r *http.Response
+			if r, b = do("GET", "/api/view?target=board/show", "", ""); r.StatusCode == http.StatusOK {
+				return b
+			}
+		}
+		t.Fatalf("view: %s", b)
+		return ""
+	}
+	if got := view(); !strings.Contains(got, `"n":"items"`) || !strings.Contains(got, `{"t":"str","v":"n 0"}`) {
+		t.Errorf("view = %s", got)
+	}
+	for _, tt := range []struct {
+		target string
+		code   int
+	}{{"board/bump", http.StatusForbidden}, {"board/nope", http.StatusNotFound}, {"bad%20name", http.StatusBadRequest}} {
+		if r, b := do("GET", "/api/view?target="+tt.target, "", ""); r.StatusCode != tt.code {
+			t.Errorf("view %s: %s %s, want %d", tt.target, r.Status, b, tt.code)
+		}
+	}
+
+	// The watch, a stream that says when the view changed.
+	req, _ := http.NewRequest("GET", base+"/api/watch?topic=board/changed", nil)
+	req.AddCookie(cookie)
+	watch, err := http.DefaultClient.Do(req)
+	if err != nil || watch.StatusCode != http.StatusOK {
+		t.Fatalf("watch: %v %v", watch, err)
+	}
+	defer watch.Body.Close()
+	lines := bufio.NewScanner(watch.Body)
+	if !lines.Scan() || lines.Text() != ": following" {
+		t.Fatalf("watch began %q", lines.Text())
+	}
+
+	// Only sniff's page acts, with JSON, from its own origin.
+	act := `{"action": "[:board/bump 2]"}`
+	if r, _ := do("POST", "/api/act", "text/plain", act); r.StatusCode != http.StatusForbidden {
+		t.Errorf("a form's post: %s", r.Status)
+	}
+	if r, _ := do("POST", "/api/act", "application/json", act, "Sec-Fetch-Site", "cross-site"); r.StatusCode != http.StatusForbidden {
+		t.Errorf("another site's: %s", r.Status)
+	}
+	if r, b := do("POST", "/api/act", "application/json", `{"action": "[1]"}`); r.StatusCode != http.StatusBadRequest {
+		t.Errorf("a bad action: %s %s", r.Status, b)
+	}
+	if r, b := do("POST", "/api/act", "application/json", act, "Sec-Fetch-Site", "same-origin"); r.StatusCode != http.StatusOK ||
+		strings.TrimSpace(b) != `{"t":"tag","n":"ok","v":[{"t":"kw","v":"done"}]}` {
+		t.Errorf("act: %s %s", r.Status, b)
+	}
+	got := make(chan string, 1)
+	go func() {
+		for lines.Scan() {
+			if strings.HasPrefix(lines.Text(), "event: ") {
+				got <- lines.Text()
+				return
+			}
+		}
+	}()
+	select {
+	case e := <-got:
+		if e != "event: changed" {
+			t.Errorf("watch: %q", e)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no change on the watch")
+	}
+	if got := view(); !strings.Contains(got, `{"t":"str","v":"n 2"}`) {
+		t.Errorf("view after acting = %s", got)
+	}
+}

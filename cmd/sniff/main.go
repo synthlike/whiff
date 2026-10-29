@@ -6,7 +6,10 @@
 //	sniff [-port n] [-open]
 //
 // It prints the page's address, with a token that only you have: the page
-// is yours, as the socket is.
+// is yours, as the socket is, and what it sends is sent as you, as from the
+// CLI. A view can be a page of its own, /view/address/fn, fetched again
+// each time address/changed (or ?on=topic) fires; clicking an action of
+// its items sends it, as whiff act does.
 package main
 
 import (
@@ -21,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"mime"
 	"net"
 	"net/http"
 	"os"
@@ -99,6 +103,7 @@ func openBrowser(url string) {
 // traces it, which it pushes to every page open.
 type server struct {
 	dir   string // the daemon's socket directory
+	wd    string // the directory sniff calls from, as the CLI calls from its own
 	port  int
 	token string
 
@@ -124,7 +129,8 @@ type event struct {
 func newServer(dir string, port int) *server {
 	b := make([]byte, 16)
 	rand.Read(b)
-	return &server{dir: dir, port: port, token: hex.EncodeToString(b),
+	wd, _ := os.Getwd()
+	return &server{dir: dir, wd: wd, port: port, token: hex.EncodeToString(b),
 		status: status{Why: "connecting to whiff"}, watchers: map[chan event]bool{}}
 }
 
@@ -240,10 +246,14 @@ func (s *server) handler() http.Handler {
 	mux := http.NewServeMux()
 	files, _ := fs.Sub(web, "web")
 	mux.Handle("GET /", http.FileServerFS(files))
+	mux.HandleFunc("GET /view/", func(w http.ResponseWriter, r *http.Request) { http.ServeFileFS(w, r, files, "view.html") })
 	mux.HandleFunc("GET /events", s.events)
 	mux.HandleFunc("GET /api/addresses", s.addresses)
 	mux.HandleFunc("GET /api/state", s.state)
 	mux.HandleFunc("GET /api/session", s.session)
+	mux.HandleFunc("GET /api/view", s.view)
+	mux.HandleFunc("GET /api/watch", s.watch)
+	mux.HandleFunc("POST /api/act", s.act)
 	return s.guard(mux)
 }
 
@@ -407,6 +417,170 @@ func (s *server) session(w http.ResponseWriter, r *http.Request) {
 		out.Entries = append(out.Entries, entryJSON(e))
 	}
 	writeJSON(w, out)
+}
+
+// view answers what target, address/fn, answers called as you with no
+// arguments, as a tree: what a pinned page shows. Only a :read function's,
+// so fetching a page, again and again, changes nothing.
+func (s *server) view(w http.ResponseWriter, r *http.Request) {
+	target, ok := keyword(r.URL.Query().Get("target"))
+	i := strings.LastIndex(target, "/")
+	if !ok || i <= 0 {
+		http.Error(w, "want a target, address/fn", http.StatusBadRequest)
+		return
+	}
+	addr, fn := target[:i], target[i+1:]
+	c, err := s.dial()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	defer c.Close()
+	fns, err := evalOk(c, "(describe "+puff.Print(puff.Keyword(addr))+")")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	mark := ""
+	list, _ := plain(fns).([]any)
+	for _, f := range list {
+		if f, _ := f.(map[string]any); f["fn"] == fn {
+			mark, _ = f["mark"].(string)
+		}
+	}
+	switch mark {
+	case "read":
+	case "":
+		http.Error(w, fmt.Sprintf(":%s has no function %s", addr, fn), http.StatusNotFound)
+		return
+	default:
+		http.Error(w, fmt.Sprintf(":%s is :%s: a page fetches only :read functions", target, mark), http.StatusForbidden)
+		return
+	}
+	resp, err := c.Message("call", target, "[]", s.wd)
+	if err == nil && resp.Error != "" {
+		err = errors.New(resp.Error)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, treeOf(resp.Value))
+}
+
+// watch streams an event, changed, each time topic is published, for a
+// pinned page to fetch its view again: a connection of its own that
+// follows the topic, as whiff sub does.
+func (s *server) watch(w http.ResponseWriter, r *http.Request) {
+	topic, ok := keyword(r.URL.Query().Get("topic"))
+	if !ok {
+		http.Error(w, "want a topic", http.StatusBadRequest)
+		return
+	}
+	c, err := s.dial()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	defer c.Close()
+	resp, err := c.Sub(topic)
+	if err == nil && resp.Error != "" {
+		err = errors.New(resp.Error)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	rc := http.NewResponseController(w)
+	fmt.Fprint(w, ": following\n\n")
+	if rc.Flush() != nil {
+		return
+	}
+	ping := time.NewTicker(25 * time.Second)
+	defer ping.Stop()
+	for {
+		select {
+		case _, ok := <-c.Events():
+			if !ok {
+				return
+			}
+			fmt.Fprint(w, "event: changed\ndata: {}\n\n")
+		case <-ping.C:
+			fmt.Fprint(w, ": ping\n\n")
+		case <-r.Context().Done():
+			return
+		}
+		if rc.Flush() != nil {
+			return
+		}
+	}
+}
+
+// act sends what a page picked, an item's action, [:address/fn args...],
+// as you, as whiff act does, and answers its reply as a tree. Only sniff's
+// own page can send it: as JSON, which another site's page can't post
+// without asking first, from the same origin, and with the cookie, which
+// SameSite keeps from other sites.
+func (s *server) act(w http.ResponseWriter, r *http.Request) {
+	mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if site := r.Header.Get("Sec-Fetch-Site"); mt != "application/json" || site != "" && site != "same-origin" {
+		http.Error(w, "send it from sniff's page", http.StatusForbidden)
+		return
+	}
+	var body struct {
+		Action string `json:"action"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
+		http.Error(w, `want {"action": "[:address/fn args...]"}`, http.StatusBadRequest)
+		return
+	}
+	target, args, err := action(body.Action)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	c, err := s.dial()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	defer c.Close()
+	resp, err := c.Message("call", target, args, s.wd)
+	if err == nil && resp.Error != "" {
+		err = errors.New(resp.Error)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, treeOf(resp.Value))
+}
+
+// action is the target and args of a, a printed [:address/fn args...].
+func action(a string) (target, args string, err error) {
+	v, err := puff.ReadValue(a)
+	vec, ok := v.(puff.Vector)
+	var k puff.Keyword
+	if err == nil && ok && vec.Len() > 0 {
+		k, ok = vec.At(0).(puff.Keyword)
+	}
+	if err != nil || !ok || vec.Len() == 0 {
+		return "", "", fmt.Errorf("want [:address/fn args...], got %s", a)
+	}
+	rest := make([]puff.Value, vec.Len()-1)
+	for i := range rest {
+		rest[i] = vec.At(i + 1)
+	}
+	return string(k), puff.Print(puff.NewVector(rest...)), nil
+}
+
+// keyword is s without its colon, and whether it reads as a keyword: an
+// address, a target or a topic.
+func keyword(s string) (string, bool) {
+	s = strings.TrimPrefix(s, ":")
+	k, err := puff.ReadValue(":" + s)
+	return s, err == nil && s != "" && puff.Equal(k, puff.Keyword(s))
 }
 
 // evalOk evaluates src, read-only code of sniff's own, and returns v of

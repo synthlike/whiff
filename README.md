@@ -50,8 +50,10 @@ Services keep state across restarts (`:state`, kept in `~/.whiff/whiff.db`;
 `whiff reset` forgets it), subscribe to topics, run long work as jobs and
 mark each function `:read` or `:write`. A function can answer with a view, a
 plain value any client can show: items to pick from, each with an action,
-places in files, or text. The CLI prints items as lines for fzf, and `whiff
-act` sends the action of the one you pick. [services/](services/README.md) has
+places in files, text, or a board of items in columns. The CLI prints items
+as lines for fzf, and `whiff act` sends the action of the one you pick;
+sniff, whiff's web UI, pins a view as a page of its own (`/view/plan/board`)
+that fetches it again when its topic fires, and sends an action you click. [services/](services/README.md) has
 the ones in daily use: `git`, `gh` (which watches your pull requests), `todo`,
 `reviewer` and `assistant`, a resident Claude agent you talk to through your
 inbox, plus `pipeline` and `plan`: a planner, a developer and a reviewer

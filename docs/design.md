@@ -153,10 +153,17 @@ subscribers and private `def`s.
 A function can answer with a view, a plain value any client can show:
 `(items [...])` to pick from, each `{:label :detail :action}` with its
 action a message, `[:todo/done 12]`; `(locations [...])`, places in files;
-`(text "...")`. `view/items` and friends build them and check their shape.
-They are data like any other answer, so history and agents see them as
-they are; the CLI prints items as lines for fzf, and `whiff act` sends the
-action of the one you pick.
+`(text "...")`; `(board [...])`, columns of items. `view/items` and friends
+build them and check their shape. They are data like any other answer, so
+history and agents see them as they are; the CLI prints items as lines for
+fzf, and `whiff act` sends the action of the one you pick.
+
+sniff draws them, and pins one as a page of its own, `/view/plan/board`:
+it calls the function as you, only if it is `:read`, and again each time
+`:plan/changed` fires (or the topic its `?on=` names). Clicking an action
+sends it as you, as `whiff act` does: sniff is one of your connections,
+and only its own page can send through it, as JSON from its origin with
+its cookie.
 
 ## Origins and the review gate
 
