@@ -26,6 +26,7 @@ type ticket struct {
 	// reviewed is whether you gave the answer, so what it leads to passes
 	// the review gate, as for a message you accepted.
 	reviewed bool
+	session  string // the agent session that began the message's chain, if one did
 }
 
 // asked is a message to an ask function, waiting in its service's inbox
@@ -80,7 +81,7 @@ func (d *daemon) ask(st *state, s *service, m message) puff.Value {
 		return puff.Errorf("full", ":%s's inbox is full", s.name)
 	}
 	st.nextID++
-	a := &asked{ticket: ticket{id: st.nextID, from: m.from, dir: m.dir, user: m.user}, addr: s.name, fn: m.fn, args: args, at: time.Now()}
+	a := &asked{ticket: ticket{id: st.nextID, from: m.from, dir: m.dir, user: m.user, session: m.session}, addr: s.name, fn: m.fn, args: args, at: time.Now()}
 	st.asked = append(st.asked, a)
 	if h.expires > 0 {
 		time.AfterFunc(h.expires, func() {
@@ -141,7 +142,7 @@ func (d *daemon) answer(st *state, t ticket, by string, result puff.Value) {
 		w <- result
 	}
 	delete(st.waiters, t.id)
-	m := message{from: by, fn: "whiff/done", args: puff.Print(puff.NewVector(puff.Int(t.id), result)), dir: t.dir, user: t.user, reviewed: t.reviewed}
+	m := message{from: by, fn: "whiff/done", args: puff.Print(puff.NewVector(puff.Int(t.id), result)), dir: t.dir, user: t.user, reviewed: t.reviewed, session: t.session}
 	if s := st.addrs[t.from]; s != nil {
 		if h, ok := s.fns[m.fn]; ok && !h.ask {
 			d.put(st, t.from, m)
@@ -171,7 +172,7 @@ func (d *daemon) handOn(by string, id int64, m message) error {
 		}
 		if t != nil && t.from == by {
 			found = true
-			t.from, t.dir, t.user = m.from, m.dir, t.user && m.user
+			t.from, t.dir, t.user, t.session = m.from, m.dir, t.user && m.user, sameSession(t.session, m.session)
 			return
 		}
 		for i, a := range slices.Backward(st.answers) {
@@ -179,7 +180,7 @@ func (d *daemon) handOn(by string, id int64, m message) error {
 				found = true
 				// Handed on once: by can't hand it on again.
 				st.answers[i].from = m.from
-				d.answer(st, ticket{id: id, from: m.from, dir: m.dir, user: a.user && m.user}, a.by, a.result)
+				d.answer(st, ticket{id: id, from: m.from, dir: m.dir, user: a.user && m.user, session: sameSession(a.session, m.session)}, a.by, a.result)
 				return
 			}
 		}
@@ -188,6 +189,14 @@ func (d *daemon) handOn(by string, id int64, m message) error {
 		return fmt.Errorf("no job or ask %d of :%s's to hand on", id, by)
 	}
 	return nil
+}
+
+// sameSession is a and b's agent session if they share it, else "".
+func sameSession(a, b string) string {
+	if a != b {
+		return ""
+	}
+	return a
 }
 
 // pendingID is the id of r if it is (err {:kind :pending :id n}).

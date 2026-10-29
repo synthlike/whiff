@@ -110,7 +110,7 @@ func (d *daemon) runJob(m message, args []puff.Value) (puff.Value, error) {
 	j := &job{cmd: cmdv, cancel: cancel}
 	d.do(func(st *state) {
 		st.nextID++
-		j.ticket = ticket{id: st.nextID, from: m.from, dir: m.dir, user: user}
+		j.ticket = ticket{id: st.nextID, from: m.from, dir: m.dir, user: user, session: m.session}
 		st.jobs[j.id] = j
 	})
 	d.publish(message{from: "jobs", topic: "jobs/started", args: puff.Print(puff.NewVector(j.value())), dir: m.dir, user: m.user})

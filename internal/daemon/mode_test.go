@@ -147,6 +147,8 @@ func TestSession(t *testing.T) {
   (on (list) "Reads them." (file/read-text "` + file + `")))`,
 		"tally": `(service tally
   (on :t/x (v) (call :notes/add v)))`,
+		"relay": `(service relay
+  (on (add text) "Adds text to the notes." (call :notes/add text)))`,
 	})
 	start(t, dir)
 	you := dial(t, dir)
@@ -177,17 +179,18 @@ func TestSession(t *testing.T) {
 	do(you, "reject", "", `[2 "no"]`)
 	do(agent, "call", "notes/add", `["c"]`) // held 3, waits
 	eval(`(call :notes/add "e")`)           // held 4, waits
-	if _, err := you.Mode("agent/1", "trusted", []string{"notes"}, 0); err != nil {
+	if _, err := you.Mode("agent/1", "trusted", []string{"notes", "relay"}, 0); err != nil {
 		t.Fatal(err)
 	}
 	do(agent, "call", "notes/add", `["d"]`)
-	do(agent, "call", "notes/list", `[]`) // a read: not in the session
+	do(agent, "call", "relay/add", `["h"]`) // and :relay's write for it
+	do(agent, "call", "notes/list", `[]`)   // a read: not in the session
 	if _, err := you.Mode("agent/1", "free", nil, 0); err != nil {
 		t.Fatal(err)
 	}
 	eval(`(file/append "` + file + `" "f")`)
 	eval(`(publish :t/x "g")`)
-	eventually(t, "the writes", func() string { b, _ := os.ReadFile(file); return string(b) }, "adfg")
+	eventually(t, "the writes", func() string { b, _ := os.ReadFile(file); return string(b) }, "adhfg")
 
 	es, err := you.History()
 	if err != nil {
@@ -202,8 +205,11 @@ func TestSession(t *testing.T) {
 		"note  :agent/1 is trusted :notes",
 		`:agent/1 -> :notes/add "d"  (ok :done)`, "[trusted]",
 		`eval  agent  :agent/1 -> eval "(file/append`, "[free]",
+		`:agent/1 -> :relay/add "h"  (ok :done)`, "[trusted]",
+		`:relay -> :notes/add "h"  (ok :done)`, "[for agent/1]",
 		`eval  agent  :agent/1 -> eval "(publish :t/x \"g\")"  (ok :done)`,
-		"agent/1: 4 writes went through (1 trusted, 2 free, 1 accepted); 1 rejected; 2 wait for review\n",
+		`:tally -> :notes/add "g"  (ok :done)`,
+		"agent/1: 5 writes went through (2 trusted, 2 free, 1 accepted), and 2 by services for it; 1 rejected; 2 wait for review\n",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("session has no %q:\n%s", want, got)

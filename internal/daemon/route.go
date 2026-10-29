@@ -37,8 +37,12 @@ type message struct {
 	// reviewed is whether you accepted m, or a message earlier in its
 	// chain, at the review gate, which lets it through.
 	reviewed bool
+	// session is the agent session, agent/<n>, whose message began m's
+	// chain; "" for a chain that began elsewhere.
+	session string
 	// gate is how the review gate let an agent's write through, for
-	// history: trusted, free or accepted <id>; "" for anything else.
+	// history: trusted, free, accepted <id>, or for <session> further
+	// down a chain it let through; "" for anything else.
 	gate string
 	// reply gets the printed Result, nil for a send. It has room for it, so
 	// the service never waits on a caller that has gone.
@@ -83,6 +87,7 @@ type caller struct {
 	// reviewed is whether you accepted a message of the current chain at
 	// the review gate.
 	reviewed bool
+	session  string // the agent session that began the current chain, if one did
 	// stop is closed when the service version acting stops; nil for a
 	// client.
 	stop <-chan struct{}
@@ -360,7 +365,7 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 				if err != nil {
 					return nil, err
 				}
-				m := message{from: cur.addr, topic: string(topic), args: msg, dir: c.Env.Dir, user: cur.user, reviewed: cur.reviewed}
+				m := message{from: cur.addr, topic: string(topic), args: msg, dir: c.Env.Dir, user: cur.user, reviewed: cur.reviewed, session: cur.session}
 				return d.publishGated(m), nil
 			}},
 		{Name: "call", Args: "target [arg] ...", Mark: puff.MarkWrite, MarkByArgs: true,
@@ -470,7 +475,7 @@ func (cur *caller) message(dir string, args []puff.Value) (message, string, erro
 	if err != nil {
 		return message{}, "", err
 	}
-	return message{from: cur.addr, fn: fn, args: msg, dir: dir, user: cur.user, reviewed: cur.reviewed}, addr, nil
+	return message{from: cur.addr, fn: fn, args: msg, dir: dir, user: cur.user, reviewed: cur.reviewed, session: cur.session}, addr, nil
 }
 
 // readOnly is an error if ctx runs under a :read mark and m, a message to

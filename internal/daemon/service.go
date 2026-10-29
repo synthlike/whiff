@@ -480,8 +480,12 @@ func (s *service) run(ctx context.Context) {
 			r, faulted := s.handle(ctx, m)
 			// Recorded before the reply, so the caller finds it in history.
 			s.d.do(func(st *state) {
+				gate := m.gate
+				if gate == "" && s.d.forSession(st, s, m) {
+					gate = "for " + m.session
+				}
 				st.record(entry{at: begin, kind: m.kind(), user: m.user, from: m.from, to: m.to(s.name),
-					args: m.args, reply: r, took: time.Since(begin), gate: m.gate})
+					args: m.args, reply: r, took: time.Since(begin), gate: gate})
 			})
 			if m.reply != nil {
 				m.reply <- r
@@ -565,7 +569,7 @@ func (s *service) handle(ctx context.Context, m message) (reply string, faulted 
 	// counts on a :read claim, an override, is :write here.
 	m.ctx = puff.WithMark(m.ctx, what, s.d.marker().reaches(s, m.fn, m.topic))
 	s.cur.chain = slices.Concat(m.chain, []string{s.name})
-	s.cur.user, s.cur.reviewed = m.user, m.reviewed
+	s.cur.user, s.cur.reviewed, s.cur.session = m.user, m.reviewed, m.session
 	s.cur.handOn = func(id int64) error {
 		if m.reply == nil {
 			return errors.New("only a call's handler can hand on: nobody waits for this message's answer")

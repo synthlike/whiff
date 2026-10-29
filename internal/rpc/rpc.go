@@ -66,7 +66,9 @@ type Entry struct {
 	// Gate is how the review gate treated an agent's write: "held 12" (it
 	// waits for review), "refused" (it couldn't wait), "accepted 12"
 	// (delivered once you accepted it), or "trusted" or "free", which
-	// the session's mode let through; "" for anything else.
+	// the session's mode let through; or "for agent/3", a service's write
+	// further down a chain of agent/3's that the gate let through; "" for
+	// anything else.
 	Gate string `json:"gate,omitempty"`
 	Note string `json:"note,omitempty"`
 }
@@ -108,10 +110,11 @@ func (e Entry) String() string {
 }
 
 // SessionText is what the agent session addr did, from es, oldest first:
-// each write it made, with how the review gate treated it, the answers it
-// got and the notes about it, such as its mode changing; then a summary:
+// each write it made, with how the review gate treated it, the writes
+// services made for it further down those chains, the answers it got and
+// the notes about it, such as its mode changing; then a summary:
 //
-//	agent/3: 3 writes went through (1 trusted, 1 free, 1 accepted); 1 rejected; 1 waits for review
+//	agent/3: 3 writes went through (1 trusted, 1 free, 1 accepted), and 2 by services for it; 1 rejected; 1 waits for review
 func SessionText(es []Entry, addr string) string {
 	addr = strings.TrimPrefix(addr, ":")
 	var b strings.Builder
@@ -139,6 +142,8 @@ func SessionText(es []Entry, addr string) string {
 				delete(held, id)
 			}
 			count[kind]++
+		case e.Gate == "for "+addr:
+			count["for"]++
 		default:
 			continue
 		}
@@ -158,6 +163,9 @@ func SessionText(es []Entry, addr string) string {
 	fmt.Fprintf(&b, "%s: %d %s went through", addr, went, plural(went, "write"))
 	if len(parts) > 0 {
 		fmt.Fprintf(&b, " (%s)", strings.Join(parts, ", "))
+	}
+	if n := count["for"]; n > 0 {
+		fmt.Fprintf(&b, ", and %d by services for it", n)
 	}
 	if n := count["rejected"]; n > 0 {
 		fmt.Fprintf(&b, "; %d rejected", n)

@@ -32,6 +32,21 @@ func (d *daemon) gated(st *state, s *service, m message) bool {
 	return mk.msgMark(s, m) == puff.MarkWrite
 }
 
+// forSession says whether m, which s handled, is a write a service made
+// further down a chain an agent session began and the review gate let
+// through, as trusted, free or accepted. History notes it as for the
+// session, so whiff session lists what services did for it too.
+func (d *daemon) forSession(st *state, s *service, m message) bool {
+	if m.user || !m.reviewed || m.session == "" || m.from == m.session {
+		return false
+	}
+	mk := &marker{base: d.base, services: st.addrs, seen: map[string]bool{}}
+	if m.topic != "" {
+		return mk.sub(s, s.subs[m.topic]) == puff.MarkWrite
+	}
+	return mk.msgMark(s, m) == puff.MarkWrite
+}
+
 // publishGated publishes m, as publish and whiff pub do: :done, or the
 // pending of the review gate, which holds an agent's publish to a topic
 // with :write subscribers as it holds a message. whiff's own events, such
@@ -68,7 +83,7 @@ func (d *daemon) hold(st *state, addr string, m message) puff.Value {
 	}
 	held := m
 	held.ctx, held.reply, held.chain = nil, nil, nil
-	a := &asked{ticket: ticket{from: m.from, dir: m.dir, user: m.user}, fn: m.fn, args: v.(puff.Vector), held: &held, to: addr}
+	a := &asked{ticket: ticket{from: m.from, dir: m.dir, user: m.user, session: m.session}, fn: m.fn, args: v.(puff.Vector), held: &held, to: addr}
 	if m.topic != "" {
 		a.fn, a.to = "publish", m.topic
 	}
@@ -78,7 +93,7 @@ func (d *daemon) hold(st *state, addr string, m message) puff.Value {
 // holdEval puts an agent's code, req.Src, evaluated for from, in :review's
 // inbox as {:fn :eval :args [src]}: see queue. Accepting runs it.
 func (d *daemon) holdEval(st *state, from string, req rpc.Request) puff.Value {
-	a := &asked{ticket: ticket{from: from, dir: req.Dir}, fn: "eval", args: puff.NewVector(puff.String(req.Src)), src: req.Src}
+	a := &asked{ticket: ticket{from: from, dir: req.Dir, session: from}, fn: "eval", args: puff.NewVector(puff.String(req.Src)), src: req.Src}
 	r := st.queue(a, "the agent's eval")
 	st.record(entry{at: time.Now(), kind: "eval", from: from, args: puff.Print(a.args), reply: puff.Print(r), gate: heldGate(r)})
 	return r
@@ -153,7 +168,7 @@ func (d *daemon) accept(ctx context.Context, id int64) (puff.Value, error) {
 // value, (ok v) unless it is a Result, or a fault as (err {:kind :fault}).
 // What it prints is dropped.
 func (d *daemon) runHeld(ctx context.Context, a *asked) puff.Value {
-	env := d.newEnv(io.Discard, &caller{addr: a.from, reviewed: true})
+	env := d.newEnv(io.Discard, &caller{addr: a.from, reviewed: true, session: a.session})
 	env.Dir = a.dir
 	ctx, cancel := context.WithTimeout(ctx, d.callTimeout)
 	defer cancel()

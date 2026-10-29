@@ -232,7 +232,7 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 			if req.Op == "eval" {
 				resp = d.eval(ectx, from, free, req)
 			} else {
-				cur.addr, cur.user, cur.reviewed = from, !req.Agent, free
+				cur.addr, cur.user, cur.reviewed, cur.session = from, !req.Agent, free, session(from, req)
 				if repl == nil {
 					repl = d.newEnv(&replOut, cur)
 				}
@@ -307,14 +307,14 @@ func (d *daemon) message(ctx context.Context, from string, req rpc.Request) rpc.
 		if topic == "" || vec.Len() != 1 {
 			return rpc.Response{Error: "pub wants a topic and one value"}
 		}
-		r := d.publishGated(message{from: from, topic: topic, args: puff.Print(vec), dir: req.Dir, user: !req.Agent})
+		r := d.publishGated(message{from: from, topic: topic, args: puff.Print(vec), dir: req.Dir, user: !req.Agent, session: session(from, req)})
 		return rpc.Response{Value: puff.Print(r)}
 	}
 	vals := []puff.Value{puff.Keyword(strings.TrimPrefix(req.Target, ":"))}
 	for i := range vec.Len() {
 		vals = append(vals, vec.At(i))
 	}
-	cur := &caller{addr: from, user: !req.Agent}
+	cur := &caller{addr: from, user: !req.Agent, session: session(from, req)}
 	m, addr, err := cur.message(req.Dir, vals)
 	if err != nil {
 		return rpc.Response{Error: err.Error()}
@@ -334,8 +334,17 @@ func (d *daemon) message(ctx context.Context, from string, req rpc.Request) rpc.
 // acting for its address (from, "" for none); as accepted if free.
 func (d *daemon) eval(ctx context.Context, from string, free bool, req rpc.Request) rpc.Response {
 	var out strings.Builder
-	env := d.newEnv(&out, &caller{addr: from, user: !req.Agent, reviewed: free})
+	env := d.newEnv(&out, &caller{addr: from, user: !req.Agent, reviewed: free, session: session(from, req)})
 	return d.evalIn(ctx, env, &out, "eval", from, free, req)
+}
+
+// session is the agent session a client's request begins chains in: its
+// address, from, if it is an agent's; "" for anyone else.
+func session(from string, req rpc.Request) string {
+	if !req.Agent {
+		return ""
+	}
+	return from
 }
 
 // evalIn evaluates req.Src, named file in errors, in env, which prints to
