@@ -337,8 +337,9 @@ func TestViews(t *testing.T) {
 		}
 	}
 
-	// The watch, a stream that says when the view changed.
-	req, _ := http.NewRequest("GET", base+"/api/watch?topic=board/changed", nil)
+	// The watch, a stream that says when the view changed, on any of its
+	// topics.
+	req, _ := http.NewRequest("GET", base+"/api/watch?topic=board/other&topic=board/changed", nil)
 	req.AddCookie(cookie)
 	watch, err := http.DefaultClient.Do(req)
 	if err != nil || watch.StatusCode != http.StatusOK {

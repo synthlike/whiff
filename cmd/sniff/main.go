@@ -482,12 +482,20 @@ func (s *server) view(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, treeOf(resp.Value))
 }
 
-// watch streams an event, changed, each time topic is published, for a
-// pinned page to fetch its view again: a connection of its own that
-// follows the topic, as whiff sub does.
+// watch streams an event, changed, each time one of its topics is
+// published, ?topic=a&topic=b, for a pinned page to fetch its view again: a
+// connection of its own that follows them, as whiff sub does.
 func (s *server) watch(w http.ResponseWriter, r *http.Request) {
-	topic, ok := keyword(r.URL.Query().Get("topic"))
-	if !ok {
+	var topics []string
+	for _, t := range r.URL.Query()["topic"] {
+		topic, ok := keyword(t)
+		if !ok {
+			http.Error(w, "want a topic, got "+t, http.StatusBadRequest)
+			return
+		}
+		topics = append(topics, topic)
+	}
+	if len(topics) == 0 {
 		http.Error(w, "want a topic", http.StatusBadRequest)
 		return
 	}
@@ -497,7 +505,7 @@ func (s *server) watch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer c.Close()
-	resp, err := c.Sub(topic)
+	resp, err := c.Sub(topics...)
 	if err == nil && resp.Error != "" {
 		err = errors.New(resp.Error)
 	}

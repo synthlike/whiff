@@ -1,7 +1,7 @@
 // A view pinned as a page of its own, /view/address/fn?args=[...]: what the
 // function answers, called as you with args (none by default), fetched
-// again each time its topic fires: ?on=topic, or the one the view names,
-// {:changed topic}, or address/changed.
+// again each time one of its topics fires: ?on=topic, as often as needed,
+// or the ones the view names, {:changed topic}, or address/changed.
 "use strict";
 
 const params = new URLSearchParams(location.search);
@@ -11,8 +11,8 @@ const shown = ":" + target + (args === "[]" ? "" : " " + args.slice(1, -1));
 document.title = shown + " · sniff";
 $("target").textContent = shown;
 
-let topic = ""; // the topic followed
-let watch = null; // the watch on it, if one is open or opening
+let topics = []; // the topics followed
+let watch = null; // the watch on them, if one is open or opening
 
 function setStatus(text, on) {
   const st = $("status");
@@ -20,35 +20,39 @@ function setStatus(text, on) {
   st.classList.toggle("on", on);
 }
 
+const named = (ts) => ts.map((t) => ":" + t).join(", ");
+
 async function load() {
   try {
     await loadMarks().catch(() => {});
     const reply = await getJSON("/api/view?target=" + encodeURIComponent(target) + "&args=" + encodeURIComponent(args));
     const v = viewOf(reply);
     $("view").replaceChildren(v ? showView(v, reply, load) : wrap(value(reply)));
-    follow(params.get("on") || (v && changedOf(v)) || target.slice(0, target.lastIndexOf("/")) + "/changed");
-    setStatus("fetched again on :" + topic, true);
+    const on = params.getAll("on");
+    const changed = v ? changedOf(v) : [];
+    follow(on.length ? on : changed.length ? changed : [target.slice(0, target.lastIndexOf("/")) + "/changed"]);
+    setStatus("fetched again on " + named(topics), true);
   } catch (err) {
     setStatus(err.message, false);
     if (!watch) setTimeout(load, 2000);
   }
 }
 
-// follow watches t, fetching the view each time it fires, and each time the
-// watch opens, so what changed while it was closed shows too. A watch that
-// sniff refuses, while whiff isn't running, isn't tried again by the
+// follow watches ts, fetching the view each time one fires, and each time
+// the watch opens, so what changed while it was closed shows too. A watch
+// that sniff refuses, while whiff isn't running, isn't tried again by the
 // browser: load tries again itself.
-function follow(t) {
-  if (t === topic && watch) return;
+function follow(ts) {
+  if (ts.join(" ") === topics.join(" ") && watch) return;
   if (watch) watch.close();
-  topic = t;
-  const w = new EventSource("/api/watch?topic=" + encodeURIComponent(t));
+  topics = ts;
+  const w = new EventSource("/api/watch?" + ts.map((t) => "topic=" + encodeURIComponent(t)).join("&"));
   watch = w;
   w.addEventListener("open", load);
   w.addEventListener("changed", load);
   w.onerror = () => {
     if (watch !== w) return;
-    setStatus("not following :" + t + ": is whiff running?", false);
+    setStatus("not following " + named(ts) + ": is whiff running?", false);
     if (w.readyState === EventSource.CLOSED) {
       watch = null;
       setTimeout(load, 2000);

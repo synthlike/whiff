@@ -11,14 +11,14 @@ import (
 // [...]), places in files; and (board [...]), columns of items. The view/
 // functions build them and check their shape, so every client can rely on
 // it. Each takes opts too, {:changed topic}, the topic published when the
-// view would answer otherwise, so a client showing it fetches it again;
-// they follow the view as its second argument.
+// view would answer otherwise, or a vector of them, so a client showing it
+// fetches it again; they follow the view as its second argument.
 
 // itemFields are an item's fields, in items and in a board's columns.
 var itemFields = map[string]check{"label": isString, "detail": isString, "action": isAction, "actions": isActions}
 
 // optsDoc is how each view/ function says what its opts are.
-const optsDoc = " opts, {:changed :address/topic}, names the topic published when it changes."
+const optsDoc = " opts, {:changed :address/topic}, names the topic published when it changes, or a vector of them."
 
 func viewBuiltins() []*puff.Builtin {
 	return []*puff.Builtin{
@@ -77,13 +77,26 @@ func withOpts(v puff.Value, err error) func(args []puff.Value) (puff.Value, erro
 			if !puff.Equal(e.Key, puff.Keyword("changed")) {
 				return nil, fmt.Errorf("opts have no %s: want {:changed :address/topic}", puff.Print(e.Key))
 			}
-			if _, ok := e.Val.(puff.Keyword); !ok {
-				return nil, fmt.Errorf("want :changed as a topic, like :plan/changed, got %s", puff.Print(e.Val))
+			if !isTopics(e.Val) {
+				return nil, fmt.Errorf("want :changed as a topic, like :plan/changed, or a vector of them, got %s", puff.Print(e.Val))
 			}
 		}
 		t := v.(puff.Tag)
 		return puff.NewTag(t.Name(), t.At(0), opts), nil
 	}
+}
+
+// isTopics says whether v is a topic or a non-empty vector of them.
+func isTopics(v puff.Value) bool {
+	if _, ok := v.(puff.Keyword); ok {
+		return true
+	}
+	vec, ok := v.(puff.Vector)
+	for i := range vec.Len() {
+		_, isKw := vec.At(i).(puff.Keyword)
+		ok = ok && isKw
+	}
+	return ok && vec.Len() > 0
 }
 
 // check says what a view's field wants, or "" if v will do.

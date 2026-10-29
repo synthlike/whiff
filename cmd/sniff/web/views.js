@@ -103,12 +103,14 @@ function viewOf(reply) {
   return null;
 }
 
-// changedOf is the topic view names in its opts, {:changed :plan/changed},
-// published when it changes; or "".
+// changedOf is the topics view names in its opts, {:changed :plan/changed}
+// or a vector of them, published when it changes; or none.
 function changedOf(view) {
   const opts = view.v[1];
   const t = opts && opts.t === "map" && field(opts, "changed");
-  return t && t.t === "kw" ? t.v : "";
+  if (t && t.t === "kw") return [t.v];
+  if (t && t.t === "vec") return t.v.filter((k) => k.t === "kw").map((k) => k.v);
+  return [];
 }
 
 // marks is each function's mark, "read" or "write", by its target,
