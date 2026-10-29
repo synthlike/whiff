@@ -8,6 +8,7 @@
 ;   whiff call pipeline/start "add a --verbose flag" '["go" "test" "./..."]'
 ;   whiff call pipeline/runs        ; each run and where it is
 ;   whiff call pipeline/view        ; the same as items: picking one cancels it
+;   whiff call pipeline/show 1      ; its last review and the diff it was of
 ;   whiff call pipeline/cancel 1
 ;   whiff inbox                     ; how a run ended
 ;   whiff sub pipeline/done
@@ -97,7 +98,7 @@
         (let [input (str review-prompt "\n\nTask: " task "\n\nThe check " (check-text checked) "\n\nThe diff:\n" diff)
               id (try (started (call :jobs/run ["claude" "-p" "--strict-mcp-config" "--tools" "" "--no-session-persistence"]
                                  {:stdin input :dir dir :as :text :timeout 10m})))]
-          (ok (waiting (set-run state n {:checked checked}) n :review id))))))
+          (ok (waiting (set-run state n {:checked checked :diff diff}) n :review id))))))
 
   ; subject is task's first sentence, as a commit's subject: at most 72
   ; characters. The whole task goes in the commit's body.
@@ -200,6 +201,16 @@
                       (fn ([n {:task t :step s :round r :branch b}])
                         (let [item {:label (str n "  " t) :detail (str (keyword/name s) ", round " r ", " b)}]
                           (if (active? s) (map/set item :action [:pipeline/cancel n]) item)))))))
+
+  (on (show state n) :read
+    "Run n, its last review and the diff that review was of, as a view of text; (err {:kind :no-run}) if there is no such run."
+    (match (map/get-in state [:runs n])
+      [(some run)
+       (let [{:task t :step s :round r :branch b} run]
+         (ok (view/text (str "Run " n ": " t "\n" (keyword/name s) ", round " r ", " b
+                          "\n\nThe last review:\n\n" (map/get-or run :review "None yet.")
+                          "\n\nThe diff it reviewed:\n\n" (map/get-or run :diff "None yet.")))))]
+      [_ (err {:kind :no-run :message (str "no run " n)})]))
 
   (on (cancel state n) :write :update
     "Cancels run n: kills the job it waits for and leaves its worktree as it is. (err {:kind :no-run}) if there is no such run, or it has ended."

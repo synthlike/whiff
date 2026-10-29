@@ -7,6 +7,7 @@
 ; CLI and services/pipeline.puff.
 ;   whiff call plan/start "a todo CLI: add, list and done, kept in todo.json" '["go" "test" "./..."]'
 ;   whiff call plan/plans          ; each plan, its tasks and where it is
+;   whiff call plan/board          ; the same as a board: pick a ticket to cancel or show it
 ;   whiff sub pipeline/done        ; each task's run as it ends
 
 (service plan :state {:next 1 :plans {} :jobs {} :runs {}}
@@ -49,13 +50,15 @@
     (= (vector/map [(tasks "[]") (tasks "[1, 2]") (tasks "no")] (fn (r) (match r [(err {:kind k}) k])))
       [:no-tasks :bad-plan :parse]))
 
-  ; next-run starts plan n's task i from base, a commit or branch.
+  ; next-run starts plan n's task i from base, a commit or branch; :built
+  ; is each task's run so far.
   (def (next-run state n i base)
     (let [{:repo repo :tasks ts :check check} (plan-of state n)
           task (unwrap (vector/get ts i))
-          run (try (call :pipeline/start-on repo base task check))]
+          run (try (call :pipeline/start-on repo base task check))
+          built (map/get-or (plan-of state n) :built [])]
       (ok (-> state
-            (set-plan n {:step :building :task i :run run})
+            (set-plan n {:step :building :task i :run run :built (vector/append built run)})
             (map/set-in [:runs run] n)))))
 
   (def (finish state n status note)
@@ -77,9 +80,58 @@
                (map/set-in [:jobs id] n))])))
 
   (on (plans state) :read
-    "Every plan, oldest first: {:plan :goal :step :tasks :task :run}, with :step one of :planning, :building, :done or :failed, and :task the index of the task :run builds."
+    "Every plan, oldest first: {:plan :goal :step :tasks :task :run}, with :step one of :planning, :building, :done or :failed, and :task the index of the task :run builds; :built is each task's run so far."
     (ok (vector/map (map/entries (map/get-or state :plans {}))
           (fn ([n p]) (map/set p :plan n)))))
+
+  ; columns are the board's, each the steps of the tickets in it.
+  (def columns
+    [["Planned" [:planning :planned]] ["Dev" [:starting :dev]] ["Check" [:check]]
+     ["Review" [:review]] ["Done" [:ready]] ["Failed" [:failed :gave-up :cancelled :skipped]]])
+
+  ; tickets is plan n's, p, as {:step :item}s: one per task, at its run's
+  ; step from runs, :pipeline/runs's answer, or :planned, or :skipped once
+  ; the plan has ended; or one for the goal while it has no tasks.
+  (def (tickets n p runs)
+    (let [{:goal goal :step step :tasks ts} p
+          built (map/get-or p :built [])
+          total (vector/length ts)]
+      (if (= total 0)
+        [{:step step :item {:label goal :detail (str "plan " n ", " (keyword/name step))}}]
+        (vector/map (vector/range 0 total)
+          (fn (i)
+            (let [task (unwrap (vector/get ts i))
+                  where (str "plan " n ", task " (+ i 1) " of " total)
+                  run (match (vector/get built i)
+                        [(some r) (vector/find runs (fn ({:run x}) (= x r)))]
+                        [_ (none)])]
+              (match run
+                [(some {:run r :step s :round rd :branch b})
+                 {:step s :item {:label task :detail (str where ", round " rd ", " b)
+                                 :action (if (vector/contains? [:dev :check :review] s) [:pipeline/cancel r] [:pipeline/show r])}}]
+                [_ {:step (if (= step :building) :planned :skipped) :item {:label task :detail where}}])))))))
+
+  (test "a ticket per task, at its run's step"
+    (= (tickets 1 {:goal "g" :step :building :tasks ["a" "b"] :built [7]}
+         [{:run 7 :step :review :round 2 :branch "whiff/7"}])
+      [{:step :review :item {:label "a" :detail "plan 1, task 1 of 2, round 2, whiff/7" :action [:pipeline/cancel 7]}}
+       {:step :planned :item {:label "b" :detail "plan 1, task 2 of 2"}}]))
+
+  (test "the goal while it has no tasks, and the tasks a failed plan didn't start"
+    (= [(tickets 2 {:goal "g" :step :planning :tasks []} [])
+        (vector/map (tickets 3 {:goal "g" :step :failed :tasks ["a" "b"] :built [4]} [{:run 4 :step :gave-up :round 3 :branch "whiff/4"}])
+          (fn ({:step s}) s))]
+      [[{:step :planning :item {:label "g" :detail "plan 2, planning"}}] [:gave-up :skipped]]))
+
+  (on (board state) :read
+    "Every plan's tasks as a board, a ticket each in a column by where it is: Planned, Dev, Check, Review, Done or Failed. Picking a ticket cancels its run while it runs, and shows its last review and diff once it has ended."
+    (let [runs (try (call :pipeline/runs))
+          ts (vector/reduce (map/entries (map/get-or state :plans {})) []
+               (fn (acc [n p]) (vector/concat acc (tickets n p runs))))]
+      (ok (view/board (vector/map columns
+                        (fn ([title steps])
+                          {:title title
+                           :items (vector/map (vector/filter ts (fn ({:step s}) (vector/contains? steps s))) (fn ({:item it}) it))}))))))
 
   ; The planner's answer: the tasks, and the first one's run.
   (on (whiff/done state id r) :update

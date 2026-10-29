@@ -702,6 +702,16 @@ esac
 	if err != nil || !strings.Contains(resp.Value, `:step :done :task 1 :tasks ["one" "two"]`) {
 		t.Errorf("plans = %+v %v", resp, err)
 	}
+	resp, err = c.Message("call", "plan/board", "[]", repo)
+	done := `{:items [{:action [:pipeline/show 1] :detail "plan 1, task 1 of 2, round 1, whiff/1" :label "one"} ` +
+		`{:action [:pipeline/show 2] :detail "plan 1, task 2 of 2, round 1, whiff/2" :label "two"}] :title "Done"}`
+	if err != nil || !strings.Contains(resp.Value, `{:items [] :title "Planned"}`) || !strings.Contains(resp.Value, done) {
+		t.Errorf("board = %+v %v", resp, err)
+	}
+	resp, err = c.Message("call", "pipeline/show", "[2]", repo)
+	if err != nil || !strings.Contains(resp.Value, `VERDICT: approve`) || !strings.Contains(resp.Value, `+++ b/two.txt`) {
+		t.Errorf("show = %+v %v", resp, err)
+	}
 }
 
 // TestServiceFileTests runs the (test ...)s in every file in services/, as
