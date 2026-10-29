@@ -243,13 +243,96 @@ function showEntry(i) {
   if (e.gate) meta.append(gateBadge(e.gate));
   d.replaceChildren(head, meta);
   if (e.args) d.append(section("Arguments", wrap(value(e.args))));
-  d.append(section("Reply", e.reply ? wrap(value(e.reply)) : el("p", "hint", "None: nobody handled it.")));
+  if (!e.reply) {
+    d.append(section("Reply", el("p", "hint", "None: nobody handled it.")));
+    return;
+  }
+  const v = viewOf(e.reply);
+  d.append(section("Reply", v ? showView(v, e.reply) : wrap(value(e.reply))));
 }
 
 function wrap(v) {
   const w = el("div", "value");
   w.append(v);
   return w;
+}
+
+// Views, as a service answers with them, (ok view): (items [...]), (text
+// "...") or (locations [...]). viewOf is the view in reply, or null if it
+// holds none, or one of a shape sniff doesn't know.
+function viewOf(reply) {
+  if (reply.t !== "tag" || reply.n !== "ok" || reply.v.length !== 1) return null;
+  const v = reply.v[0];
+  if (v.t !== "tag" || v.v.length !== 1) return null;
+  const arg = v.v[0];
+  if (v.n === "text") return arg.t === "str" ? v : null;
+  const need = { items: "label", locations: "file" }[v.n];
+  if (!need || arg.t !== "vec") return null;
+  return arg.v.every((m) => m.t === "map" && field(m, need)?.t === "str") ? v : null;
+}
+
+// field is map m's value at the keyword name, or undefined.
+function field(m, name) {
+  const kv = m.v.find(([k]) => k.t === "kw" && k.v === name);
+  return kv && kv[1];
+}
+
+// str is map m's string at name, or "".
+function str(m, name) {
+  const v = field(m, name);
+  return v && v.t === "str" ? v.v : "";
+}
+
+// showView draws view as what it is, with the reply it came in folded under
+// it as puff.
+function showView(view, reply) {
+  const box = el("div", "view");
+  const arg = view.v[0];
+  if (view.n === "text") {
+    box.append(el("pre", "", arg.v));
+  } else {
+    for (const m of arg.v) box.append(view.n === "items" ? item(m) : place(m));
+    if (!arg.v.length) box.append(el("p", "hint", "None."));
+  }
+  const raw = el("details", "raw");
+  raw.append(el("summary", "", "as puff"), wrap(value(reply)));
+  const f = document.createDocumentFragment();
+  f.append(box, raw);
+  return f;
+}
+
+// item is an item of a view, with its action, which sniff can't send yet.
+function item(m) {
+  const r = el("div", "item");
+  r.append(el("span", "", str(m, "label")));
+  if (str(m, "detail")) r.append(el("span", "detail", str(m, "detail")));
+  const a = field(m, "action");
+  if (a) {
+    const s = el("span", "action", print(a));
+    s.title = "sniff can't send it yet: whiff call ... | fzf | whiff act does";
+    r.append(s);
+  }
+  return r;
+}
+
+// place is a location of a view as file:line:col, as compilers print it;
+// clicking copies that, for hiss or a terminal, since a page can't open a
+// file.
+function place(m) {
+  let at = str(m, "file");
+  for (const key of ["line", "col"]) {
+    const n = field(m, key);
+    if (n && n.t === "lit") at += ":" + n.v;
+  }
+  const b = el("button", "place");
+  b.append(el("span", "at", at));
+  if (str(m, "note")) b.append(el("span", "detail", str(m, "note")));
+  b.title = "copy " + at;
+  b.onclick = () => navigator.clipboard.writeText(at).then(() => {
+    b.classList.add("copied");
+    setTimeout(() => b.classList.remove("copied"), 1200);
+  }, (err) => { b.title = err.message; });
+  return b;
 }
 
 // gateBadge is how the review gate treated an agent's write: held or

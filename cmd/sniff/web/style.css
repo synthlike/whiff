@@ -229,3 +229,29 @@ aside h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; co
 .value .lit { color: var(--lit); }
 .value .tag { font-weight: 600; }
 .value .count { color: var(--muted); }
+
+/* Views: items, text and locations. */
+.view pre { font: 12px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word; margin: 0; }
+.view .item, .view .place {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  width: 100%;
+  border-top: 1px solid var(--line);
+  padding: 4px 0;
+}
+.view .place {
+  font: inherit;
+  color: var(--text);
+  background: none;
+  border-width: 1px 0 0;
+  text-align: left;
+  cursor: copy;
+}
+.view .place:hover { background: color-mix(in srgb, var(--select) 50%, transparent); }
+.view .at { font: 12px var(--mono); color: var(--accent); word-break: break-all; }
+.view .copied .at::after { content: "  copied"; color: var(--muted); }
+.view .detail { color: var(--muted); }
+.view .action { margin-left: auto; font: 11px var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%; }
+.raw { margin-top: 8px; }
+.raw > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
