@@ -41,8 +41,10 @@ const usage = `usage:
   whiff session agent/n           what an agent session wrote, and how: held, accepted, trusted or free
   whiff eval code                 evaluate puff code in the daemon and print its value
   whiff repl                      evaluate forms as they're typed, in the daemon, keeping what they define
-  whiff history                   print every message, newest first
-  whiff history -f                print the last 10, oldest first, then each new one until stopped
+  whiff history [query]           print every message, newest first; only what query matches, if given
+  whiff history -f [query]        print the last 10, oldest first, then each new one until stopped
+                                  query: to:plan from:agent origin:user kind:err 'time:>500ms' mark:write
+                                  gate:held, a word, -term for what must not match
   whiff ls                        list every address's functions and their marks, each agent session's mode, then the :read overrides
   whiff state service             print a service's state, as it last committed it
   whiff reset service             forget a service's stored state, so it starts from its :state again
@@ -117,10 +119,12 @@ func run(args []string, dir, services string, stdout, stderr io.Writer) int {
 		return repl(dir, stdin, stdout, stderr)
 	case len(args) == 2 && args[0] == "eval":
 		return eval(dir, args[1], stdout, stderr)
-	case len(args) == 1 && args[0] == "history":
-		return history(dir, false, stdout, stderr)
-	case len(args) == 2 && args[0] == "history" && args[1] == "-f":
-		return history(dir, true, stdout, stderr)
+	case len(args) >= 1 && args[0] == "history":
+		follow := len(args) > 1 && args[1] == "-f"
+		if follow {
+			args = args[1:]
+		}
+		return history(dir, follow, strings.Join(args[1:], " "), stdout, stderr)
 	case len(args) == 1 && args[0] == "ls":
 		return text(dir, (*rpc.Client).Ls, stdout, stderr)
 	case len(args) == 2 && (args[0] == "reset" || args[0] == "state"):
@@ -408,31 +412,72 @@ func sub(dir string, topics []string, stdout, stderr io.Writer) int {
 
 // history prints history newest first; or, to follow it, the last 10
 // entries oldest first and then each new one, until the daemon stops.
-func history(dir string, follow bool, stdout, stderr io.Writer) int {
+func history(dir string, follow bool, query string, stdout, stderr io.Writer) int {
+	q, err := rpc.ParseQuery(query)
+	if err != nil {
+		fmt.Fprintf(stderr, "whiff: %v\n", err)
+		return 2
+	}
 	c := connect(dir, stderr)
 	if c == nil {
 		return 1
 	}
 	defer c.Close()
+	// A query with mark: needs every function's mark: fetched once, and
+	// again on a connection of their own when a call is to one they don't
+	// know, at most every two seconds.
+	var marks map[string]string
+	var fetched time.Time
+	marksFor := func(e rpc.Entry, fresh func() (map[string]string, error)) map[string]string {
+		if !q.Marks() || (marks != nil && ((e.Kind != "call" && e.Kind != "send") || marks[e.To] != "")) || time.Since(fetched) < 2*time.Second {
+			return marks
+		}
+		if ms, err := fresh(); err == nil {
+			marks, fetched = ms, time.Now()
+		}
+		return marks
+	}
+	match := func(es []rpc.Entry, fresh func() (map[string]string, error)) []rpc.Entry {
+		var got []rpc.Entry
+		for _, e := range es {
+			if q.Match(e, marksFor(e, fresh)) {
+				got = append(got, e)
+			}
+		}
+		return got
+	}
 	if !follow {
 		es, err := c.History()
 		if err != nil {
 			fmt.Fprintf(stderr, "whiff: %v\n", err)
 			return 1
 		}
-		io.WriteString(stdout, rpc.HistoryText(es))
+		io.WriteString(stdout, rpc.HistoryText(match(es, c.Marks)))
 		return 0
+	}
+	// Following, c traces history: marks come over a connection of their
+	// own.
+	fresh := func() (map[string]string, error) {
+		mc, err := rpc.Dial(dir, nil)
+		if err != nil {
+			return nil, err
+		}
+		defer mc.Close()
+		return mc.Marks()
 	}
 	es, err := c.Trace()
 	if err != nil {
 		fmt.Fprintf(stderr, "whiff: %v\n", err)
 		return 1
 	}
+	es = match(es, fresh)
 	for _, e := range es[max(len(es)-10, 0):] {
 		fmt.Fprintln(stdout, e)
 	}
 	for e := range c.Entries() {
-		fmt.Fprintln(stdout, e)
+		if q.Match(e, marksFor(e, fresh)) {
+			fmt.Fprintln(stdout, e)
+		}
 	}
 	return 0
 }

@@ -268,7 +268,7 @@ func (s *server) marksFor(e *rpc.Entry, asked bool) map[string]string {
 		return ms
 	}
 	defer c.Close()
-	fresh, err := marks(c)
+	fresh, err := c.Marks()
 	if err != nil {
 		return ms
 	}
@@ -471,27 +471,6 @@ func describeAll(c *rpc.Client) ([]any, error) {
 	return out, nil
 }
 
-// marks is each function's mark, "read" or "write", by its target,
-// address/fn: whether an action to it is a link or a form.
-func marks(c *rpc.Client) (map[string]string, error) {
-	all, err := describeAll(c)
-	if err != nil {
-		return nil, err
-	}
-	ms := map[string]string{}
-	for _, a := range all {
-		a, _ := a.(map[string]any)
-		addr, _ := a["address"].(string)
-		fns, _ := a["fns"].([]any)
-		for _, f := range fns {
-			f, _ := f.(map[string]any)
-			fn, _ := f["fn"].(string)
-			ms[addr+"/"+fn], _ = f["mark"].(string)
-		}
-	}
-	return ms, nil
-}
-
 // state answers the address's state, (service/state :address)'s Result as a
 // tree.
 func (s *server) state(w http.ResponseWriter, r *http.Request) {
@@ -583,7 +562,7 @@ func (s *server) fetch(target, args string) (string, map[string]string, int, err
 		return "", nil, http.StatusServiceUnavailable, err
 	}
 	defer c.Close()
-	ms, err := marks(c)
+	ms, err := c.Marks()
 	if err != nil {
 		return "", nil, http.StatusBadGateway, err
 	}
@@ -746,7 +725,7 @@ func (s *server) render(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("as") == "reply" {
 		ms := map[string]string{}
 		if c, err := s.dial(); err == nil {
-			if m, err := marks(c); err == nil {
+			if m, err := c.Marks(); err == nil {
 				ms = m
 			}
 			c.Close()
