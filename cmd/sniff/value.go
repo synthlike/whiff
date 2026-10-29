@@ -108,8 +108,9 @@ func entryJSON(e rpc.Entry) json.RawMessage {
 		Args   *tree     `json:"args,omitempty"`
 		Reply  *tree     `json:"reply,omitempty"`
 		Took   float64   `json:"took"`
+		Gate   string    `json:"gate,omitempty"`
 		Note   string    `json:"note,omitempty"`
-	}{At: e.At, Us: e.At.UnixMicro(), Kind: e.Kind, Origin: e.Origin, From: e.From, To: e.To, Took: float64(e.Took) / float64(time.Millisecond), Note: e.Note}
+	}{At: e.At, Us: e.At.UnixMicro(), Kind: e.Kind, Origin: e.Origin, From: e.From, To: e.To, Took: float64(e.Took) / float64(time.Millisecond), Gate: e.Gate, Note: e.Note}
 	if e.Args != "" {
 		out.Args = treeOf(e.Args)
 	}

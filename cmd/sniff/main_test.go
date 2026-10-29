@@ -128,9 +128,11 @@ func TestGuard(t *testing.T) {
 }
 
 func TestSniff(t *testing.T) {
+	notes := filepath.Join(t.TempDir(), "notes")
 	s, base, c := sniffing(t, map[string]string{
 		"greet":   `(service greet (on (hello name) "Greets name." (ok (str "hello, " name))))`,
 		"counter": `(service counter :state {:n 1} (on (get s) "The count." (ok s)))`,
+		"notes":   `(service notes (on (add text) "Appends text." (file/append "` + notes + `" text)))`,
 	})
 	cookie := &http.Cookie{Name: fmt.Sprintf("sniff-%d", s.port), Value: s.token}
 	get := func(path string) *http.Response {
@@ -237,5 +239,39 @@ func TestSniff(t *testing.T) {
 	}
 	if r := get("/api/state?address=" + "bad%20name"); r.StatusCode != http.StatusBadRequest {
 		t.Errorf("a bad address: %s", r.Status)
+	}
+
+	// An agent session's writes, each with its gate, and their summary.
+	agent, err := rpc.Dial(s.dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer agent.Close()
+	agent.Agent = true
+	if resp, err := agent.Claim("agent", `(ask (tell text) "Asks the agent.")`); err != nil || resp.Value != "(ok :agent/1)" {
+		t.Fatalf("claim = %+v %v", resp, err)
+	}
+	if _, err := c.Mode("agent/1", "free", nil, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agent.Message("call", "notes/add", `["a"]`, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agent.Message("call", "greet/hello", `["ann"]`, ""); err != nil {
+		t.Fatal(err)
+	}
+	var session struct {
+		Entries []struct{ From, To, Gate string }
+		Summary string
+	}
+	if err := json.Unmarshal([]byte(body("/api/session?address=agent/1")), &session); err != nil {
+		t.Fatal(err)
+	}
+	if len(session.Entries) != 2 || session.Entries[1].To != "notes/add" || session.Entries[1].Gate != "free" ||
+		session.Summary != "agent/1: 1 write went through (1 free)" {
+		t.Errorf("session = %+v", session)
+	}
+	if got := body("/api/session?address=agent/9"); !strings.Contains(got, `"entries":[]`) {
+		t.Errorf("an unknown session = %s", got)
 	}
 }

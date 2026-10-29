@@ -109,15 +109,27 @@ func (e Entry) String() string {
 	return line
 }
 
-// SessionText is what the agent session addr did, from es, oldest first:
-// each write it made, with how the review gate treated it, the writes
-// services made for it further down those chains, the answers it got and
-// the notes about it, such as its mode changing; then a summary:
+// SessionText is what the agent session addr did, from es, as Session
+// finds it: a line each, then the summary.
+func SessionText(es []Entry, addr string) string {
+	got, summary := Session(es, addr)
+	var b strings.Builder
+	for _, e := range got {
+		b.WriteString(e.String())
+		b.WriteByte('\n')
+	}
+	return b.String() + summary + "\n"
+}
+
+// Session is what the agent session addr did, from es, oldest first: each
+// write it made, with how the review gate treated it, the writes services
+// made for it further down those chains, the answers it got and the notes
+// about it, such as its mode changing; and a summary:
 //
 //	agent/3: 3 writes went through (1 trusted, 1 free, 1 accepted), and 2 by services for it; 1 rejected; 1 waits for review
-func SessionText(es []Entry, addr string) string {
+func Session(es []Entry, addr string) ([]Entry, string) {
 	addr = strings.TrimPrefix(addr, ":")
-	var b strings.Builder
+	var got []Entry
 	count := map[string]int{}
 	held := map[string]bool{} // ids that wait, until accepted or answered
 	var order []string
@@ -147,12 +159,12 @@ func SessionText(es []Entry, addr string) string {
 		default:
 			continue
 		}
-		b.WriteString(e.String())
-		b.WriteByte('\n')
+		got = append(got, e)
 	}
-	if b.Len() == 0 {
-		return fmt.Sprintf("%s: no writes in history\n", addr)
+	if len(got) == 0 {
+		return nil, fmt.Sprintf("%s: no writes in history", addr)
 	}
+	var b strings.Builder
 	went := count["trusted"] + count["free"] + count["accepted"]
 	var parts []string
 	for _, k := range []string{"trusted", "free", "accepted"} {
@@ -182,8 +194,7 @@ func SessionText(es []Entry, addr string) string {
 	if waiting > 0 {
 		fmt.Fprintf(&b, "; %d %s for review", waiting, plural(waiting, "waits", "wait"))
 	}
-	b.WriteByte('\n')
-	return b.String()
+	return got, b.String()
 }
 
 // plural is one, or many (one+"s" if not given), for n.

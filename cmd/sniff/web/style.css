@@ -191,6 +191,27 @@ aside h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; co
 .meta { color: var(--muted); display: flex; gap: 10px; flex-wrap: wrap; }
 .badge { font: 11px var(--mono); border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; }
 .badge.write { color: var(--err); border-color: currentColor; }
+.badge.held { color: var(--accent); border-color: currentColor; }
+.badge.through { color: var(--done); border-color: currentColor; }
+.label .gate { color: var(--muted); font-weight: normal; }
+.session .line {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: 12px/1.6 var(--mono);
+  color: var(--text);
+  background: none;
+  border: 0;
+  border-top: 1px solid var(--line);
+  padding: 2px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.session .line:hover { background: color-mix(in srgb, var(--select) 50%, transparent); }
+.session .line:disabled { cursor: default; color: var(--muted); }
+.session .time { padding: 0; }
 .fns { width: 100%; border-collapse: collapse; }
 .fns td { padding: 4px 6px 4px 0; vertical-align: top; border-top: 1px solid var(--line); }
 .fns td:first-child { font-family: var(--mono); white-space: nowrap; }

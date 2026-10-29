@@ -243,6 +243,7 @@ func (s *server) handler() http.Handler {
 	mux.HandleFunc("GET /events", s.events)
 	mux.HandleFunc("GET /api/addresses", s.addresses)
 	mux.HandleFunc("GET /api/state", s.state)
+	mux.HandleFunc("GET /api/session", s.session)
 	return s.guard(mux)
 }
 
@@ -376,6 +377,36 @@ func (s *server) state(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, treeOf(resp.Value))
+}
+
+// session answers what the agent session address did, as whiff session
+// shows it: {"entries": [...], "summary": "agent/3: 2 writes went through ..."}.
+func (s *server) session(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Query().Get("address"), ":")
+	if k, err := puff.ReadValue(":" + name); err != nil || name == "" || !puff.Equal(k, puff.Keyword(name)) {
+		http.Error(w, "want an address", http.StatusBadRequest)
+		return
+	}
+	c, err := s.dial()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	defer c.Close()
+	es, err := c.History()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	got, summary := rpc.Session(es, name)
+	out := struct {
+		Entries []json.RawMessage `json:"entries"`
+		Summary string            `json:"summary"`
+	}{Entries: []json.RawMessage{}, Summary: summary}
+	for _, e := range got {
+		out.Entries = append(out.Entries, entryJSON(e))
+	}
+	writeJSON(w, out)
 }
 
 // evalOk evaluates src, read-only code of sniff's own, and returns v of

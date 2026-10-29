@@ -116,6 +116,7 @@ function row(e, i) {
   let args = e.args ? print(e.args).slice(1, -1) : "";
   if (e.kind === "done" && e.args && e.args.v.length) args = print(e.args.v[0]);
   label.textContent = fn(e) + (args ? " " + args : "");
+  if (e.gate) label.append(" ", el("span", "gate", "[" + e.gate + "]"));
   label.title = label.textContent;
   if (a === b) {
     arrow.classList.add("self");
@@ -239,6 +240,7 @@ function showEntry(i) {
   const head = el("h2", "", `${e.kind}  ${e.from ? ":" + e.from : "client"} → ${e.to ? ":" + e.to : "client"}`);
   const meta = el("div", "meta");
   meta.append(el("span", "", time(e.at)), el("span", "badge", e.origin), el("span", "", took(e.took)));
+  if (e.gate) meta.append(gateBadge(e.gate));
   d.replaceChildren(head, meta);
   if (e.args) d.append(section("Arguments", wrap(value(e.args))));
   d.append(section("Reply", e.reply ? wrap(value(e.reply)) : el("p", "hint", "None: nobody handled it.")));
@@ -248,6 +250,49 @@ function wrap(v) {
   const w = el("div", "value");
   w.append(v);
   return w;
+}
+
+// gateBadge is how the review gate treated an agent's write: held or
+// refused, or let through (accepted, trusted, free, or for a session).
+function gateBadge(gate) {
+  const kind = gate.split(" ")[0];
+  return el("span", "badge " + (kind === "held" || kind === "refused" ? "held" : "through"), gate);
+}
+
+// showSession adds to d what the agent session name did, as whiff session
+// shows it: its writes, each with its gate, and their summary. A line
+// shows its message.
+function showSession(d, name) {
+  const box = el("div", "session", "…");
+  d.append(section("Session", box));
+  getJSON("api/session?address=" + encodeURIComponent(name)).then((s) => {
+    box.replaceChildren(el("p", "", s.summary));
+    for (const e of s.entries) {
+      const b = el("button", "line");
+      b.append(el("span", "time", time(e.at)), " ");
+      if (e.kind === "note") {
+        b.append(e.note);
+      } else {
+        const target = e.kind === "eval" ? "eval" : e.to ? ":" + e.to : "client";
+        const args = e.args ? " " + print(e.args).slice(1, -1) : "";
+        b.append(`${e.from ? ":" + e.from : "client"} → ${target}${args} `);
+        if (e.gate) b.append(gateBadge(e.gate));
+      }
+      b.title = b.textContent;
+      const i = entries.findIndex((x) => x.us === e.us && x.kind === e.kind && x.from === e.from && x.to === e.to);
+      if (i < 0) {
+        b.disabled = true;
+      } else {
+        b.onclick = () => {
+          showEntry(i);
+          document.querySelector(`.row[data-i="${i}"]`)?.scrollIntoView({ block: "center" });
+        };
+      }
+      box.append(b);
+    }
+  }, (err) => {
+    box.textContent = err.message;
+  });
 }
 
 async function getJSON(url) {
@@ -283,8 +328,10 @@ async function showAddress(name) {
   const d = $("detail");
   const a = addresses.find((x) => x.address === name);
   d.replaceChildren(el("h2", "", ":" + name));
+  const agent = name.startsWith("agent/");
   if (!a) {
     d.append(el("p", "hint", "Not loaded now."));
+    if (agent) showSession(d, name);
     return;
   }
   const meta = el("div", "meta");
@@ -302,6 +349,7 @@ async function showAddress(name) {
     table.append(tr);
   }
   d.append(section("Functions", a.fns.length ? table : el("p", "hint", "None.")));
+  if (agent) showSession(d, name);
   if (a.state) {
     const box = el("div", "value", "…");
     d.append(section("State", box));
