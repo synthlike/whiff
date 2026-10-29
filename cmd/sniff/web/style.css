@@ -88,6 +88,7 @@ nav button, .lanes button {
 nav button:hover, .lanes button:hover { border-color: var(--accent); }
 nav button.client { border-style: dashed; }
 .follow { color: var(--muted); user-select: none; }
+header .review { color: var(--accent); white-space: nowrap; }
 
 main { flex: 1; display: flex; min-height: 0; }
 #trace { flex: 1; overflow: auto; position: relative; min-width: 0; }

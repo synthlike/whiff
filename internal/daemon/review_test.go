@@ -364,3 +364,95 @@ func TestPublishGate(t *testing.T) {
 	}
 	added("abc")
 }
+
+// :review's functions review as whiff pending, accept and reject do, for
+// your messages only: not an agent's, nor one in a chain it began that you
+// accepted.
+func TestReviewService(t *testing.T) {
+	dir := tempDir(t)
+	file := filepath.Join(dir, "notes")
+	writeServices(t, dir, map[string]string{
+		"notes": `(service notes
+  (on (add text) "Appends text." (file/append "` + file + `" text)))`,
+		"relay": `(service relay
+  (on (pass id) "Accepts id." (call :review/accept id)))`,
+	})
+	start(t, dir)
+	c := dial(t, dir)
+	agent := dial(t, dir)
+	agent.Agent = true
+	reviewer := dial(t, dir)
+	if _, err := reviewer.Sub("review/pending"); err != nil {
+		t.Fatal(err)
+	}
+	msg := func(c *rpc.Client, op, target, args string) string {
+		t.Helper()
+		resp, err := c.Message(op, target, args, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.Value + resp.Error
+	}
+	call := func(c *rpc.Client, target, args string) string {
+		t.Helper()
+		return msg(c, "call", target, args)
+	}
+	held := func(r string) string {
+		t.Helper()
+		v, _ := puff.ReadValue(r)
+		n, ok := pendingID(v)
+		if !ok {
+			t.Fatalf("%s isn't pending", r)
+		}
+		return puff.Print(puff.Int(n))
+	}
+	notes := func() string {
+		b, _ := os.ReadFile(file)
+		return string(b)
+	}
+
+	n := held(call(agent, "notes/add", `["a"]`))
+	m := held(call(agent, "notes/add", `["b"]`))
+	if r := call(c, "review/pending", `[]`); !strings.HasPrefix(r, `(ok (items [{:actions [{:action [:review/accept `+n+`] :label "Accept"} {:action [:review/reject `+n+`] :label "Reject"}] :detail "`+n+` from client in " :label ":notes/add \"a\""}`) ||
+		!strings.HasSuffix(r, `] {:changed [:review/pending :review/done]}))`) {
+		t.Errorf("review/pending = %s", r)
+	}
+
+	// An agent can't review: from its connection, where its message to
+	// :review isn't held either, as that would protect nothing; nor by a
+	// service you accept for it, whether you accept with whiff accept or
+	// :review/accept, which a call back to :review can't wait for.
+	for _, tt := range [][2]string{{"review/pending", `[]`}, {"review/accept", "[" + n + "]"}, {"review/reject", "[" + n + "]"}} {
+		if r := call(agent, tt[0], tt[1]); !strings.Contains(r, ":kind :refused") {
+			t.Errorf("agent's %s = %s", tt[0], r)
+		}
+	}
+	p := held(call(agent, "relay/pass", "["+n+"]"))
+	if r := msg(c, "accept", "", "["+p+"]"); !strings.Contains(r, ":kind :refused") {
+		t.Errorf("relay/pass accepted with whiff accept = %s", r)
+	}
+	p = held(call(agent, "relay/pass", "["+n+"]"))
+	if r := call(c, "review/accept", "["+p+"]"); !strings.Contains(r, ":kind :cycle") {
+		t.Errorf("relay/pass accepted with :review/accept = %s", r)
+	}
+	if got := notes(); got != "" {
+		t.Errorf("notes after the agent's tries = %q", got)
+	}
+
+	// Yours accept and reject.
+	if r := call(c, "review/accept", "["+n+"]"); r != "(ok :done)" {
+		t.Errorf("review/accept = %s", r)
+	}
+	if got := notes(); got != "a" {
+		t.Errorf("notes after accept = %q", got)
+	}
+	if r := call(c, "review/reject", "["+m+"]"); r != "(ok :done)" {
+		t.Errorf("review/reject = %s", r)
+	}
+	if r := call(c, "review/accept", "["+m+"]"); !strings.Contains(r, ":kind :no-id") {
+		t.Errorf("accept of a rejected one = %s", r)
+	}
+	if r := call(c, "review/pending", `[]`); r != `(ok (items [] {:changed [:review/pending :review/done]}))` {
+		t.Errorf("review/pending once empty = %s", r)
+	}
+}

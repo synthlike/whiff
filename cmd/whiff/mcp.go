@@ -198,8 +198,8 @@ type fnTool struct {
 	params []string
 }
 
-// functions are every address's functions as tools, but the agent's own,
-// described as mode treats them.
+// functions are every address's functions as tools, but the agent's own
+// and :review's, which only you may use, described as mode treats them.
 func (a *agent) functions(mode sessionMode) ([]fnTool, error) {
 	v, err := a.eval("(addresses)")
 	if err != nil {
@@ -211,7 +211,7 @@ func (a *agent) functions(mode sessionMode) ([]fnTool, error) {
 	taken := map[string]bool{}
 	for i := range addrs.Len() {
 		addr, _ := field(addrs.At(i), "address").(puff.Keyword)
-		if addr == "" || string(addr) == self {
+		if addr == "" || string(addr) == self || addr == "review" {
 			continue
 		}
 		v, err := a.eval("(describe " + puff.Print(addr) + ")")

@@ -110,7 +110,7 @@ func (d *daemon) loadSource(file, src, addr string, start bool) (*service, error
 	if len(srv.Items) < 2 || srv.Items[1].Kind != puff.FormSymbol || srv.Items[1].Name != name {
 		return nil, &puff.Error{Pos: srv.Pos, Msg: fmt.Sprintf("service wants its name, %s, as in its file name", name)}
 	}
-	if name == "jobs" || name == "me" {
+	if name == "jobs" || name == "me" || name == "review" {
 		return nil, &puff.Error{Pos: srv.Pos, Msg: ":" + name + " is whiff's own address; rename the file"}
 	}
 	body := srv.Items[2:]

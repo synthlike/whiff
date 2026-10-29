@@ -140,6 +140,10 @@ func TestLs(t *testing.T) {
 :me
   ask (ask question)  :read  Asks you question: pending now, your answer when you reply.
   ask (tell text)     :read  Tells you text, a report: it waits in your inbox until you reply, which dismisses it.
+:review
+  (accept id)           :write  Deliver the held message id as it was sent, or run the code it holds; its result, which its sender gets too.
+  (pending)             :read   (ok view): what waits for your review, as items to accept or reject, oldest first.
+  (reject id [reason])  :write  Answer the held message id (err {:kind :rejected :reason reason}) without delivering it; reason, a string, tells its sender why.
 read-only commands (internal/puff/commands.go): ` + strings.Join(puff.ReadOnlyCommands(), ", ") + `
 override: ` + files + `:4:3: :files/status is marked :read, but reaches proc/run at 4:61
 warning: ` + greet + `:5:15: :nobody/x doesn't exist

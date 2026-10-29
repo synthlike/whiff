@@ -205,7 +205,11 @@ Rules that keep the gate honest:
 
 - Marks are inferred, not declared, so the gate can rely on a target's mark.
 - Only your connections review or set modes; an agent's connection can't,
-  and `whiff mcp` always connects as an agent.
+  and `whiff mcp` always connects as an agent. `:review`'s functions
+  (`pending`, a view; `accept`; `reject`) review for any client that sends
+  messages, sniff's pages and `whiff act` too, and answer only your
+  messages: not an agent's, nor one in a chain an agent began, even once
+  you accepted it.
 - An agent answers only its own inbox: it can't answer a question to you.
 - Nobody reviewing (no client follows `:review/pending`) means a gated
   message fails with `:no-reviewer` at once, rather than waiting unseen.

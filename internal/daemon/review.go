@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/synthlike/whiff/internal/puff"
@@ -21,7 +22,9 @@ import (
 // a :write function that you haven't accepted. Not an ask, which waits for
 // a person anyway, nor a whiff/done, the answer to something s started.
 func (d *daemon) gated(st *state, s *service, m message) bool {
-	if m.user || m.reviewed || m.topic != "" || m.fn == "whiff/done" {
+	// :review's own functions refuse an agent's message anyway: holding
+	// one would be a review that protects nothing.
+	if m.user || m.reviewed || m.topic != "" || m.fn == "whiff/done" || s.name == "review" {
 		return false
 	}
 	h, ok := s.fns[m.fn]
@@ -131,15 +134,17 @@ func (st *state) reviewing() bool {
 // accept delivers the message id that :review holds, as it was sent and
 // let through the gate with all it leads to, or runs the code it holds,
 // and returns its result, which its sender gets too. The error is for ctx
-// ending.
-func (d *daemon) accept(ctx context.Context, id int64) (puff.Value, error) {
+// ending. chain is the addresses waiting on the accept: :review, for its
+// own accept, so what the message leads to fails at once if it calls
+// :review back, rather than waiting for itself.
+func (d *daemon) accept(ctx context.Context, chain []string, id int64) (puff.Value, error) {
 	var a *asked
 	d.do(func(st *state) { a = st.take("review", id) })
 	if a == nil {
 		return puff.Errorf("no-id", "no message %d waits for review", id), nil
 	}
 	if a.held == nil {
-		r := d.runHeld(ctx, a)
+		r := d.runHeld(ctx, chain, a)
 		d.do(func(st *state) {
 			st.record(entry{at: a.at, kind: "eval", from: a.from, args: puff.Print(a.args), reply: puff.Print(r), gate: fmt.Sprintf("accepted %d", a.id)})
 		})
@@ -155,7 +160,7 @@ func (d *daemon) accept(ctx context.Context, id int64) (puff.Value, error) {
 		return puff.Done, nil
 	}
 	m.reviewed = true
-	r, err := d.request(ctx, &caller{}, a.to, m)
+	r, err := d.request(ctx, &caller{chain: chain}, a.to, m)
 	if err != nil {
 		r = puff.Errorf("cancelled", "the accept was cancelled before :%s replied", m.to(a.to))
 	}
@@ -166,9 +171,9 @@ func (d *daemon) accept(ctx context.Context, id int64) (puff.Value, error) {
 // runHeld runs the code a holds, as its sender's eval would have and
 // passing the gate, within the call timeout. Its Result is the code's
 // value, (ok v) unless it is a Result, or a fault as (err {:kind :fault}).
-// What it prints is dropped.
-func (d *daemon) runHeld(ctx context.Context, a *asked) puff.Value {
-	env := d.newEnv(io.Discard, &caller{addr: a.from, reviewed: true, session: a.session})
+// What it prints is dropped. chain is accept's.
+func (d *daemon) runHeld(ctx context.Context, chain []string, a *asked) puff.Value {
+	env := d.newEnv(io.Discard, &caller{addr: a.from, chain: chain, reviewed: true, session: a.session})
 	env.Dir = a.dir
 	ctx, cancel := context.WithTimeout(ctx, d.callTimeout)
 	defer cancel()
@@ -186,18 +191,20 @@ func (d *daemon) runHeld(ctx context.Context, a *asked) puff.Value {
 }
 
 // reject answers the message id that :review holds (err {:kind :rejected
-// :reason reason}) without delivering it.
+// :reason reason}) without delivering it; without :reason if reason is "".
 func (d *daemon) reject(id int64, reason string) puff.Value {
 	var a *asked
 	d.do(func(st *state) { a = st.take("review", id) })
 	if a == nil {
 		return puff.Errorf("no-id", "no message %d waits for review", id)
 	}
-	e, _ := puff.NewMap(
-		puff.Entry{Key: puff.Keyword("kind"), Val: puff.Keyword("rejected")},
-		puff.Entry{Key: puff.Keyword("message"), Val: puff.String(fmt.Sprintf("you rejected %s: %s", a.what(), reason))},
-		puff.Entry{Key: puff.Keyword("reason"), Val: puff.String(reason)},
-	)
+	msg := "you rejected " + a.what()
+	es := []puff.Entry{{Key: puff.Keyword("kind"), Val: puff.Keyword("rejected")}}
+	if reason != "" {
+		msg += ": " + reason
+		es = append(es, puff.Entry{Key: puff.Keyword("reason"), Val: puff.String(reason)})
+	}
+	e, _ := puff.NewMap(append(es, puff.Entry{Key: puff.Keyword("message"), Val: puff.String(msg)})...)
 	d.reviewed(a, puff.NewTag("err", e))
 	return puff.Done
 }
@@ -213,6 +220,105 @@ func (d *daemon) reviewed(a *asked, result puff.Value) {
 		d.answer(st, a.ticket, a.to, result)
 		st.publish(message{from: "review", topic: "review/done", args: puff.Print(puff.NewVector(done)), user: a.user})
 	})
+}
+
+// reviewService is :review, whose inbox holds what the review gate holds:
+// its functions show it as a view and accept or reject a message, as whiff
+// pending, accept and reject do, so any client that sends messages can
+// review. Only your messages may: one in a chain an agent began is
+// refused, as an agent's connection is by whiff accept.
+func (d *daemon) reviewService() *service {
+	return &service{name: "review", d: d, cur: caller{addr: "review"},
+		fns: map[string]handler{
+			"pending": {mark: puff.MarkRead, marked: true, native: d.pendingView,
+				doc: "(ok view): what waits for your review, as items to accept or reject, oldest first."},
+			"accept": {params: []string{"id"}, mark: puff.MarkWrite, marked: true, native: d.acceptFn,
+				doc: "Deliver the held message id as it was sent, or run the code it holds; its result, which its sender gets too."},
+			"reject": {params: []string{"id", "reason"}, optional: 1, mark: puff.MarkWrite, marked: true, native: d.rejectFn,
+				doc: "Answer the held message id (err {:kind :rejected :reason reason}) without delivering it; reason, a string, tells its sender why."},
+		},
+		subs: map[string]subscriber{}, code: map[string][]*puff.Form{},
+		mailbox: make(chan message, mailboxSize), quit: make(chan struct{}), done: make(chan struct{})}
+}
+
+// notYours is what :review's functions answer a message you didn't send.
+func notYours() puff.Value {
+	return puff.Errorf("refused", "only you review: an agent's message, or one in a chain an agent began, can't")
+}
+
+// pendingView is :review's inbox as (items [...]), each item a held message
+// with Accept and Reject, fetched again when the queue changes.
+func (d *daemon) pendingView(m message, _ []puff.Value) (puff.Value, error) {
+	if !m.user {
+		return notYours(), nil
+	}
+	var items []puff.Value
+	d.do(func(st *state) {
+		for _, a := range st.inbox("review") {
+			items = append(items, a.reviewItem())
+		}
+	})
+	opts, _ := puff.NewMap(puff.Entry{Key: puff.Keyword("changed"),
+		Val: puff.NewVector(puff.Keyword("review/pending"), puff.Keyword("review/done"))})
+	return puff.Ok(puff.NewTag("items", puff.NewVector(items...), opts)), nil
+}
+
+// reviewItem is a, held, as an item of :review/pending: what it would do,
+// who sent it and where, and its actions.
+func (a *asked) reviewItem() puff.Value {
+	label := a.what()
+	switch {
+	case a.held == nil:
+		label = "eval " + a.src
+	case a.args.Len() > 0:
+		label += " " + strings.TrimSuffix(strings.TrimPrefix(puff.Print(a.args), "["), "]")
+	}
+	from := "client"
+	if a.from != "" {
+		from = ":" + a.from
+	}
+	action := func(label, fn string) puff.Value {
+		m, _ := puff.NewMap(
+			puff.Entry{Key: puff.Keyword("label"), Val: puff.String(label)},
+			puff.Entry{Key: puff.Keyword("action"), Val: puff.NewVector(puff.Keyword("review/"+fn), puff.Int(a.id))},
+		)
+		return m
+	}
+	m, _ := puff.NewMap(
+		puff.Entry{Key: puff.Keyword("label"), Val: puff.String(label)},
+		puff.Entry{Key: puff.Keyword("detail"), Val: puff.String(fmt.Sprintf("%d from %s in %s", a.id, from, a.dir))},
+		puff.Entry{Key: puff.Keyword("actions"), Val: puff.NewVector(action("Accept", "accept"), action("Reject", "reject"))},
+	)
+	return m
+}
+
+func (d *daemon) acceptFn(m message, args []puff.Value) (puff.Value, error) {
+	if !m.user {
+		return notYours(), nil
+	}
+	id, ok := args[0].(puff.Int)
+	if !ok {
+		return nil, fmt.Errorf("want a message id, got %s", puff.Print(args[0]))
+	}
+	r, _ := d.accept(m.ctx, []string{"review"}, int64(id))
+	return r, nil
+}
+
+func (d *daemon) rejectFn(m message, args []puff.Value) (puff.Value, error) {
+	if !m.user {
+		return notYours(), nil
+	}
+	id, ok := args[0].(puff.Int)
+	if !ok {
+		return nil, fmt.Errorf("want a message id, got %s", puff.Print(args[0]))
+	}
+	var reason puff.String
+	if len(args) > 1 {
+		if reason, ok = args[1].(puff.String); !ok {
+			return nil, fmt.Errorf("want the reason as a string, got %s", puff.Print(args[1]))
+		}
+	}
+	return d.reject(int64(id), string(reason)), nil
 }
 
 // clientReview accepts or rejects a message for a client: req.Args is the
@@ -239,7 +345,7 @@ func (d *daemon) clientReview(ctx context.Context, req rpc.Request) rpc.Response
 	if req.Op == "reject" {
 		return rpc.Response{Value: puff.Print(d.reject(int64(id), string(reason)))}
 	}
-	r, err := d.accept(ctx, int64(id))
+	r, err := d.accept(ctx, nil, int64(id))
 	if err != nil {
 		return rpc.Response{Error: err.Error()}
 	}

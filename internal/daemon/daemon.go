@@ -98,7 +98,7 @@ func Run(ctx context.Context, dir, services string) error {
 		resets: make(chan reset), db: db, log: os.Stderr, callTimeout: defaultCallTimeout}
 	d.base = d.newEnv(io.Discard, &caller{})
 	d.wg.Go(d.route)
-	for _, s := range []*service{d.jobsService(), d.meService()} {
+	for _, s := range []*service{d.jobsService(), d.meService(), d.reviewService()} {
 		d.do(func(st *state) { st.addrs[s.name] = s })
 		d.wg.Go(func() { s.run(ctx) })
 	}
