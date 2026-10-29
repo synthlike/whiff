@@ -398,9 +398,30 @@ aside h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; co
 .said { font: 12px var(--mono); margin: 0 0 8px; word-break: break-word; }
 .said.ok { color: var(--ok); }
 .said.err { color: var(--err); }
-.view.board { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
-.view .column h4 { font-size: 12px; margin: 0 0 4px; }
-.view .column .item { gap: 2px 10px; }
+/* A board: columns side by side, scrolled sideways, each item a card. */
+.view.board { display: flex; gap: 12px; align-items: flex-start; overflow-x: auto; padding-bottom: 8px; }
+.view .column {
+  flex: 0 0 280px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--line) 45%, transparent);
+}
+.view .column h4 { display: flex; gap: 8px; align-items: baseline; font-size: 12px; margin: 0 4px; }
+.view .column h4 .count { margin-left: auto; font: 11px var(--mono); color: var(--muted); }
+.view .column .hint { margin: 0 4px; }
+.view .column .item {
+  gap: 6px 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+}
+.view .column .prose { line-height: 1.45; }
+.view .column .prose > :last-child { margin-bottom: 0; }
+.view .column .detail { font: 11px var(--mono); }
 .view .column .actions { max-width: 100%; margin-left: 0; justify-content: flex-start; }
 .raw { margin-top: 8px; }
 .raw > summary { cursor: pointer; color: var(--muted); font-size: 12px; }

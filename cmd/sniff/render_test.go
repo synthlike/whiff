@@ -51,7 +51,7 @@ func TestRender(t *testing.T) {
 
 	for _, tt := range []struct{ printed, want string }{
 		{`(ok (board [{:title "Done" :items []} {:title "Dev" :items [{:label "a"}]}]))`,
-			`<div class="view board"><div class="column"><h4>Done</h4><p class="hint">None.</p></div><div class="column"><h4>Dev</h4><div class="item"><span>a</span></div></div></div>`},
+			`<div class="view board"><div class="column"><h4>Done<span class="count">0</span></h4><p class="hint">None.</p></div><div class="column"><h4>Dev<span class="count">1</span></h4><div class="item"><span>a</span></div></div></div>`},
 		{`(ok (text "a <diff>"))`, `<div class="view"><pre>a &lt;diff&gt;</pre></div>`},
 		{`(ok (locations [{:file "a.go" :line 3 :col 4 :note "here"}]))`, `data-copy="a.go:3:4"`},
 		// A reply that holds no view is folded as puff.

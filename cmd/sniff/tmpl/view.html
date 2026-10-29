@@ -35,7 +35,7 @@
 
 {{define "view"}}<div class="view{{if eq .Kind "board"}} board{{end}}">
 {{- if eq .Kind "text"}}<pre>{{.Text}}</pre>
-{{- else if eq .Kind "board"}}{{range .Columns}}<div class="column"><h4>{{.Title}}</h4>{{range .Items}}{{template "item" .}}{{else}}<p class="hint">None.</p>{{end}}</div>{{end}}
+{{- else if eq .Kind "board"}}{{range .Columns}}<div class="column"><h4>{{.Title}}<span class="count">{{len .Items}}</span></h4>{{range .Items}}{{template "item" .}}{{else}}<p class="hint">None.</p>{{end}}</div>{{end}}
 {{- else if eq .Kind "items"}}{{range .Items}}{{template "item" .}}{{else}}<p class="hint">None.</p>{{end}}
 {{- else}}{{range .Places}}<button type="button" class="place" data-copy="{{.At}}" title="copy {{.At}}"><span class="at">{{.At}}</span>{{if .Note}}<span class="detail">{{.Note}}</span>{{end}}</button>{{else}}<p class="hint">None.</p>{{end}}
 {{- end}}</div>{{end}}
