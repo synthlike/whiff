@@ -1,6 +1,57 @@
 // sniff's page: history from sniff's event stream, drawn as a lane per
-// address and an arrow per message; details from its JSON endpoints.
+// address and an arrow per message; details from its JSON endpoints, with
+// values and views drawn by sniff (render).
 "use strict";
+
+const $ = (id) => document.getElementById(id);
+const el = (tag, cls, text) => {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+};
+
+async function getJSON(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error((await r.text()).trim());
+  return r.json();
+}
+
+// print is a tree, as sniff sends values, printed as puff prints it.
+function print(t) {
+  switch (t.t) {
+    case "map": return "{" + t.v.map(([k, v]) => print(k) + " " + print(v)).join(" ") + "}";
+    case "vec": return "[" + t.v.map(print).join(" ") + "]";
+    case "tag": return "(" + [t.n, ...t.v.map(print)].join(" ") + ")";
+    case "kw": return ":" + t.v;
+    case "str": return JSON.stringify(t.v);
+  }
+  return t.v;
+}
+
+// drawn is a box that sniff fills with a tree drawn: as a reply, with the
+// view it holds, if as is "reply"; else folded as puff.
+function drawn(t, as) {
+  const box = el("div", as === "reply" ? "" : "value", "…");
+  fetch("render" + (as ? "?as=" + as : ""), { method: "POST", headers: { "Content-Type": "text/plain" }, body: print(t) })
+    .then(async (r) => {
+      const html = await r.text();
+      if (!r.ok) throw new Error(html.trim());
+      box.innerHTML = html; // sniff drew it, escaping what it shows
+    })
+    .catch((err) => { box.textContent = err.message; });
+  return box;
+}
+
+// marks is each function's mark, "read" or "write", by its target,
+// "plan/board", from sniff's addresses.
+let marks = new Map();
+
+// pageOf is the page that shows what target answers to args, a tree of a
+// vector, as a view: /view/pipeline/show?args=[2].
+function pageOf(target, args) {
+  return "/view/" + encodeURI(target) + (args.v.length ? "?args=" + encodeURIComponent(print(args)) : "");
+}
 
 let entries = []; // history, oldest first
 let lanes = []; // addresses, in the order they first appear; "client" first
@@ -174,15 +225,16 @@ function showEntry(i) {
   meta.append(el("span", "", time(e.at)), el("span", "badge", e.origin), el("span", "", took(e.took)));
   if (e.gate) meta.append(gateBadge(e.gate));
   d.replaceChildren(head, meta);
-  if (e.args) d.append(section("Arguments", wrap(value(e.args))));
+  if (e.args) d.append(section("Arguments", drawn(e.args)));
   if (!e.reply) {
     d.append(section("Reply", el("p", "hint", "None: nobody handled it.")));
     return;
   }
-  const v = viewOf(e.reply);
-  d.append(section("Reply", v ? showView(v, e.reply) : wrap(value(e.reply))));
-  // A view a :read function answers can be a page of its own.
-  if (v && e.kind === "call" && e.args && marks.get(e.to) === "read") {
+  d.append(section("Reply", drawn(e.reply, "reply")));
+  // A view a :read function answers can be a page of its own, where its
+  // actions work.
+  const view = e.reply.t === "tag" && e.reply.n === "ok" && e.reply.v[0]?.t === "tag";
+  if (view && e.kind === "call" && e.args && marks.get(e.to) === "read") {
     const a = el("a", "pin", "Open :" + e.to + " as a page");
     a.href = pageOf(e.to, e.args);
     d.append(a);
@@ -240,7 +292,8 @@ async function loadAddresses() {
   } catch {
     return;
   }
-  setMarks(addresses);
+  marks = new Map();
+  for (const a of addresses) for (const f of a.fns) marks.set(a.address + "/" + f.fn, f.mark);
   if (location.hash.startsWith("#:")) showAddress(decodeURIComponent(location.hash.slice(2)));
   const nav = $("addresses");
   nav.replaceChildren();
@@ -292,13 +345,11 @@ async function showAddress(name) {
   d.append(section("Functions", a.fns.length ? table : el("p", "hint", "None.")));
   if (agent) showSession(d, name);
   if (a.state) {
-    const box = el("div", "value", "…");
-    d.append(section("State", box));
     try {
       const t = await getJSON("api/state?address=" + encodeURIComponent(name));
-      box.replaceChildren(value(t.t === "tag" && t.n === "ok" ? t.v[0] : t));
+      d.append(section("State", drawn(t.t === "tag" && t.n === "ok" ? t.v[0] : t)));
     } catch (err) {
-      box.textContent = err.message;
+      d.append(section("State", el("p", "hint", err.message)));
     }
   }
 }
@@ -353,8 +404,10 @@ function followQueue(name, target, topics) {
   const count = async () => {
     let n = 0;
     try {
-      const v = viewOf(await getJSON("api/view?target=" + target));
-      n = v ? v.v[0].v.length : 0;
+      // (ok (items [...] opts)): how many items.
+      const r = await getJSON("api/view?target=" + target);
+      const v = r.t === "tag" && r.n === "ok" ? r.v[0] : null;
+      n = v?.t === "tag" && v.v[0]?.t === "vec" ? v.v[0].v.length : 0;
     } catch {
       return;
     }

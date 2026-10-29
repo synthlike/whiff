@@ -26,7 +26,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"mime"
 	"net"
 	"net/http"
 	"os"
@@ -258,14 +257,14 @@ func (s *server) handler() http.Handler {
 	files, _ := fs.Sub(web, "web")
 	mux.Handle("GET /", http.FileServerFS(files))
 	mux.HandleFunc("GET /view/", s.page)
-	mux.HandleFunc("POST /act", s.actForm)
+	mux.HandleFunc("POST /act", s.act)
+	mux.HandleFunc("POST /render", s.render)
 	mux.HandleFunc("GET /events", s.events)
 	mux.HandleFunc("GET /api/addresses", s.addresses)
 	mux.HandleFunc("GET /api/state", s.state)
 	mux.HandleFunc("GET /api/session", s.session)
 	mux.HandleFunc("GET /api/view", s.view)
 	mux.HandleFunc("GET /api/watch", s.watch)
-	mux.HandleFunc("POST /api/act", s.act)
 	return s.guard(mux)
 }
 
@@ -638,52 +637,41 @@ func (s *server) watch(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// act sends what a page picked, an item's action, [:address/fn args...],
-// as you, as whiff act does, and answers its reply as a tree. Only sniff's
-// own page can send it: as JSON, which another site's page can't post
-// without asking first, from the same origin, and with the cookie, which
-// SameSite keeps from other sites.
-func (s *server) act(w http.ResponseWriter, r *http.Request) {
-	mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
-	if site := r.Header.Get("Sec-Fetch-Site"); mt != "application/json" || site != "" && site != "same-origin" {
-		http.Error(w, "send it from sniff's page", http.StatusForbidden)
-		return
-	}
-	var body struct {
-		Action string `json:"action"`
-	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
-		http.Error(w, `want {"action": "[:address/fn args...]"}`, http.StatusBadRequest)
-		return
-	}
-	target, args, err := action(body.Action)
+// render draws what the main page posts, a printed value, as sniff draws
+// views: ?as=reply as a reply, its view with only its links, since a past
+// reply's actions may no longer hold (its page is where to act), and the
+// reply folded under it; otherwise the value folded.
+func (s *server) render(w http.ResponseWriter, r *http.Request) {
+	b, err := io.ReadAll(io.LimitReader(r.Body, 4<<20))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	c, err := s.dial()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if r.URL.Query().Get("as") == "reply" {
+		ms := map[string]string{}
+		if c, err := s.dial(); err == nil {
+			if m, err := marks(c); err == nil {
+				ms = m
+			}
+			c.Close()
+		}
+		pages.ExecuteTemplate(w, "shown", show(string(b), ms, ""))
 		return
 	}
-	defer c.Close()
-	resp, err := c.Message("call", target, args, s.wd)
-	if err == nil && resp.Error != "" {
-		err = errors.New(resp.Error)
+	n := node{Kind: "lit", Text: string(b)}
+	if v, err := puff.ReadValue(string(b)); err == nil {
+		n = fold(v, 0)
 	}
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-	writeJSON(w, treeOf(resp.Value))
+	pages.ExecuteTemplate(w, "value", n)
 }
 
-// actForm sends what a page's form picked, an item's action, as you, as
+// act sends what a page's form picked, an item's action, as you, as whiff
 // act does, with your answer added if the form asked for one, and goes
 // back to the page it came from, which shows what it answered. Only
 // sniff's own pages can post it: the cookie is SameSite, and a browser
 // says where a post comes from.
-func (s *server) actForm(w http.ResponseWriter, r *http.Request) {
+func (s *server) act(w http.ResponseWriter, r *http.Request) {
 	if site := r.Header.Get("Sec-Fetch-Site"); site != "" && site != "same-origin" {
 		http.Error(w, "send it from sniff's page", http.StatusForbidden)
 		return

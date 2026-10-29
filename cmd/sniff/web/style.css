@@ -291,11 +291,6 @@ aside h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; co
 .view .action.labelled { font: 12px var(--sans); }
 .view .action.link { text-decoration: none; border-style: dashed; }
 .view .action .to { font: 11px var(--mono); color: var(--muted); }
-.view .action:disabled { color: var(--muted); cursor: progress; }
-.view .reply { flex-basis: 100%; font: 11px var(--mono); color: var(--muted); word-break: break-word; }
-.view .reply:empty { display: none; }
-.view .reply.ok { color: var(--ok); }
-.view .reply.err { color: var(--err); }
 .view .ask { display: flex; gap: 4px; margin-top: 4px; }
 .view .ask input {
   flex: 1;

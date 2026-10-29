@@ -351,20 +351,37 @@ func TestViews(t *testing.T) {
 		t.Fatalf("watch began %q", lines.Text())
 	}
 
-	// Only sniff's page acts, with JSON, from its own origin.
-	act := `{"action": "[:board/bump 2]"}`
-	if r, _ := do("POST", "/api/act", "text/plain", act); r.StatusCode != http.StatusForbidden {
-		t.Errorf("a form's post: %s", r.Status)
+	// A form posts its action, from sniff's own page only, and goes back to
+	// the page, which shows what it answered.
+	noRedirect := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	post := func(form url.Values, header ...string) *http.Response {
+		t.Helper()
+		req, _ := http.NewRequest("POST", base+"/act", strings.NewReader(form.Encode()))
+		req.AddCookie(cookie)
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		for i := 0; i+1 < len(header); i += 2 {
+			req.Header.Set(header[i], header[i+1])
+		}
+		resp, err := noRedirect.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp
 	}
-	if r, _ := do("POST", "/api/act", "application/json", act, "Sec-Fetch-Site", "cross-site"); r.StatusCode != http.StatusForbidden {
-		t.Errorf("another site's: %s", r.Status)
+	form := url.Values{"action": {"[:board/bump 2]"}, "back": {"/view/board/show"}}
+	if r := post(form, "Sec-Fetch-Site", "cross-site"); r.StatusCode != http.StatusForbidden {
+		t.Errorf("another site's form: %s", r.Status)
 	}
-	if r, b := do("POST", "/api/act", "application/json", `{"action": "[1]"}`); r.StatusCode != http.StatusBadRequest {
-		t.Errorf("a bad action: %s %s", r.Status, b)
+	if r := post(form, "Origin", "http://evil.example"); r.StatusCode != http.StatusForbidden {
+		t.Errorf("another origin's form: %s", r.Status)
 	}
-	if r, b := do("POST", "/api/act", "application/json", act, "Sec-Fetch-Site", "same-origin"); r.StatusCode != http.StatusOK ||
-		strings.TrimSpace(b) != `{"t":"tag","n":"ok","v":[{"t":"kw","v":"done"}]}` {
-		t.Errorf("act: %s %s", r.Status, b)
+	if r := post(url.Values{"action": {"[1]"}}); r.StatusCode != http.StatusBadRequest {
+		t.Errorf("a bad action: %s", r.Status)
+	}
+	r := post(form, "Sec-Fetch-Site", "same-origin")
+	if r.StatusCode != http.StatusSeeOther || r.Header.Get("Location") != "/view/board/show?said=1" {
+		t.Fatalf("the form: %s %s", r.Status, r.Header.Get("Location"))
 	}
 	got := make(chan string, 1)
 	go func() {
@@ -411,37 +428,9 @@ func TestViews(t *testing.T) {
 		t.Errorf("a :write function's page: %s %s", r.Status, b)
 	}
 
-	// A form posts its action, from sniff's own page only, and goes back to
-	// the page, which shows what it answered.
-	noRedirect := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	post := func(form url.Values, header ...string) *http.Response {
-		t.Helper()
-		req, _ := http.NewRequest("POST", base+"/act", strings.NewReader(form.Encode()))
-		req.AddCookie(cookie)
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		for i := 0; i+1 < len(header); i += 2 {
-			req.Header.Set(header[i], header[i+1])
-		}
-		resp, err := noRedirect.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		resp.Body.Close()
-		return resp
-	}
-	form := url.Values{"action": {"[:board/bump 2]"}, "back": {"/view/board/show"}}
-	if r := post(form, "Sec-Fetch-Site", "cross-site"); r.StatusCode != http.StatusForbidden {
-		t.Errorf("another site's form: %s", r.Status)
-	}
-	if r := post(form, "Origin", "http://evil.example"); r.StatusCode != http.StatusForbidden {
-		t.Errorf("another origin's form: %s", r.Status)
-	}
-	r := post(form, "Sec-Fetch-Site", "same-origin")
-	if r.StatusCode != http.StatusSeeOther || r.Header.Get("Location") != "/view/board/show?said=1" {
-		t.Fatalf("the form: %s %s", r.Status, r.Header.Get("Location"))
-	}
-	if _, b := do("GET", r.Header.Get("Location"), "", ""); !strings.Contains(b, `<p class="said ok">Sent <code>[:board/bump 2]</code>: (ok :done)</p>`) ||
-		!strings.Contains(b, `<span>n 4</span>`) {
+	// Back on the page, it shows what the form answered.
+	if _, b := do("GET", "/view/board/show?said=1", "", ""); !strings.Contains(b, `<p class="said ok">Sent <code>[:board/bump 2]</code>: (ok :done)</p>`) ||
+		!strings.Contains(b, `<span>n 2</span>`) {
 		t.Errorf("back on the page: %s", b)
 	}
 	// One that asks gets your answer as its last argument; back never
@@ -455,5 +444,16 @@ func TestViews(t *testing.T) {
 	s.mu.Unlock()
 	if sd.Sends != `[:board/bump "1"]` || sd.OK {
 		t.Errorf("an answered form sent %+v", sd)
+	}
+
+	// A past reply, drawn for the main page: its links, but no forms, as
+	// what it offered may no longer hold.
+	reply := `(ok (items [{:label "x" :action [:board/bump 2] :actions [{:label "Times" :action [:board/times 3]}]}]))`
+	if r, b := do("POST", "/render?as=reply", "text/plain", reply); r.StatusCode != http.StatusOK || strings.Contains(b, "<form") ||
+		!strings.Contains(b, `href="/view/board/times?args=%5B3%5D"`) || !strings.Contains(b, `<span>x</span>`) {
+		t.Errorf("a reply drawn: %s %s", r.Status, b)
+	}
+	if _, b := do("POST", "/render", "text/plain", `[1 "two"]`); !strings.Contains(b, `<span class="str">&#34;two&#34;</span>`) {
+		t.Errorf("a value drawn: %s", b)
 	}
 }

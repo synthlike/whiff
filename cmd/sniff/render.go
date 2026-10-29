@@ -71,7 +71,8 @@ type place struct {
 
 // show is printed, a reply, as shown: marks is each function's mark by
 // target, "read" or "write", deciding which actions are links; back is the
-// page an action's form goes back to.
+// page an action's form goes back to, or "" for none: a reply in history,
+// whose actions may no longer hold, offers only its links.
 func show(printed string, marks map[string]string, back string) shown {
 	v, err := puff.ReadValue(printed)
 	if err != nil {
@@ -221,7 +222,7 @@ func actOf(label string, msg puff.Vector, ask string, marks map[string]string, b
 	case "write":
 		a.Write = true
 	}
-	return a, true
+	return a, a.Link != "" || back != ""
 }
 
 // pageOf is the page that shows what target answers to args as a view:
