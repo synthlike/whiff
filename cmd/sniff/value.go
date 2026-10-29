@@ -102,6 +102,8 @@ func entryJSON(e rpc.Entry) json.RawMessage {
 		At     time.Time `json:"at"`
 		Us     int64     `json:"us"`
 		Kind   string    `json:"kind"`
+		ID     int64     `json:"id,omitempty"`
+		Cause  int64     `json:"cause,omitempty"`
 		Origin string    `json:"origin,omitempty"`
 		From   string    `json:"from"`
 		To     string    `json:"to"`
@@ -110,7 +112,7 @@ func entryJSON(e rpc.Entry) json.RawMessage {
 		Took   float64   `json:"took"`
 		Gate   string    `json:"gate,omitempty"`
 		Note   string    `json:"note,omitempty"`
-	}{At: e.At, Us: e.At.UnixMicro(), Kind: e.Kind, Origin: e.Origin, From: e.From, To: e.To, Took: float64(e.Took) / float64(time.Millisecond), Gate: e.Gate, Note: e.Note}
+	}{At: e.At, Us: e.At.UnixMicro(), Kind: e.Kind, ID: e.ID, Cause: e.Cause, Origin: e.Origin, From: e.From, To: e.To, Took: float64(e.Took) / float64(time.Millisecond), Gate: e.Gate, Note: e.Note}
 	if e.Args != "" {
 		out.Args = treeOf(e.Args)
 	}

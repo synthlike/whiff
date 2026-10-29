@@ -236,7 +236,7 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 				if repl == nil {
 					repl = d.newEnv(&replOut, cur)
 				}
-				resp = d.evalIn(ectx, repl, &replOut, "repl", from, free, req)
+				resp = d.evalIn(ectx, repl, cur, &replOut, "repl", req)
 				replOut.Reset()
 			}
 			cancelEval.Store(nil)
@@ -336,8 +336,8 @@ func (d *daemon) message(ctx context.Context, from string, req rpc.Request) rpc.
 // acting for its address (from, "" for none); as accepted if free.
 func (d *daemon) eval(ctx context.Context, from string, free bool, req rpc.Request) rpc.Response {
 	var out strings.Builder
-	env := d.newEnv(&out, &caller{addr: from, user: !req.Agent, reviewed: free, session: session(from, req)})
-	return d.evalIn(ctx, env, &out, "eval", from, free, req)
+	cur := &caller{addr: from, user: !req.Agent, reviewed: free, session: session(from, req)}
+	return d.evalIn(ctx, d.newEnv(&out, cur), cur, &out, "eval", req)
 }
 
 // session is the agent session a client's request begins chains in: its
@@ -350,12 +350,14 @@ func session(from string, req rpc.Request) string {
 }
 
 // evalIn evaluates req.Src, named file in errors, in env, which prints to
-// out, in the client's directory, for the client's address (from, "" for
-// none). An agent's code that reaches :write waits for review instead, as
-// a whole; the rest runs under :read. A free session's runs as it is.
-func (d *daemon) evalIn(ctx context.Context, env *puff.Env, out *strings.Builder, file, from string, free bool, req rpc.Request) rpc.Response {
+// out and acts for cur, in the client's directory. An agent's code that
+// reaches :write waits for review instead, as a whole; the rest runs under
+// :read. A free session's, cur.reviewed, runs as it is.
+func (d *daemon) evalIn(ctx context.Context, env *puff.Env, cur *caller, out *strings.Builder, file string, req rpc.Request) rpc.Response {
+	from, free := cur.addr, cur.reviewed
 	env.Dir = req.Dir
-	// A free session's eval that writes goes in history, as it runs.
+	// A free session's eval that writes goes in history, as it runs, and
+	// the messages it sends are its.
 	freeWrite := false
 	if req.Agent {
 		if forms, err := puff.Read(file, req.Src); err == nil {
@@ -372,6 +374,10 @@ func (d *daemon) evalIn(ctx context.Context, env *puff.Env, out *strings.Builder
 			}
 		}
 	}
+	if freeWrite {
+		d.do(func(st *state) { cur.id = st.msgID() })
+		defer func() { cur.id = 0 }()
+	}
 	begin := time.Now()
 	v, err := env.Load(ctx, file, req.Src)
 	if freeWrite {
@@ -383,7 +389,7 @@ func (d *daemon) evalIn(ctx context.Context, env *puff.Env, out *strings.Builder
 			reply = puff.Print(v)
 		}
 		d.do(func(st *state) {
-			st.record(entry{at: begin, kind: "eval", from: from, args: puff.Print(puff.NewVector(puff.String(req.Src))),
+			st.record(entry{at: begin, kind: "eval", id: cur.id, from: from, args: puff.Print(puff.NewVector(puff.String(req.Src))),
 				reply: reply, took: time.Since(begin), gate: "free"})
 		})
 	}

@@ -1,12 +1,39 @@
 package rpc
 
 import (
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestChains(t *testing.T) {
+	at := time.Date(2026, 10, 29, 10, 42, 1, 0, time.Local)
+	ms := func(n int) time.Time { return at.Add(time.Duration(n) * time.Millisecond) }
+	// As history records them: a handler's messages before its own entry.
+	es := []Entry{
+		{At: ms(0), Kind: "note", Note: "started"},
+		{At: ms(2), Kind: "call", ID: 2, Cause: 1, Origin: "user", From: "plan", To: "git/status", Args: "[]", Reply: `(ok "clean")`},
+		{At: ms(1), Kind: "pub", ID: 3, Cause: 1, Origin: "user", From: "plan", To: "log on :plan/drafted", Args: `["x"]`, Reply: "(ok :done)"},
+		{At: ms(0), Kind: "call", ID: 1, Origin: "user", To: "plan/draft", Args: `["x"]`, Reply: "(ok :done)"},
+		{At: ms(3), Kind: "call", ID: 5, Cause: 2, Origin: "user", From: "git", To: "fs/read", Args: `["x"]`, Reply: `(ok "")`},
+		{At: ms(5), Kind: "call", ID: 4, Cause: 9, Origin: "agent", From: "agent/3", To: "todo/add", Args: `["y"]`, Reply: "(ok 1)"},
+	}
+	var got []string
+	for _, c := range Chains(es) {
+		got = append(got, fmt.Sprintf("%d:%d", c.ID, c.Depth))
+	}
+	// 4's cause isn't in es; a note has no id.
+	if want := "4:0 1:0 3:1 2:1 5:2 0:0"; strings.Join(got, " ") != want {
+		t.Errorf("chains: %s, want %s", strings.Join(got, " "), want)
+	}
+	if text, want := ChainsText(es), "10:42:01.003      call  user   :git -> :fs/read \"x\"  (ok \"\")\n"; !strings.Contains(text, want) {
+		t.Errorf("chains text:\n%s\nwant a line\n%s", text, want)
+	}
+}
 
 // tempDir is a short directory under /tmp: a unix socket path must fit in
 // about 100 bytes, and t.TempDir's may not.

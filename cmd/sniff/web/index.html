@@ -44,6 +44,10 @@
       <button type="button" class="chip" data-term="mark:write" aria-pressed="false" title="mark:write: to :write functions">Writes</button>
       <input id="query" type="search" aria-label="Filter" placeholder="to:plan from:agent kind:err time:>500ms -to:gh   ( / )" autocomplete="off" spellcheck="false"
         title="Each term must match; -term must not. to:address[/fn] from:address origin:user|agent kind:call|send|pub|done|eval|note|ok|err|fault|pending time:>500ms|<1ms mark:read|write gate:held|refused|accepted|trusted|free|for, or a word">
+      <span class="seg" role="group" aria-label="Show messages as">
+        <button type="button" data-show="chains" aria-pressed="true" title="Each message under the one whose handler sent it">Chains</button>
+        <button type="button" data-show="lanes" aria-pressed="false" title="A lane per address, an arrow per message">Lanes</button>
+      </span>
       <span id="query-error" class="query-error" role="status"></span>
     </form>
     <main id="activity" role="tabpanel" aria-labelledby="tab-activity">

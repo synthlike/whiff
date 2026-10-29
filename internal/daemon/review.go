@@ -68,8 +68,9 @@ func (d *daemon) publishGated(m message) puff.Value {
 					m.gate = "free"
 				}
 			case write:
+				m.id = st.msgID()
 				r = d.hold(st, "", m)
-				st.record(entry{at: time.Now(), kind: "pub", from: m.from, to: "review on :" + m.topic, args: m.args, reply: puff.Print(r), gate: heldGate(r)})
+				st.record(entry{at: time.Now(), kind: "pub", id: m.id, cause: m.cause, from: m.from, to: "review on :" + m.topic, args: m.args, reply: puff.Print(r), gate: heldGate(r)})
 				return
 			}
 		}
@@ -86,7 +87,7 @@ func (d *daemon) hold(st *state, addr string, m message) puff.Value {
 	}
 	held := m
 	held.ctx, held.reply, held.chain = nil, nil, nil
-	a := &asked{ticket: ticket{from: m.from, dir: m.dir, user: m.user, session: m.session}, fn: m.fn, args: v.(puff.Vector), held: &held, to: addr}
+	a := &asked{ticket: ticket{msg: m.id, from: m.from, dir: m.dir, user: m.user, session: m.session}, fn: m.fn, args: v.(puff.Vector), held: &held, to: addr}
 	if m.topic != "" {
 		a.fn, a.to = "publish", m.topic
 	}
@@ -96,9 +97,9 @@ func (d *daemon) hold(st *state, addr string, m message) puff.Value {
 // holdEval puts an agent's code, req.Src, evaluated for from, in :review's
 // inbox as {:fn :eval :args [src]}: see queue. Accepting runs it.
 func (d *daemon) holdEval(st *state, from string, req rpc.Request) puff.Value {
-	a := &asked{ticket: ticket{from: from, dir: req.Dir, session: from}, fn: "eval", args: puff.NewVector(puff.String(req.Src)), src: req.Src}
+	a := &asked{ticket: ticket{msg: st.msgID(), from: from, dir: req.Dir, session: from}, fn: "eval", args: puff.NewVector(puff.String(req.Src)), src: req.Src}
 	r := st.queue(a, "the agent's eval")
-	st.record(entry{at: time.Now(), kind: "eval", from: from, args: puff.Print(a.args), reply: puff.Print(r), gate: heldGate(r)})
+	st.record(entry{at: time.Now(), kind: "eval", id: a.msg, from: from, args: puff.Print(a.args), reply: puff.Print(r), gate: heldGate(r)})
 	return r
 }
 
@@ -116,7 +117,7 @@ func (st *state) queue(a *asked, what string) puff.Value {
 	st.nextID++
 	a.id, a.addr, a.at = st.nextID, "review", time.Now()
 	st.asked = append(st.asked, a)
-	st.publish(message{from: "review", topic: "review/pending", args: puff.Print(puff.NewVector(a.value())), user: a.user})
+	st.publish(message{cause: a.msg, from: "review", topic: "review/pending", args: puff.Print(puff.NewVector(a.value())), user: a.user})
 	return pending(a.id, "%s waits for your review", what)
 }
 
@@ -136,22 +137,25 @@ func (st *state) reviewing() bool {
 // and returns its result, which its sender gets too. The error is for ctx
 // ending. chain is the addresses waiting on the accept: :review, for its
 // own accept, so what the message leads to fails at once if it calls
-// :review back, rather than waiting for itself.
+// :review back, rather than waiting for itself. What it delivers or runs
+// is new in history, caused by what was held.
 func (d *daemon) accept(ctx context.Context, chain []string, id int64) (puff.Value, error) {
 	var a *asked
-	d.do(func(st *state) { a = st.take("review", id) })
+	var next int64
+	d.do(func(st *state) { a, next = st.take("review", id), st.msgID() })
 	if a == nil {
 		return puff.Errorf("no-id", "no message %d waits for review", id), nil
 	}
 	if a.held == nil {
-		r := d.runHeld(ctx, chain, a)
+		r := d.runHeld(ctx, chain, a, next)
 		d.do(func(st *state) {
-			st.record(entry{at: a.at, kind: "eval", from: a.from, args: puff.Print(a.args), reply: puff.Print(r), gate: fmt.Sprintf("accepted %d", a.id)})
+			st.record(entry{at: a.at, kind: "eval", id: next, cause: a.msg, from: a.from, args: puff.Print(a.args), reply: puff.Print(r), gate: fmt.Sprintf("accepted %d", a.id)})
 		})
 		d.reviewed(a, r)
 		return r, ctx.Err()
 	}
 	m := *a.held
+	m.id, m.cause = next, a.msg
 	m.gate = fmt.Sprintf("accepted %d", a.id)
 	if m.topic != "" {
 		m.reviewed = true
@@ -171,9 +175,10 @@ func (d *daemon) accept(ctx context.Context, chain []string, id int64) (puff.Val
 // runHeld runs the code a holds, as its sender's eval would have and
 // passing the gate, within the call timeout. Its Result is the code's
 // value, (ok v) unless it is a Result, or a fault as (err {:kind :fault}).
-// What it prints is dropped. chain is accept's.
-func (d *daemon) runHeld(ctx context.Context, chain []string, a *asked) puff.Value {
-	env := d.newEnv(io.Discard, &caller{addr: a.from, chain: chain, reviewed: true, session: a.session})
+// What it prints is dropped. chain is accept's; id is the eval's in
+// history.
+func (d *daemon) runHeld(ctx context.Context, chain []string, a *asked, id int64) puff.Value {
+	env := d.newEnv(io.Discard, &caller{addr: a.from, id: id, chain: chain, reviewed: true, session: a.session})
 	env.Dir = a.dir
 	ctx, cancel := context.WithTimeout(ctx, d.callTimeout)
 	defer cancel()
@@ -218,7 +223,7 @@ func (d *daemon) reviewed(a *asked, result puff.Value) {
 	)
 	d.do(func(st *state) {
 		d.answer(st, a.ticket, a.to, result)
-		st.publish(message{from: "review", topic: "review/done", args: puff.Print(puff.NewVector(done)), user: a.user})
+		st.publish(message{cause: a.msg, from: "review", topic: "review/done", args: puff.Print(puff.NewVector(done)), user: a.user})
 	})
 }
 

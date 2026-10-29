@@ -47,6 +47,10 @@ type message struct {
 	// reply gets the printed Result, nil for a send. It has room for it, so
 	// the service never waits on a caller that has gone.
 	reply chan string
+	// id is given as m is delivered, one per delivery of a publish, so
+	// its entry in history has its own; cause is the id of what led to
+	// it: see rpc.Entry.
+	id, cause int64
 }
 
 // origin is :user or :agent, the origin of the chain a message belongs to.
@@ -82,6 +86,7 @@ func (m message) to(addr string) string {
 // a client, which has no address.
 type caller struct {
 	addr  string
+	id    int64    // the message being handled, or the eval running, that the messages sent are caused by; 0 for none
 	chain []string // addresses waiting in the current chain, addr last
 	user  bool     // whether the current chain began with the user
 	// reviewed is whether you accepted a message of the current chain at
@@ -103,6 +108,7 @@ type state struct {
 	asked   []*asked // every service's inbox, oldest first
 	jobs    map[int64]*job
 	nextID  int64                       // the last id given to a message answered later, or a job
+	lastMsg int64                       // the last id given to a message or an eval in history: see msgID
 	answers []answered                  // the latest answers, oldest first
 	waiters map[int64][]chan puff.Value // whiff waits, by the id they wait for
 	subs    map[*watcher]bool           // clients' subscriptions: whiff sub
@@ -145,6 +151,13 @@ func (d *daemon) do(op func(st *state)) bool {
 	return true
 }
 
+// msgID is a new id for a message or an eval in history, which the
+// messages it leads to have as their cause.
+func (st *state) msgID() int64 {
+	st.lastMsg++
+	return st.lastMsg
+}
+
 // deliver puts m in addr's mailbox, or its inbox for an ask function, or
 // returns the (err e) for its sender and records it in history.
 func (d *daemon) deliver(addr string, m message) puff.Value {
@@ -159,6 +172,9 @@ func (d *daemon) deliver(addr string, m message) puff.Value {
 // or one the review gate holds, goes to an inbox and is answered (err
 // {:kind :pending :id n}) at once.
 func (d *daemon) put(st *state, addr string, m message) puff.Value {
+	if m.id == 0 {
+		m.id = st.msgID()
+	}
 	var res puff.Value
 	// An agent session's mode may let its message through, as accepted.
 	if !m.user && !m.reviewed && st.lets(m.from, addr) {
@@ -184,7 +200,7 @@ func (d *daemon) put(st *state, addr string, m message) puff.Value {
 			res = puff.Errorf("full", ":%s's mailbox is full", addr)
 		}
 	}
-	st.record(entry{at: time.Now(), kind: m.kind(), user: m.user, from: m.from, to: m.to(addr), args: m.args, reply: puff.Print(res), gate: gate})
+	st.record(entry{at: time.Now(), kind: m.kind(), id: m.id, cause: m.cause, user: m.user, from: m.from, to: m.to(addr), args: m.args, reply: puff.Print(res), gate: gate})
 	return res
 }
 
@@ -215,11 +231,12 @@ func (st *state) publish(m message) {
 		if _, ok := s.subs[m.topic]; !ok {
 			continue
 		}
+		m.id = st.msgID()
 		select {
 		case s.mailbox <- m:
 		default:
 			res := puff.Errorf("full", ":%s's mailbox is full", addr)
-			st.record(entry{at: time.Now(), kind: m.kind(), user: m.user, from: m.from, to: m.to(addr), args: m.args, reply: puff.Print(res), gate: m.gate})
+			st.record(entry{at: time.Now(), kind: m.kind(), id: m.id, cause: m.cause, user: m.user, from: m.from, to: m.to(addr), args: m.args, reply: puff.Print(res), gate: m.gate})
 		}
 	}
 }
@@ -368,7 +385,7 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 				if err != nil {
 					return nil, err
 				}
-				m := message{from: cur.addr, topic: string(topic), args: msg, dir: c.Env.Dir, user: cur.user, reviewed: cur.reviewed, session: cur.session}
+				m := message{cause: cur.id, from: cur.addr, topic: string(topic), args: msg, dir: c.Env.Dir, user: cur.user, reviewed: cur.reviewed, session: cur.session}
 				return d.publishGated(m), nil
 			}},
 		{Name: "call", Args: "target [arg] ...", Mark: puff.MarkWrite, MarkByArgs: true,
@@ -489,7 +506,7 @@ func (cur *caller) message(dir string, args []puff.Value) (message, string, erro
 	if err != nil {
 		return message{}, "", err
 	}
-	return message{from: cur.addr, fn: fn, args: msg, dir: dir, user: cur.user, reviewed: cur.reviewed, session: cur.session}, addr, nil
+	return message{cause: cur.id, from: cur.addr, fn: fn, args: msg, dir: dir, user: cur.user, reviewed: cur.reviewed, session: cur.session}, addr, nil
 }
 
 // readOnly is an error if ctx runs under a :read mark and m, a message to

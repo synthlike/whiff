@@ -114,6 +114,7 @@ func TestRun(t *testing.T) {
 			wantErr: "whiff: {:kind :no-address :message \"no address :nobody\"}\n"},
 		{name: "history", args: []string{"history"}, outHas: `  call  user   client -> :greet/hello "bob"  (ok "hello, bob")  `},
 		{name: "history with a query", args: []string{"history", "to:greet", "bob"}, outHas: `  call  user   client -> :greet/hello "bob"  (ok "hello, bob")  `},
+		{name: "history as chains", args: []string{"history", "-c", "to:greet", "bob"}, outHas: `  call  user   client -> :greet/hello "bob"  (ok "hello, bob")  `},
 		{name: "history of errors", args: []string{"history", "kind:err", "-to:greet"}, outHas: `  send  user   client -> :nobody/x  (err {:kind :no-address`},
 		{name: "history matching nothing", args: []string{"history", "to:nobody", "bob"}},
 		{name: "history with a bad query", args: []string{"history", "-f", "kind:big"}, code: 2,

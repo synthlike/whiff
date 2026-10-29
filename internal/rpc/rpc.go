@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -18,7 +19,7 @@ import (
 
 // Version is the protocol version. Bump it when a message changes; hello and
 // stop must stay readable by every version, so an old daemon can be stopped.
-const Version = 17
+const Version = 18
 
 // Request is a client's message to the daemon. The daemon answers each with
 // a Response, in order, except an answer or a cancel, which have none.
@@ -57,6 +58,8 @@ type Response struct {
 type Entry struct {
 	At     time.Time     `json:"at"`
 	Kind   string        `json:"kind"`             // "call", "send", "pub", "done" (a [:whiff/done id result]), "eval" (an agent's that writes) or "note"
+	ID     int64         `json:"id,omitempty"`     // the message's, one per entry; 0 for a note
+	Cause  int64         `json:"cause,omitempty"`  // the ID of what led to it (see Chains); 0 for a message that began a chain
 	Origin string        `json:"origin,omitempty"` // "user" or "agent"
 	From   string        `json:"from,omitempty"`   // the sender's address; "" for a client
 	To     string        `json:"to,omitempty"`     // address/fn, or address on :topic; "" for a client
@@ -213,6 +216,64 @@ func HistoryText(es []Entry) string {
 	var b strings.Builder
 	for i := len(es) - 1; i >= 0; i-- {
 		b.WriteString(es[i].String())
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+// Chained is an entry of history in its chain: Depth is 0 for the one that
+// began it, 1 for what that led to, and so on.
+type Chained struct {
+	Entry
+	Depth int
+}
+
+// Chains is es, oldest first, as chains: each entry that began one, newest
+// first, then what it led to, as each began, below what led to it. An
+// entry whose cause isn't in es begins a chain of its own.
+func Chains(es []Entry) []Chained {
+	ids := map[int64]bool{}
+	for _, e := range es {
+		if e.ID != 0 {
+			ids[e.ID] = true
+		}
+	}
+	var roots []Entry
+	led := map[int64][]Entry{}
+	for _, e := range es {
+		if ids[e.Cause] {
+			led[e.Cause] = append(led[e.Cause], e)
+		} else {
+			roots = append(roots, e)
+		}
+	}
+	var got []Chained
+	var add func(e Entry, depth int)
+	add = func(e Entry, depth int) {
+		got = append(got, Chained{e, depth})
+		next := led[e.ID]
+		slices.SortStableFunc(next, func(a, b Entry) int { return a.At.Compare(b.At) })
+		for _, n := range next {
+			add(n, depth+1)
+		}
+	}
+	for _, e := range slices.Backward(roots) {
+		add(e, 0)
+	}
+	return got
+}
+
+// ChainsText is es as whiff history -c prints them: as Chains, a line each,
+// indented by depth after the time.
+//
+//	10:42:01.123  call  user   client -> :plan/draft "x"  (ok :done)  3ms
+//	10:42:01.124    call  user   :plan -> :git/status  (ok "clean")  1ms
+func ChainsText(es []Entry) string {
+	var b strings.Builder
+	for _, c := range Chains(es) {
+		line := c.String()
+		at, rest, _ := strings.Cut(line, "  ")
+		b.WriteString(at + "  " + strings.Repeat("  ", c.Depth) + rest)
 		b.WriteByte('\n')
 	}
 	return b.String()

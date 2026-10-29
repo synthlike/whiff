@@ -43,6 +43,7 @@ const usage = `usage:
   whiff repl                      evaluate forms as they're typed, in the daemon, keeping what they define
   whiff history [query]           print every message, newest first; only what query matches, if given
   whiff history -f [query]        print the last 10, oldest first, then each new one until stopped
+  whiff history -c [query]        print it as chains: each message that began one, newest first, then what it led to, indented
                                   query: to:plan from:agent origin:user kind:err 'time:>500ms' mark:write
                                   gate:held, a word, -term for what must not match
   whiff ls                        list every address's functions and their marks, each agent session's mode, then the :read overrides
@@ -120,11 +121,11 @@ func run(args []string, dir, services string, stdout, stderr io.Writer) int {
 	case len(args) == 2 && args[0] == "eval":
 		return eval(dir, args[1], stdout, stderr)
 	case len(args) >= 1 && args[0] == "history":
-		follow := len(args) > 1 && args[1] == "-f"
-		if follow {
-			args = args[1:]
+		flag := ""
+		if len(args) > 1 && (args[1] == "-f" || args[1] == "-c") {
+			flag, args = args[1], args[1:]
 		}
-		return history(dir, follow, strings.Join(args[1:], " "), stdout, stderr)
+		return history(dir, flag, strings.Join(args[1:], " "), stdout, stderr)
 	case len(args) == 1 && args[0] == "ls":
 		return text(dir, (*rpc.Client).Ls, stdout, stderr)
 	case len(args) == 2 && (args[0] == "reset" || args[0] == "state"):
@@ -410,9 +411,10 @@ func sub(dir string, topics []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// history prints history newest first; or, to follow it, the last 10
-// entries oldest first and then each new one, until the daemon stops.
-func history(dir string, follow bool, query string, stdout, stderr io.Writer) int {
+// history prints history newest first; with flag -c, as chains; with -f,
+// to follow it, the last 10 entries oldest first and then each new one,
+// until the daemon stops.
+func history(dir, flag, query string, stdout, stderr io.Writer) int {
 	q, err := rpc.ParseQuery(query)
 	if err != nil {
 		fmt.Fprintf(stderr, "whiff: %v\n", err)
@@ -446,13 +448,17 @@ func history(dir string, follow bool, query string, stdout, stderr io.Writer) in
 		}
 		return got
 	}
-	if !follow {
+	if flag != "-f" {
 		es, err := c.History()
 		if err != nil {
 			fmt.Fprintf(stderr, "whiff: %v\n", err)
 			return 1
 		}
-		io.WriteString(stdout, rpc.HistoryText(match(es, c.Marks)))
+		text := rpc.HistoryText
+		if flag == "-c" {
+			text = rpc.ChainsText
+		}
+		io.WriteString(stdout, text(match(es, c.Marks)))
 		return 0
 	}
 	// Following, c traces history: marks come over a connection of their

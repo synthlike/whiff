@@ -110,10 +110,10 @@ func (d *daemon) runJob(m message, args []puff.Value) (puff.Value, error) {
 	j := &job{cmd: cmdv, cancel: cancel}
 	d.do(func(st *state) {
 		st.nextID++
-		j.ticket = ticket{id: st.nextID, from: m.from, dir: m.dir, user: user, session: m.session}
+		j.ticket = ticket{id: st.nextID, msg: m.id, from: m.from, dir: m.dir, user: user, session: m.session}
 		st.jobs[j.id] = j
 	})
-	d.publish(message{from: "jobs", topic: "jobs/started", args: puff.Print(puff.NewVector(j.value())), dir: m.dir, user: m.user})
+	d.publish(message{cause: m.id, from: "jobs", topic: "jobs/started", args: puff.Print(puff.NewVector(j.value())), dir: m.dir, user: m.user})
 	d.wg.Go(func() {
 		err := cmd.Wait()
 		var r puff.Value
@@ -147,7 +147,7 @@ func (d *daemon) runJob(m message, args []puff.Value) (puff.Value, error) {
 			d.answer(st, j.ticket, "jobs", r)
 		})
 		done, _ := j.value().(puff.Map).With(puff.Keyword("result"), r)
-		d.publish(message{from: "jobs", topic: "jobs/done", args: puff.Print(puff.NewVector(done)), dir: j.dir, user: j.user})
+		d.publish(message{cause: j.msg, from: "jobs", topic: "jobs/done", args: puff.Print(puff.NewVector(done)), dir: j.dir, user: j.user})
 	})
 	return pending(j.id, "job %d runs %s", j.id, argv[0]), nil
 }

@@ -1,5 +1,6 @@
-// sniff's page: history from sniff's event stream, drawn as a lane per
-// address and an arrow per message; details from its JSON endpoints, with
+// sniff's page: history from sniff's event stream, drawn as chains, each
+// message under the one whose handler sent it, or as a lane per address
+// and an arrow per message; details from its JSON endpoints, with
 // values and views drawn by sniff (render); and views as tabs beside it,
 // each its /view page drawn in this one.
 "use strict";
@@ -58,6 +59,8 @@ let entries = []; // history, oldest first
 let lanes = []; // addresses, in the order they first appear; "client" first
 let selected = null; // the row selected
 let bulk = false; // taking a snapshot: lanes are drawn once, after it
+let shown = "chains"; // how history is drawn: "chains" or "lanes"
+const folded = new Set(); // the ids of the chains folded to their heading
 
 // Addresses of an entry: where it comes from and where it goes. A client has
 // no address; to is address/fn, or address on :topic.
@@ -171,13 +174,107 @@ function row(e, i) {
   return r;
 }
 
+// Chains: each entry that began one, then what it led to, as each began,
+// indented under what led to it. One whose cause isn't here, gone from
+// history or left out by the filter, begins a chain of its own. A chain of
+// more than one message has a heading, which folds it.
+function drawChains(frag) {
+  const ids = new Set(entries.map((e) => e.id).filter(Boolean));
+  const led = new Map(); // the indexes of what each id led to, as they began
+  const roots = [];
+  entries.forEach((e, i) => {
+    if (!ids.has(e.cause)) return roots.push(i);
+    if (!led.has(e.cause)) led.set(e.cause, []);
+    led.get(e.cause).push(i);
+  });
+  const walk = (i, depth, chain) => {
+    chain.push([i, depth]);
+    for (const j of led.get(entries[i].id) || []) walk(j, depth + 1, chain);
+    return chain;
+  };
+  for (const i of roots) {
+    const chain = walk(i, 0, []);
+    if (chain.length > 1) frag.append(chainHead(entries[i], chain.length));
+    if (chain.length > 1 && folded.has(entries[i].id)) continue;
+    for (const [j, depth] of chain) frag.append(chainRow(entries[j], j, depth));
+  }
+}
+
+// chainHead is the heading of a chain of n messages that e began: "agent/3
+// asked plan/draft "x"".
+function chainHead(e, n) {
+  const h = el("button", "chain-head");
+  h.type = "button";
+  h.dataset.id = e.id;
+  h.setAttribute("aria-expanded", String(!folded.has(e.id)));
+  const verb = { call: e.origin === "agent" ? "asked" : "called", send: "sent", pub: "published", eval: "ran", done: "answered" }[e.kind];
+  const what = e.kind === "eval" ? "eval" : e.kind === "pub" ? fn(e) : e.to;
+  const args = e.args ? print(e.args).slice(1, -1) : "";
+  const sum = [`${n} messages`, took(e.took), time(e.at).slice(0, 5)].filter(Boolean).join(" · ");
+  h.append(el("span", "fold", folded.has(e.id) ? "▸" : "▾"), el("strong", "", e.from || (e.origin === "agent" ? "client" : "you")),
+    el("span", "verb", verb), el("code", "", what + (args ? " " + args : "")), el("span", "sum", sum));
+  return h;
+}
+
+// chainRow is e, entry i, as a row of its chain, depth deep.
+function chainRow(e, i, depth) {
+  const r = el("div", "row " + e.kind);
+  r.dataset.i = i;
+  r.append(el("span", "time", time(e.at)));
+  if (e.kind === "note") {
+    r.classList.add("noted");
+    r.append(el("div", "note-text", e.note));
+    return r;
+  }
+  if (e.origin === "agent") r.classList.add("agent");
+  const k = kindOf(e.reply);
+  if (k) r.classList.add(k);
+  const what = el("span", "what");
+  what.style.paddingLeft = depth * 18 + "px";
+  what.append(el("span", "glyph", { send: "⇢", pub: "◇", done: "↩", eval: "λ" }[e.kind] || "→"), (e.from ? ":" + e.from : "client") + " → ");
+  if (e.kind === "eval") what.append(el("b", "", "eval"));
+  else if (!e.to) what.append("client");
+  else what.append(":" + to(e) + (e.kind === "pub" ? " on " : "/"), el("b", "", fn(e)));
+  let args = e.args ? print(e.args).slice(1, -1) : "";
+  if (e.kind === "done" && e.args && e.args.v.length) args = print(e.args.v[0]);
+  const rest = el("span", "args", args);
+  if (e.gate) rest.append(" ", el("span", "gate", "[" + e.gate + "]"));
+  r.title = what.textContent + " " + rest.textContent;
+  r.append(what, rest, el("span", "result", e.gate?.startsWith("held") ? "held" : k), el("span", "took", took(e.took)));
+  return r;
+}
+
 function redraw() {
   const rows = $("rows");
   const frag = document.createDocumentFragment();
-  entries.forEach((e, i) => frag.append(row(e, i)));
+  if (shown === "chains") drawChains(frag);
+  else entries.forEach((e, i) => frag.append(row(e, i)));
   rows.replaceChildren(frag);
   $("empty").hidden = entries.length > 0;
   if (selected !== null) mark(selected);
+}
+
+// redrawSoon redraws once for the entries that come in a frame, and keeps
+// the end in sight if stick was for any of them.
+let soon = null, sticking = false;
+function redrawSoon(stick) {
+  sticking ||= stick;
+  soon ??= requestAnimationFrame(() => {
+    soon = null;
+    redraw();
+    if (sticking) $("trace").scrollTop = $("trace").scrollHeight;
+    sticking = false;
+  });
+}
+
+// showAs draws history as chains or lanes, and remembers it.
+function showAs(how) {
+  shown = how;
+  store.set("activity", how);
+  for (const b of document.querySelectorAll("[data-show]")) b.setAttribute("aria-pressed", String(b.dataset.show === how));
+  $("lanes").hidden = how !== "lanes";
+  $("rows").classList.toggle("chains", how === "chains");
+  redraw();
 }
 
 // append adds e in order of when it began: history records a call when it
@@ -190,6 +287,14 @@ function append(e) {
   entries.splice(i, 0, e);
   if (noteFault(e)) drawAddresses();
   if (selected !== null && selected >= i) selected++;
+  $("empty").hidden = true;
+  // A chain can gain a message anywhere, or one that began it after the
+  // rest: it is drawn again.
+  if (shown === "chains") {
+    if (e.kind !== "note") { laneOf(from(e)); laneOf(to(e)); }
+    redrawSoon($("follow").checked && atEnd);
+    return;
+  }
   const n = lanes.length;
   const r = row(e, i);
   if (lanes.length === n) { // else redraw drew it
@@ -198,7 +303,6 @@ function append(e) {
     for (let j = i; j < rows.children.length; j++) rows.children[j].dataset.i = j + 1;
     rows.insertBefore(r, rows.children[i] || null);
   }
-  $("empty").hidden = true;
   if ($("follow").checked && atEnd) trace.scrollTop = trace.scrollHeight;
 }
 
@@ -399,6 +503,13 @@ function setStatus(s) {
 }
 
 $("rows").addEventListener("click", (ev) => {
+  const h = ev.target.closest(".chain-head");
+  if (h) {
+    const id = Number(h.dataset.id);
+    if (!folded.delete(id)) folded.add(id);
+    redraw();
+    return;
+  }
   const r = ev.target.closest(".row");
   if (r) showEntry(Number(r.dataset.i));
 });
@@ -555,6 +666,10 @@ const store = {
     try { localStorage.setItem("sniff." + k, JSON.stringify(v)); } catch {}
   },
 };
+
+// Activity draws history as you last chose, chains or lanes, kept too.
+for (const b of document.querySelectorAll("[data-show]")) b.onclick = () => showAs(b.dataset.show);
+showAs(store.get("activity", "chains") === "lanes" ? "lanes" : "chains");
 
 let tabs = []; // the view tabs, in order
 let active = null; // the view tab shown, or null for Activity

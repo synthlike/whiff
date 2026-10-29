@@ -248,6 +248,11 @@ h1 { font-size: 15px; margin: 0; letter-spacing: .02em; }
   padding: 4px 8px;
 }
 .filters input.bad { border-color: var(--fault); }
+.seg { margin-left: auto; display: inline-flex; border: 1px solid var(--line); border-radius: 5px; overflow: hidden; }
+.seg button { font: 12px var(--sans); color: var(--muted); background: var(--panel); border: 0; padding: 3px 10px; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { color: var(--text); background: var(--select); }
+.seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .query-error { flex-basis: 100%; color: var(--fault); font: 12px var(--mono); }
 .query-error:empty { display: none; }
 @media (max-width: 760px) {
@@ -349,6 +354,43 @@ aside {
   background: var(--note-bg);
   font: 12px var(--mono);
 }
+
+/* Chains: a row per message, indented under the one that led to it. */
+#rows.chains .row { grid-template-columns: 96px minmax(0, 3fr) minmax(0, 2fr) 56px 64px; align-items: center; min-height: 28px; }
+#rows.chains .time, #rows.chains .took { padding-top: 0; }
+#rows.chains .note-text { grid-column: 2 / 6; }
+.what, .args { font: 12px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 8px; }
+.args { color: var(--muted); }
+.args .gate { color: var(--muted); }
+.glyph { display: inline-block; width: 1.4em; color: var(--muted); }
+.pub .what, .pub .glyph { color: var(--pub); }
+.done .glyph { color: var(--done); }
+.result { font: 12px var(--mono); color: var(--muted); }
+.ok .result { color: var(--ok); }
+.err .result { color: var(--err); }
+.fault .result { color: var(--fault); font-weight: 600; }
+.pending .result { color: var(--accent); }
+.chain-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 7px 12px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--line) 35%, var(--bg));
+  color: var(--text);
+  font: 13px var(--sans);
+  text-align: left;
+  cursor: pointer;
+}
+.chain-head:hover { background: color-mix(in srgb, var(--line) 60%, var(--bg)); }
+.chain-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.chain-head .fold, .chain-head .verb { color: var(--muted); flex: none; }
+.chain-head strong { flex: none; font-weight: 600; }
+.chain-head code { font: 12px var(--mono); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chain-head .sum { margin-left: auto; flex: none; font: 11px var(--mono); color: var(--muted); }
 
 /* Details. */
 aside h2 { font: 600 14px var(--mono); margin: 0 0 4px; word-break: break-all; }

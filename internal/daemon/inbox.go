@@ -20,6 +20,7 @@ const inboxSize = 100
 // as :agent's if an agent gave it: see reply.
 type ticket struct {
 	id   int64
+	msg  int64  // the id of the message, or eval, it answers: the cause of the answer
 	from string // the sender's address; "" for a client
 	dir  string // the sender's working directory, for the answer
 	user bool   // whether the message's chain began with the user
@@ -90,10 +91,10 @@ func (d *daemon) ask(st *state, s *service, m message) puff.Value {
 		}
 	}
 	st.nextID++
-	a := &asked{ticket: ticket{id: st.nextID, from: m.from, dir: m.dir, user: m.user, session: m.session}, addr: s.name, fn: m.fn, args: args, at: time.Now()}
+	a := &asked{ticket: ticket{id: st.nextID, msg: m.id, from: m.from, dir: m.dir, user: m.user, session: m.session}, addr: s.name, fn: m.fn, args: args, at: time.Now()}
 	st.asked = append(st.asked, a)
 	if s.name == "me" {
-		st.meChanged(m.user)
+		st.meChanged(m.user, m.id)
 	}
 	if h.expires > 0 {
 		time.AfterFunc(h.expires, func() {
@@ -132,7 +133,7 @@ func (st *state) take(addr string, id int64) *asked {
 	a := st.asked[i]
 	st.asked = slices.Delete(st.asked, i, i+1)
 	if a.addr == "me" {
-		st.meChanged(a.user)
+		st.meChanged(a.user, a.msg)
 	}
 	return a
 }
@@ -158,7 +159,7 @@ func (d *daemon) answer(st *state, t ticket, by string, result puff.Value) {
 		w <- result
 	}
 	delete(st.waiters, t.id)
-	m := message{from: by, fn: "whiff/done", args: puff.Print(puff.NewVector(puff.Int(t.id), result)), dir: t.dir, user: t.user, reviewed: t.reviewed, session: t.session}
+	m := message{id: st.msgID(), cause: t.msg, from: by, fn: "whiff/done", args: puff.Print(puff.NewVector(puff.Int(t.id), result)), dir: t.dir, user: t.user, reviewed: t.reviewed, session: t.session}
 	if s := st.addrs[t.from]; s != nil {
 		if h, ok := s.fns[m.fn]; ok && !h.ask {
 			d.put(st, t.from, m)
@@ -169,7 +170,7 @@ func (d *daemon) answer(st *state, t ticket, by string, result puff.Value) {
 	if t.from != "" {
 		to = m.to(t.from)
 	}
-	st.record(entry{at: time.Now(), kind: m.kind(), user: m.user, from: by, to: to, args: m.args})
+	st.record(entry{at: time.Now(), kind: m.kind(), id: m.id, cause: m.cause, user: m.user, from: by, to: to, args: m.args})
 }
 
 // handOn gives m's sender the answer to id, a job or ask by sent, as
@@ -188,7 +189,7 @@ func (d *daemon) handOn(by string, id int64, m message) error {
 		}
 		if t != nil && t.from == by {
 			found = true
-			t.from, t.dir, t.user, t.session = m.from, m.dir, t.user && m.user, sameSession(t.session, m.session)
+			t.msg, t.from, t.dir, t.user, t.session = m.id, m.from, m.dir, t.user && m.user, sameSession(t.session, m.session)
 			return
 		}
 		for i, a := range slices.Backward(st.answers) {
@@ -196,7 +197,7 @@ func (d *daemon) handOn(by string, id int64, m message) error {
 				found = true
 				// Handed on once: by can't hand it on again.
 				st.answers[i].from = m.from
-				d.answer(st, ticket{id: id, from: m.from, dir: m.dir, user: a.user && m.user, session: sameSession(a.session, m.session)}, a.by, a.result)
+				d.answer(st, ticket{id: id, msg: m.id, from: m.from, dir: m.dir, user: a.user && m.user, session: sameSession(a.session, m.session)}, a.by, a.result)
 				return
 			}
 		}

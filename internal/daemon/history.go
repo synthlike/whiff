@@ -16,6 +16,8 @@ const historySize = 1000
 type entry struct {
 	at    time.Time
 	kind  string // "call", "send", "pub", "done" or "eval", an agent's that writes
+	id    int64  // the message's, or the eval's
+	cause int64  // what led to it: see rpc.Entry
 	user  bool   // the origin: whether the chain began with the user
 	from  string // the sender's address; "" for a client
 	to    string // address/fn, or address on :topic; "" for a client
@@ -31,7 +33,7 @@ func (e entry) rpc() rpc.Entry {
 	if e.note != "" {
 		return rpc.Entry{At: e.at, Kind: "note", Note: e.note}
 	}
-	return rpc.Entry{At: e.at, Kind: e.kind, Origin: string(origin(e.user)), From: e.from, To: e.to,
+	return rpc.Entry{At: e.at, Kind: e.kind, ID: e.id, Cause: e.cause, Origin: string(origin(e.user)), From: e.from, To: e.to,
 		Args: e.args, Reply: e.reply, Took: e.took, Gate: e.gate}
 }
 

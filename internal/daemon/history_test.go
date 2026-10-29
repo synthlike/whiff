@@ -93,12 +93,54 @@ func TestTrace(t *testing.T) {
 		t.Fatal(err)
 	}
 	e := next()
-	e.At, e.Took = time.Time{}, 0
+	if e.ID == 0 || e.Cause != 0 {
+		t.Errorf("a client's call has id %d and cause %d, want an id and no cause", e.ID, e.Cause)
+	}
+	e.At, e.Took, e.ID = time.Time{}, 0, 0
 	if want := (rpc.Entry{Kind: "call", Origin: "user", To: "greet/hello", Args: `["bob"]`, Reply: `(ok "hello, bob")`}); e != want {
 		t.Errorf("entry:\n%+v\nwant\n%+v", e, want)
 	}
 	writeServices(t, dir, map[string]string{"broken": `(service broken`})
 	if e := next(); e.Kind != "note" || !strings.HasSuffix(e.Note, "broken.puff:1:1: no closing ')'") || e.Origin != "" {
 		t.Errorf("note: %+v", e)
+	}
+}
+
+func TestChains(t *testing.T) {
+	dir := tempDir(t)
+	writeServices(t, dir, map[string]string{
+		"front": `(service front
+  (on (greet name) "Tells of name, and greets them." (do (publish :front/greeted name) (call :greet/hello name))))`,
+		"greet": `(service greet (on (hello name) "Greets name." (ok (string/concat "hello, " name))))`,
+		"log":   `(service log (on :front/greeted (v) (ok v)))`,
+	})
+	start(t, dir)
+	c := dial(t, dir)
+	if r, err := c.Message("call", "front/greet", `["ann"]`, ""); err != nil || r.Value != `(ok "hello, ann")` {
+		t.Fatalf("front/greet: %+v %v", r, err)
+	}
+
+	// The publish is handled after front has replied.
+	byTo := map[string]rpc.Entry{}
+	for deadline := time.Now().Add(2 * time.Second); byTo["log on :front/greeted"].ID == 0 && time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		es, err := c.History()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range es {
+			byTo[e.To] = e
+		}
+	}
+	front, hello, log := byTo["front/greet"], byTo["greet/hello"], byTo["log on :front/greeted"]
+	if front.ID == 0 || front.Cause != 0 {
+		t.Errorf("the client's call: id %d, cause %d; want an id and no cause", front.ID, front.Cause)
+	}
+	for _, e := range []rpc.Entry{hello, log} {
+		if e.ID == 0 || e.ID == front.ID || e.Cause != front.ID {
+			t.Errorf("%s: id %d, cause %d; want its own id and cause %d", e.To, e.ID, e.Cause, front.ID)
+		}
+	}
+	if hello.ID == log.ID {
+		t.Errorf("the call and the publish share id %d", hello.ID)
 	}
 }
