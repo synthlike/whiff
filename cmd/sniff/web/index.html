@@ -11,6 +11,11 @@
 <header>
   <h1>sniff</h1>
   <span id="status" class="status">connecting…</span>
+  <button type="button" id="goto" class="goto" aria-haspopup="dialog">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-4-4"></path></svg>
+    <span class="grow">Go to an address, view or function, or call one…</span>
+    <kbd class="mod-k">⌘K</kbd>
+  </button>
   <span class="grow"></span>
   <label class="follow"><input type="checkbox" id="follow" checked> follow</label>
 </header>
@@ -63,5 +68,18 @@
     </main>
   </div>
 </div>
+<dialog id="palette" class="palette" aria-label="Go to or call">
+  <div class="palette-box">
+    <div class="palette-input">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-4-4"></path></svg>
+      <input id="palette-q" role="combobox" aria-label="Go to or call" aria-controls="palette-list" aria-expanded="true" aria-autocomplete="list"
+        placeholder="Go to an address, view or function, or call one…" autocomplete="off" spellcheck="false">
+      <kbd>esc</kbd>
+    </div>
+    <div id="palette-list" class="palette-list" role="listbox" aria-label="Matches"></div>
+    <div id="palette-reply" class="palette-reply"></div>
+    <p class="palette-keys"><span><kbd>↑↓</kbd> move</span> <span><kbd>↵</kbd> open or call</span> <span><kbd>(</kbd> type a whole form: <code>(todo/add "x")</code></span></p>
+  </div>
+</dialog>
 </body>
 </html>

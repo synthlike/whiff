@@ -304,12 +304,16 @@ function chainRow(e, i, depth) {
 
 function redraw() {
   const rows = $("rows");
+  // A heading you went to, by j and k or a click, stays where you are.
+  const f = rows.contains(document.activeElement) ? document.activeElement : null;
+  const again = f?.dataset.id ? `.${f.classList[0]}[data-id="${f.dataset.id}"]` : null;
   const frag = document.createDocumentFragment();
   if (shown === "chains") drawChains(frag);
   else entries.forEach((e, i) => frag.append(row(e, i)));
   rows.replaceChildren(frag);
   $("empty").hidden = entries.length > 0;
   if (selected !== null) mark(selected);
+  if (again) rows.querySelector(again)?.focus({ preventScroll: true });
 }
 
 // redrawSoon redraws once for the entries that come in a frame, and keeps
@@ -411,15 +415,31 @@ function showEntry(i) {
   if (e.args) d.append(section("Arguments", drawn(e.args)));
   if (!e.reply) d.append(section("Reply", el("p", "hint", "None: nobody handled it.")));
   else d.append(section("Reply", drawn(e.reply, "reply")));
-  // A view a :read function answers can be a tab of its own, where its
-  // actions work.
-  const view = e.reply?.t === "tag" && e.reply.n === "ok" && e.reply.v[0]?.t === "tag";
-  if (view && e.kind === "call" && e.args && marks.get(e.to) === "read") {
+  const view = viewOf(e);
+  if (view) {
     const a = el("a", "open", "Open :" + e.to + " as a tab");
-    a.href = pageOf(e.to, e.args);
+    a.href = view;
     d.append(a);
   }
-  d.append(entryActions(e, chain[0]));
+  d.append(entryActions(e, chain[0]), keysLine());
+}
+
+// viewOf is the page of the view e answered, or null: a view a :read
+// function answers can be a tab of its own, where its actions work.
+function viewOf(e) {
+  const view = e.reply?.t === "tag" && e.reply.n === "ok" && e.reply.v[0]?.t === "tag";
+  return view && e.kind === "call" && e.args && marks.get(e.to) === "read" ? pageOf(e.to, e.args) : null;
+}
+
+// keysLine is the keys that work over Activity.
+function keysLine() {
+  const p = el("p", "keys");
+  const keys = [["j", "/", "k", " next/previous"], ["enter", " open"], ["/", " filter"], ["c", " call again"], [modK, " go to or call"]];
+  keys.forEach((k, n) => {
+    if (n) p.append(" · ");
+    k.forEach((s, m) => p.append(m % 2 ? s : el("kbd", "", s)));
+  });
+  return p;
 }
 
 // chainOf is the indexes of what led to entry i, from the entry that began
@@ -1222,6 +1242,222 @@ document.addEventListener("click", (ev) => {
   }, (err) => { b.title = err.message; });
 });
 
+// Keys over Activity: j and k go to the next and previous message or
+// chain heading, Enter opens it (a heading folds or unfolds, a message
+// answered with a view opens it as a tab), c opens Call again for the
+// message shown, and Esc there leaves it uncalled; never while you type,
+// or over a tab.
+document.addEventListener("keydown", (ev) => {
+  if (active || palette.open || ev.metaKey || ev.ctrlKey || ev.altKey) return;
+  const typing = ev.target.closest?.("input, textarea, select, [contenteditable]");
+  if (typing) {
+    if (ev.key === "Escape" && $("detail").contains(typing)) {
+      typing.closest("details")?.removeAttribute("open");
+      typing.blur();
+    }
+    return;
+  }
+  if (ev.key === "j" || ev.key === "k") {
+    ev.preventDefault();
+    step(ev.key === "j" ? 1 : -1);
+  } else if (ev.key === "Enter" && selected !== null && !ev.target.closest?.("button, a, summary")) {
+    const view = viewOf(entries[selected]);
+    if (view) {
+      ev.preventDefault();
+      openTab(view);
+    }
+  } else if (ev.key === "c" && selected !== null) {
+    const again = $("detail").querySelector("details.again");
+    if (!again) return;
+    ev.preventDefault();
+    again.open = true;
+    again.querySelector("input").focus();
+  }
+});
+
+// step goes d messages or headings on from where you are, the heading
+// focused or the message selected; from neither, to the first or last.
+function step(d) {
+  const all = [...$("rows").querySelectorAll(".chain-head, .reads-head, .row")];
+  let at = all.indexOf(document.activeElement);
+  if (at < 0 && selected !== null) at = all.indexOf(document.querySelector(`.row[data-i="${selected}"]`));
+  const next = all[at < 0 ? (d > 0 ? 0 : all.length - 1) : Math.max(0, Math.min(all.length - 1, at + d))];
+  if (!next) return;
+  if (next.classList.contains("row")) {
+    if ($("rows").contains(document.activeElement)) document.activeElement.blur();
+    showEntry(Number(next.dataset.i));
+  } else {
+    next.focus({ preventScroll: true });
+  }
+  next.scrollIntoView({ block: "nearest" });
+}
+
+// The palette, ⌘K: go to an address, a view or a function, or call one,
+// with the filters ready for what you typed. A whole form, (todo/add "x"),
+// is called as you, as Call again calls: a call, never code.
+const palette = $("palette");
+const paletteQ = $("palette-q");
+const modK = /Mac|iPhone|iPad/.test(navigator.userAgent) ? "⌘K" : "Ctrl K";
+let picks = []; // what Enter can do, in the order shown
+let picked = 0; // the pick Enter does
+
+function openPalette() {
+  if (palette.open) return paletteQ.select();
+  paletteQ.value = "";
+  $("palette-reply").replaceChildren();
+  drawPicks();
+  palette.showModal();
+}
+
+// drawPicks lists what matches the palette's text: each word of it is in
+// a name, names that begin with the first word first.
+function drawPicks() {
+  const text = paletteQ.value.trim();
+  const words = text.toLowerCase().split(/\s+/).filter(Boolean).map((w) => w.replace(/^:/, ""));
+  const hits = (name) => words.every((w) => name.toLowerCase().includes(w));
+  const first = (xs, name) => xs.filter((x) => hits(name(x)))
+    .sort((x, y) => Number(!name(x).toLowerCase().startsWith(words[0] || "")) - Number(!name(y).toLowerCase().startsWith(words[0] || "")))
+    .slice(0, 8);
+  const groups = [];
+  if (text.startsWith("(")) {
+    groups.push(["Call", [pick([el("code", "", text)], "↵ call as you", () => callForm(text), true)]]);
+  } else {
+    const fns = first(addresses.flatMap((a) => a.fns.map((f) => ({ a, f, name: a.address + "/" + f.fn }))), (x) => x.name);
+    groups.push(["Functions", fns.map(({ f, name }) => {
+      const tab = f.mark === "read" && !f.params.length && f.form !== "ask";
+      return pick([el("code", "", name), el("span", "badge " + f.mark, f.mark), el("span", "doc", f.doc)],
+        tab ? "opens a tab" : "↵ fill in args",
+        tab ? () => go(() => openTab(pageOf(name, { t: "vec", v: [] }))) : () => fillIn(name, f.params));
+    })]);
+    // todo/ matches :todo too, as it begins its functions.
+    const addrs = first(addresses, (a) => a.address + "/");
+    groups.push(["Addresses", addrs.map((a) => {
+      const fault = faulted.has(a.address);
+      const what = el("span", "pick-line addr" + (a.client ? " client" : "") + (fault ? " fault" : ""));
+      what.append(el("span", "dot"), el("code", "", ":" + a.address), el("span", "doc",
+        [`${a.fns.length} function${a.fns.length === 1 ? "" : "s"}`, a.state && "state", a.client && "client", fault && "fault"].filter(Boolean).join(" · ")));
+      return pick([what], "", () => go(() => { activate(null); showAddress(a.address); }), true);
+    })]);
+    const views = [...new Set(["/view/review/pending", "/view/me/inbox", ...pins, ...tabs.map((t) => t.href)])];
+    groups.push(["Views", [
+      ...(hits("activity") ? [pick([el("span", "", "Activity")], "", () => go(() => activate(null)), true)] : []),
+      ...first(views, titleOf).map((href) => pick([el("code", "", titleOf(href))], "opens a tab", () => go(() => openTab(href)), true)),
+    ]]);
+    // The filters for the address or function matched first, and for
+    // what you typed, if it reads as a query.
+    const show = [];
+    const filter = (label, q) => {
+      const what = el("span", "pick-line");
+      what.append(...label, el("code", "doc", q));
+      show.push(pick([what], "", () => go(() => { activate(null); setQuery(q); }), true));
+    };
+    if (words.length && text.includes("/") && fns[0]) filter(["Messages to ", el("code", "", ":" + fns[0].name)], "to:" + fns[0].name);
+    if (words.length && addrs[0]) {
+      const x = addrs[0].address, at = () => el("code", "", ":" + x);
+      filter(["Messages to ", at()], "to:" + x);
+      filter(["Messages from ", at()], "from:" + x);
+      filter(["Failed calls to ", at()], `to:${x} kind:err`);
+    }
+    if (words.some((w) => /^-?[a-z]+:./.test(w))) filter(["Filter history by "], text);
+    groups.push(["Show", show]);
+  }
+  const list = $("palette-list");
+  list.replaceChildren();
+  picks = [];
+  for (const [title, items] of groups) {
+    if (!items.length) continue;
+    list.append(el("h3", "", title));
+    for (const p of items) {
+      const n = picks.length;
+      p.id = "pick-" + n;
+      p.addEventListener("mousemove", () => { if (picked !== n) markPick(n); });
+      p.addEventListener("click", () => { markPick(n); p.run(); });
+      list.append(p);
+      picks.push(p);
+    }
+  }
+  if (!picks.length) list.append(el("p", "hint", addresses.length ? "Nothing matches." : "Nothing to go to while whiff isn't running."));
+  markPick(0);
+}
+
+// pick is a row of the palette, of nodes, that run does; then says what it
+// does; a wide one has no mark or doc columns.
+function pick(nodes, then, run, wide) {
+  const p = el("div", "pick" + (wide ? " wide" : ""));
+  p.setAttribute("role", "option");
+  p.append(...nodes, el("span", "then", then));
+  p.run = run;
+  return p;
+}
+
+function markPick(n) {
+  picked = Math.max(0, Math.min(picks.length - 1, n));
+  picks.forEach((p, i) => p.setAttribute("aria-selected", String(i === picked)));
+  if (picks.length) {
+    paletteQ.setAttribute("aria-activedescendant", picks[picked].id);
+    picks[picked].scrollIntoView({ block: "nearest" });
+  } else {
+    paletteQ.removeAttribute("aria-activedescendant");
+  }
+}
+
+// go closes the palette and does f.
+function go(f) {
+  palette.close();
+  f();
+}
+
+// fillIn puts a call of name as a form in the palette, its first "…"
+// selected, so typing replaces it.
+function fillIn(name, params) {
+  paletteQ.value = "(" + [name, ...params.map(() => '"…"')].join(" ") + ")";
+  drawPicks();
+  const at = paletteQ.value.indexOf("…");
+  if (at >= 0) paletteQ.setSelectionRange(at, at + 1);
+  else paletteQ.setSelectionRange(paletteQ.value.length - 1, paletteQ.value.length - 1);
+}
+
+// callForm calls text, a form, (todo/add "x"), as you, as [:todo/add "x"],
+// and shows its reply in the palette.
+async function callForm(text) {
+  const out = $("palette-reply");
+  const action = "[:" + text.slice(1).replace(/\)\s*$/, "").trim().replace(/^:/, "") + "]";
+  out.replaceChildren(el("p", "hint", "…"));
+  try {
+    const r = await fetch("api/call", { method: "POST", body: new URLSearchParams({ action }) });
+    if (!r.ok) throw new Error((await r.text()).trim());
+    out.replaceChildren(drawn(await r.json(), "reply"));
+  } catch (err) {
+    out.replaceChildren(el("p", "query-error", err.message));
+  }
+}
+
+paletteQ.addEventListener("input", () => {
+  $("palette-reply").replaceChildren();
+  drawPicks();
+});
+paletteQ.addEventListener("keydown", (ev) => {
+  if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+    ev.preventDefault();
+    markPick(picked + (ev.key === "ArrowDown" ? 1 : -1));
+  } else if (ev.key === "Enter" && !ev.isComposing) {
+    ev.preventDefault();
+    picks[picked]?.run();
+  }
+});
+// A click outside it closes it.
+palette.addEventListener("click", (ev) => { if (ev.target === palette) palette.close(); });
+$("goto").onclick = openPalette;
+document.querySelector("#goto .mod-k").textContent = modK;
+// ⌘K, or Ctrl K, opens it from anywhere, and closes it again.
+document.addEventListener("keydown", (ev) => {
+  if (!(ev.metaKey || ev.ctrlKey) || ev.altKey || ev.shiftKey || ev.key?.toLowerCase() !== "k") return;
+  ev.preventDefault();
+  if (palette.open) palette.close();
+  else openPalette();
+});
+
+$("detail").append(keysLine());
 drawPins();
 for (const href of store.get("tabs", [])) openTab(href, false);
 activate(tabs.find((t) => t.href === store.get("active", "")) || null);
