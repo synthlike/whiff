@@ -10,6 +10,7 @@
 ;   whiff call pipeline/view        ; the same as items, to show or cancel
 ;   whiff call pipeline/show 1      ; its last review and the diff it was of
 ;   whiff call pipeline/cancel 1
+;   whiff call pipeline/retry 2 "keep the old flag too"   ; after it gave up
 ;   whiff inbox                     ; how a run ended
 ;   whiff sub pipeline/done
 ;   whiff sub pipeline/step         ; {:run :step} as a run takes each step
@@ -60,17 +61,18 @@
         (map/set-in [:jobs id] [n step])
         (set-run n {:step step :job id}))))
 
-  ; dev-cmd is the dev's claude: its session's first turn, or a later one.
-  ; It may run the check, as it is or with more arguments, and no MCP
-  ; servers: none of your own Claude setup's.
+  ; dev-cmd is the dev's claude: its session's first turn, or a later one
+  ; once a turn has ended in it, :resumable. It may run the check, as it is
+  ; or with more arguments, and no MCP servers: none of your own Claude
+  ; setup's.
   (def (dev-cmd run)
     (match run
-      [{:session s :round r :check check}
+      [{:session s :check check}
        (vector/concat
          ["claude" "-p" "--strict-mcp-config" "--tools" "Read,Edit,Write,Glob,Grep,Bash"
           "--allowedTools" (str "Bash(" (string/join check " ") ")") (str "Bash(" (string/join check " ") ":*)")
           "--permission-mode" "acceptEdits" "--append-system-prompt" dev-system]
-         (if (= r 1) ["--session-id" s] ["--resume" s]))]))
+         (if (map/get-or run :resumable #f) ["--resume" s] ["--session-id" s]))]))
 
   (def (dev state n input)
     (let [run (run-of state n)
@@ -121,13 +123,15 @@
 
   (def (reviewed state n text)
     (let [{:round round :checked checked :dir dir :task task :branch branch} (run-of state n)
+          ; A retried run has rounds more than it had.
+          limit (map/get-or (run-of state n) :limit rounds)
           state (set-run state n {:review text})
           approved (string/contains? text "VERDICT: approve")]
       (cond
         [(and (passed? checked) approved)
          (do (try (git dir ["commit" "-q" "-m" (subject task) "-m" task]))
            (finish state n :ready (str "Committed on " branch " in " dir ", after " round " rounds. The last review:\n\n" text)))]
-        [(>= round rounds)
+        [(>= round limit)
          (finish state n :gave-up (str "Not approved after " round " rounds; the work is in " dir ". The last review:\n\n" text))]
         [_
          (dev (set-run state n {:round (+ round 1)}) n
@@ -135,12 +139,26 @@
              (if (passed? checked) "" (str "The check " (check-text checked) "\n\n"))
              "Fix what needs fixing."))])))
 
+  ; actions are what can be done about run n once it ended as status: show
+  ; its last review and diff, and retry it unless it is ready.
+  (def (actions n status)
+    (let [show {:label "Show review and diff" :action [:pipeline/show n]}]
+      (if (= status :ready)
+        [show]
+        [show {:label "Retry with a note" :action [:pipeline/retry n] :ask "A note for the developer, if any"}])))
+
+  (test "a run that didn't end ready can be retried"
+    (= [(actions 1 :ready) (actions 2 :gave-up)]
+      [[{:label "Show review and diff" :action [:pipeline/show 1]}]
+       [{:label "Show review and diff" :action [:pipeline/show 2]}
+        {:label "Retry with a note" :action [:pipeline/retry 2] :ask "A note for the developer, if any"}]]))
+
   ; finish ends run n as status, telling you in your inbox unless it is
-  ; quiet, and on :pipeline/done.
+  ; quiet, with what you can do about it, and on :pipeline/done.
   (def (finish state n status note)
     (let [{:task task :branch branch :dir dir :quiet quiet} (run-of state n)]
       ; :me/tell answers pending, as it waits in your inbox.
-      (do (if quiet :quiet (or-else (call :me/tell (str "pipeline " n ", " task ": " (keyword/name status) ". " note)) :told))
+      (do (if quiet :quiet (or-else (call :me/tell (str "pipeline " n ", " task ": " (keyword/name status) ". " note) {:actions (actions n status)}) :told))
         (publish :pipeline/done {:run n :status status :branch branch :dir dir :note note})
         ; After :pipeline/done, so a planner hears of the end first.
         (publish :pipeline/step {:run n :step status})
@@ -154,7 +172,7 @@
         [(not (= (map/get-or run :step :none) step)) (ok state)]
         [(= step :dev)
          (match r
-           [(ok _) (check state n)]
+           [(ok _) (check (set-run state n {:resumable #t}) n)]
            [(err e) (finish state n :failed (str "The developer failed: " (value/to-string e)))])]
         [(= step :check)
          (match r
@@ -166,6 +184,24 @@
            [(err e) (finish state n :failed (str "The reviewer failed: " (value/to-string e)))])])))
 
   (def (active? step) (vector/contains? [:dev :check :review] step))
+
+  ; ended? is whether a run at step ended without being ready.
+  (def (ended? step) (vector/contains? [:gave-up :failed :cancelled] step))
+
+  ; retry-input is what the dev gets when you retry run: your note, if
+  ; any, and the last review, in the session it has; or the task, with
+  ; your note, in a new one.
+  (def (retry-input run note)
+    (let [noted (if (= note "") "" (str "A note from the user:\n\n" note "\n\n"))]
+      (if (map/get-or run :resumable #f)
+        (str noted
+          (match (map/get run :review) [(some r) (str "The last review:\n\n" r "\n\n")] [(none) ""])
+          "Fix what needs fixing.")
+        (str "Task: " (map/get-or run :task "") "\n\n" noted))))
+
+  (test "a retry resumes with your note and the last review, or starts again with the task"
+    (= [(retry-input {:resumable #t :review "no tests"} "add them") (retry-input {:task "t"} "")]
+      ["A note from the user:\n\nadd them\n\nThe last review:\n\nno tests\n\nFix what needs fixing." "Task: t\n\n"]))
 
   ; begin starts a run on task in repo, from base, a commit or branch: [n
   ; state], or the err it couldn't start for.
@@ -201,12 +237,16 @@
           (fn ([n {:task t :step s :round r :branch b :dir d}]) {:run n :task t :step s :round r :branch b :dir d}))))
 
   (on (view state) :read
-    "The runs as a view: each shows its last review and diff, and cancels it while it runs."
+    "The runs as a view: each shows its last review and diff, cancels it while it runs, and retries it once it ended without being ready, unless a planner runs it."
     (ok (view/items (vector/map (map/entries (map/get-or state :runs {}))
-                      (fn ([n {:task t :step s :round r :branch b}])
-                        (let [show {:label "Show review and diff" :action [:pipeline/show n]}]
+                      (fn ([n run])
+                        (let [{:task t :step s :round r :branch b} run
+                              show {:label "Show review and diff" :action [:pipeline/show n]}]
                           {:label (str n "  " t) :detail (str (keyword/name s) ", round " r ", " b)
-                           :actions (if (active? s) [show {:label "Cancel the run" :action [:pipeline/cancel n]}] [show])})))
+                           :actions (cond
+                                      [(active? s) [show {:label "Cancel the run" :action [:pipeline/cancel n]}]]
+                                      [(map/get-or run :quiet #f) [show]]
+                                      [_ (actions n s)])})))
           {:changed :pipeline/step})))
 
   (on (show state n) :read
@@ -228,6 +268,17 @@
          (publish :pipeline/step {:run n :step :cancelled})
          (ok [:cancelled (set-run state n {:step :cancelled})]))]
       [_ (err {:kind :no-run :message (str "no run " n " is going")})]))
+
+  (on (retry state n note) :write :update
+    "Takes run n on after it gave up, failed or was cancelled, for up to 3 more rounds: the dev Claude, in the run's worktree, gets note, your words for it (\"\" for none), and the last review. (ok :retrying); (err {:kind :no-run}) unless run n ended so."
+    (match (map/get-in state [:runs n])
+      [(some run) when (ended? (map/get-or run :step :none))
+       (let [round (map/get-or run :round 1)
+             ; A session no dev turn ended in may not exist: a new one.
+             fresh (if (map/get-or run :resumable #f) {} {:session (uuid/new)})
+             state (set-run state n (map/merge fresh {:round (+ round 1) :limit (+ round rounds)}))]
+         (ok [:retrying (try (dev state n (retry-input (run-of state n) note)))]))]
+      [_ (err {:kind :no-run :message (str "run " n " hasn't ended without being ready: nothing to retry")})]))
 
   (on (whiff/done state id r) :update
     "A job a run waited for is done: the run takes its next step."

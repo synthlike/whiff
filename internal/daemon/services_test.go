@@ -511,7 +511,7 @@ if [ "$1 $2 $3 $4" = "-p --strict-mcp-config --tools " ]; then
   if [ -f "$FAKE/picky" ]; then echo "needs work"; echo "VERDICT: changes"; else echo "looks good"; echo "VERDICT: approve"; fi
   exit 0
 fi
-cat > /dev/null
+cat > "$FAKE/dev-input"
 case " $* " in
   *" --resume "*) echo "dev resume $(basename "$PWD")" >> "$FAKE/log"; echo t > test.txt ;;
   *" --session-id "*) echo "dev new $(basename "$PWD")" >> "$FAKE/log"; echo f > feature.txt ;;
@@ -610,11 +610,34 @@ echo "changed things"
 		!strings.Contains(got, ":round 3 :run 2 :step :gave-up") {
 		t.Errorf("runs = %s", got)
 	}
-	if got := call("view", "[]"); !strings.Contains(got, `{:actions [{:action [:pipeline/show 2] :label "Show review and diff"}] :detail "gave-up, round 3, whiff/2" :label "2  another"}`) {
+	retry := `{:action [:pipeline/retry 2] :ask "A note for the developer, if any" :label "Retry with a note"}`
+	if got := call("view", "[]"); !strings.Contains(got, `{:actions [{:action [:pipeline/show 2] :label "Show review and diff"} `+retry+`] :detail "gave-up, round 3, whiff/2" :label "2  another"}`) {
 		t.Errorf("view = %s", got)
 	}
 	if got := call("cancel", "[2]"); !strings.Contains(got, ":no-run") {
 		t.Errorf("cancel of an ended run = %s", got)
+	}
+
+	// Retried with a note, it goes on in the dev's session, and the
+	// reviewer, no longer picky, approves.
+	os.Remove(filepath.Join(fake, "picky"))
+	if got := call("retry", `[2 "keep it small"]`); got != "(ok :retrying)" {
+		t.Fatalf("retry = %s", got)
+	}
+	if got := done(); !strings.Contains(got, ":status :ready") {
+		t.Errorf("done after a retry = %s", got)
+	}
+	if b, _ := os.ReadFile(filepath.Join(fake, "dev-input")); !strings.HasPrefix(string(b), "A note from the user:\n\nkeep it small\n\nThe last review:\n\nneeds work") {
+		t.Errorf("the retried dev was told:\n%s", b)
+	}
+	if b, _ := os.ReadFile(filepath.Join(fake, "log")); !strings.HasSuffix(string(b), "dev resume repo-2\nreview repo-2\n") {
+		t.Errorf("claude was run:\n%s", b)
+	}
+	if got := call("runs", "[]"); !strings.Contains(got, ":round 4 :run 2 :step :ready") {
+		t.Errorf("runs after a retry = %s", got)
+	}
+	if got := call("retry", `[2 ""]`); !strings.Contains(got, ":no-run") {
+		t.Errorf("retry of a ready run = %s", got)
 	}
 
 	// Outside a repository nothing starts.
@@ -645,7 +668,7 @@ func TestPlanService(t *testing.T) {
 	claude := `#!/bin/sh
 case "$4" in
   Read,Glob,Grep) cat > /dev/null; printf 'Here is the plan:\n` + "```" + `json\n["one", "two"]\n` + "```" + `\n' ;;
-  "") cat > /dev/null; echo "VERDICT: approve" ;;
+  "") cat > /dev/null; if [ -f "$HOME/picky" ]; then echo "VERDICT: changes"; else echo "VERDICT: approve"; fi ;;
   *) task=$(sed -n 's/^Task: //p'); echo "$task" > "$task.txt"; echo "wrote $task.txt" ;;
 esac
 `
@@ -688,7 +711,8 @@ esac
 		t.Fatalf("plan/start = %+v %v", resp, err)
 	}
 	// Only the plan tells you: its runs are quiet.
-	want := `:plan -> :me/tell "plan 1, two files: done. All 2 tasks built; whiff/2 has them all."` + "\n"
+	// Its report offers the last run's review and diff.
+	want := `:plan -> :me/tell "plan 1, two files: done. All 2 tasks built; whiff/2 has them all." {:actions [{:action [:pipeline/show 2] :label "Show review and diff"}]}` + "\n"
 	eventually(t, "the plan", func() string {
 		text, _ := c.Inbox("me")
 		if _, tell, ok := strings.Cut(text, "  "); ok && strings.Count(text, "\n") == 1 {
@@ -731,6 +755,43 @@ esac
 		if ch != "plan/changed {:plan 1}" {
 			t.Errorf("change = %q", ch)
 		}
+	}
+
+	// A picky reviewer stops a plan at its first task; retried, it goes on.
+	call := func(fn, args string) string {
+		t.Helper()
+		resp, err := c.Message("call", "plan/"+fn, args, repo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.Value
+	}
+	inboxHas := func(what, s string) {
+		t.Helper()
+		eventually(t, what, func() string {
+			if text, _ := c.Inbox("me"); !strings.Contains(text, s) {
+				return text
+			}
+			return "there"
+		}, "there")
+	}
+	os.WriteFile(filepath.Join(dir, "picky"), nil, 0o600)
+	if got := call("start", `["more files" ["true"]]`); got != "(ok 2)" {
+		t.Fatalf("plan/start = %s", got)
+	}
+	retry := `{:action [:plan/retry 2] :ask "A note for the developer, if any" :label "Retry with a note"}`
+	inboxHas("the plan stopped", `"plan 2, more files: failed. Task 1 of 2 ended gave-up: `)
+	inboxHas("its actions", `[{:action [:pipeline/show 3] :label "Show review and diff"} `+retry+`]`)
+	if got := call("board", "[]"); !strings.Contains(got, `:actions [{:action [:pipeline/show 3] :label "Show review and diff"} `+retry+`] :detail "plan 2, task 1 of 2, round 3, whiff/3"`) {
+		t.Errorf("board of a stopped plan = %s", got)
+	}
+	os.Remove(filepath.Join(dir, "picky"))
+	if got := call("retry", `[2 "go on"]`); got != "(ok :retrying)" {
+		t.Fatalf("plan/retry = %s", got)
+	}
+	inboxHas("the retried plan", `"plan 2, more files: done. All 2 tasks built; whiff/4 has them all."`)
+	if got := call("retry", `[2 ""]`); !strings.Contains(got, ":no-plan") {
+		t.Errorf("retry of a done plan = %s", got)
 	}
 }
 
