@@ -61,6 +61,7 @@ let selected = null; // the row selected
 let bulk = false; // taking a snapshot: lanes are drawn once, after it
 let shown = "chains"; // how history is drawn: "chains" or "lanes"
 const folded = new Set(); // the ids of the chains folded to their heading
+let only = null; // the id of the one chain shown, or null for every one
 
 // Addresses of an entry: where it comes from and where it goes. A client has
 // no address; to is address/fn, or address on :topic.
@@ -177,7 +178,7 @@ function row(e, i) {
 // Chains: each entry that began one, then what it led to, as each began,
 // indented under what led to it. One whose cause isn't here, gone from
 // history or left out by the filter, begins a chain of its own. A chain of
-// more than one message has a heading, which folds it.
+// more than one message is a box of its own, with a heading that folds it.
 function drawChains(frag) {
   const ids = new Set(entries.map((e) => e.id).filter(Boolean));
   const led = new Map(); // the indexes of what each id led to, as they began
@@ -192,12 +193,69 @@ function drawChains(frag) {
     for (const j of led.get(entries[i].id) || []) walk(j, depth + 1, chain);
     return chain;
   };
+  // Reads a client made one after another, as a page's polling does, fold
+  // into one row, "client: 6 reads", that opens to show them. Another
+  // message alone that repeats the one alone before it, the same call with
+  // the same arguments and kind of reply, folds into it: the latest is
+  // drawn, with how many times.
+  let last = null; // {key, row, n}
+  let reads = []; // the indexes of the reads in a row so far
+  const flush = () => {
+    if (reads.length === 1) frag.append(chainRow(entries[reads[0]], reads[0], 0));
+    else if (reads.length) frag.append(readsBox(reads));
+    reads = [];
+  };
   for (const i of roots) {
+    if (only && entries[i].id !== only) continue;
     const chain = walk(i, 0, []);
-    if (chain.length > 1) frag.append(chainHead(entries[i], chain.length));
-    if (chain.length > 1 && folded.has(entries[i].id)) continue;
-    for (const [j, depth] of chain) frag.append(chainRow(entries[j], j, depth));
+    const e = entries[i];
+    if (chain.length === 1 && !e.from && e.kind === "call" && marks.get(e.to) === "read" && kindOf(e.reply) === "ok") {
+      reads.push(i);
+      last = null;
+      continue;
+    }
+    flush();
+    if (chain.length === 1) {
+      const r = chainRow(e, i, 0);
+      const key = e.kind === "note" ? null : [e.kind, e.from, e.to, e.args ? print(e.args) : "", kindOf(e.reply)].join(" ");
+      if (key && last?.key === key) {
+        last.n++;
+        r.querySelector(".args").append(" ", el("span", "times", "×" + last.n));
+        last.row.replaceWith(r);
+        last.row = r;
+      } else {
+        frag.append(r);
+        last = { key, row: r, n: 1 };
+      }
+      continue;
+    }
+    last = null;
+    const box = el("div", "chain");
+    box.append(chainHead(entries[i], chain.length));
+    if (!folded.has(entries[i].id)) {
+      for (const [j, depth] of chain) box.append(chainRow(entries[j], j, depth));
+    }
+    frag.append(box);
   }
+  flush();
+}
+
+// readsBox is a client's reads in a row, the entries at is: "client: 6
+// reads", and what they read, which opens to show them.
+const openReads = new Set(); // the ids of the first of the runs of reads opened
+function readsBox(is) {
+  const first = entries[is[0]].id, open = openReads.has(first);
+  const box = el("div", "reads");
+  const h = el("button", "reads-head");
+  h.type = "button";
+  h.dataset.id = first;
+  h.setAttribute("aria-expanded", String(open));
+  const what = [...new Set(is.map((i) => entries[i].to))].join(", ");
+  h.append(el("span", "fold", open ? "▾" : "▸"), `client: ${is.length} reads`, el("span", "what-read", what),
+    el("span", "sum", time(entries[is[0]].at).slice(0, 8) + "–" + time(entries[is.at(-1)].at).slice(0, 8)));
+  box.append(h);
+  if (open) for (const i of is) box.append(chainRow(entries[i], i, 0));
+  return box;
 }
 
 // chainHead is the heading of a chain of n messages that e began: "agent/3
@@ -230,7 +288,7 @@ function chainRow(e, i, depth) {
   const k = kindOf(e.reply);
   if (k) r.classList.add(k);
   const what = el("span", "what");
-  what.style.paddingLeft = depth * 18 + "px";
+  what.style.setProperty("--depth", depth);
   what.append(el("span", "glyph", { send: "⇢", pub: "◇", done: "↩", eval: "λ" }[e.kind] || "→"), (e.from ? ":" + e.from : "client") + " → ");
   if (e.kind === "eval") what.append(el("b", "", "eval"));
   else if (!e.to) what.append("client");
@@ -267,10 +325,25 @@ function redrawSoon(stick) {
   });
 }
 
+// showOnly shows only the chain that id began, as chains; or, for null,
+// every chain again.
+function showOnly(id) {
+  only = id;
+  $("only").hidden = !id;
+  if (id && shown !== "chains") showAs("chains");
+  else redraw();
+  if (selected !== null) showEntry(selected);
+}
+$("only").onclick = () => showOnly(null);
+
 // showAs draws history as chains or lanes, and remembers it.
 function showAs(how) {
   shown = how;
   store.set("activity", how);
+  if (how === "lanes") { // lanes show every message
+    only = null;
+    $("only").hidden = true;
+  }
   for (const b of document.querySelectorAll("[data-show]")) b.setAttribute("aria-pressed", String(b.dataset.show === how));
   $("lanes").hidden = how !== "lanes";
   $("rows").classList.toggle("chains", how === "chains");
@@ -333,20 +406,123 @@ function showEntry(i) {
   meta.append(el("span", "", time(e.at)), el("span", "badge", e.origin), el("span", "", took(e.took)));
   if (e.gate) meta.append(gateBadge(e.gate));
   d.replaceChildren(head, meta);
+  const chain = chainOf(i);
+  if (chain.length > 1) d.prepend(crumbs(chain));
   if (e.args) d.append(section("Arguments", drawn(e.args)));
-  if (!e.reply) {
-    d.append(section("Reply", el("p", "hint", "None: nobody handled it.")));
-    return;
-  }
-  d.append(section("Reply", drawn(e.reply, "reply")));
+  if (!e.reply) d.append(section("Reply", el("p", "hint", "None: nobody handled it.")));
+  else d.append(section("Reply", drawn(e.reply, "reply")));
   // A view a :read function answers can be a tab of its own, where its
   // actions work.
-  const view = e.reply.t === "tag" && e.reply.n === "ok" && e.reply.v[0]?.t === "tag";
+  const view = e.reply?.t === "tag" && e.reply.n === "ok" && e.reply.v[0]?.t === "tag";
   if (view && e.kind === "call" && e.args && marks.get(e.to) === "read") {
     const a = el("a", "open", "Open :" + e.to + " as a tab");
     a.href = pageOf(e.to, e.args);
     d.append(a);
   }
+  d.append(entryActions(e, chain[0]));
+}
+
+// chainOf is the indexes of what led to entry i, from the entry that began
+// its chain, and i last.
+function chainOf(i) {
+  const at = new Map(entries.map((e, j) => [e.id, j]));
+  const path = [i];
+  for (let e = entries[i]; e.cause && at.has(e.cause); e = entries[path[0]]) path.unshift(at.get(e.cause));
+  return path;
+}
+
+// crumbs is where an entry sits in its chain, path: who began it, then
+// what each message was for, "agent/3 › plan/draft › pipeline/run"; each
+// but the last shows its message.
+function crumbs(path) {
+  const nav = el("nav", "crumbs");
+  nav.setAttribute("aria-label", "Its chain");
+  const root = entries[path[0]];
+  nav.append(root.from || (root.origin === "agent" ? "client" : "you"));
+  path.forEach((j, n) => {
+    const e = entries[j];
+    const name = e.kind === "eval" ? "eval" : e.kind === "pub" ? fn(e) : e.kind === "done" ? "done" : e.to;
+    nav.append(" › ");
+    if (n === path.length - 1) return nav.append(el("b", "", name));
+    const b = el("button", "", name);
+    b.type = "button";
+    b.onclick = () => showEntry(j);
+    nav.append(b);
+  });
+  return nav;
+}
+
+// asPuff is e as puff that sends it again: (call :plan/draft "x"),
+// (publish :topic v), an eval's code, or a done's [id result].
+function asPuff(e) {
+  const args = e.args ? print(e.args).slice(1, -1) : "";
+  const form = (head) => "(" + head + (args ? " " + args : "") + ")";
+  switch (e.kind) {
+    case "eval": return e.args?.v[0]?.v ?? "";
+    case "done": return e.args ? print(e.args) : "";
+    case "pub": return form("publish " + fn(e));
+    case "send": return form("send :" + e.to);
+  }
+  return form("call :" + e.to);
+}
+
+// entryActions are what you can do with e, whose chain began with entry
+// root: copy it as puff, show only its chain, or call it again as you.
+function entryActions(e, root) {
+  const box = el("div", "entry-actions");
+  const copy = el("button", "", "Copy as puff");
+  copy.type = "button";
+  copy.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(asPuff(e));
+      copy.textContent = "Copied";
+    } catch {
+      copy.textContent = "Can't copy here";
+    }
+    setTimeout(() => { copy.textContent = "Copy as puff"; }, 1500);
+  };
+  box.append(copy);
+  if (entries[root].id && only !== entries[root].id) {
+    const b = el("button", "", "Only this chain");
+    b.type = "button";
+    b.onclick = () => showOnly(entries[root].id);
+    box.append(b);
+  }
+  if ((e.kind === "call" || e.kind === "send") && e.to) {
+    const again = el("details", "again");
+    again.append(el("summary", "", "Call again…"), callBox("[:" + e.to + (e.args && e.args.v.length ? " " + print(e.args).slice(1, -1) : "") + "]"));
+    box.append(again);
+  }
+  return box;
+}
+
+// callBox is a form that calls action, [:address/fn args...], as you,
+// which you can edit first, with its reply shown under it, and then calls
+// then, if given. It takes a call, never code.
+function callBox(action, then) {
+  const box = el("div", "call-box");
+  const form = el("form");
+  const input = el("input");
+  input.name = "action";
+  input.value = action;
+  input.setAttribute("aria-label", "The message, as [:address/fn args...]");
+  input.spellcheck = false;
+  const out = el("div", "call-reply");
+  form.append(input, el("button", "", "Call as you"));
+  form.onsubmit = async (ev) => {
+    ev.preventDefault();
+    out.replaceChildren(el("p", "hint", "…"));
+    try {
+      const r = await fetch("api/call", { method: "POST", body: new URLSearchParams(new FormData(form)) });
+      if (!r.ok) throw new Error((await r.text()).trim());
+      out.replaceChildren(drawn(await r.json(), "reply"));
+      then?.();
+    } catch (err) {
+      out.replaceChildren(el("p", "query-error", err.message));
+    }
+  };
+  box.append(form, out);
+  return box;
 }
 
 // gateBadge is how the review gate treated an agent's write: held or
@@ -403,6 +579,7 @@ async function loadAddresses() {
   }
   marks = new Map();
   for (const a of addresses) for (const f of a.fns) marks.set(a.address + "/" + f.fn, f.mark);
+  if (shown === "chains") redraw(); // a client's reads fold, by their marks
   if (!linked && location.hash.startsWith("#:")) showAddress(decodeURIComponent(location.hash.slice(2)));
   linked = true;
   drawAddresses();
@@ -447,6 +624,36 @@ function drawAddresses() {
 }
 
 // showAddress shows an address's functions and state; #:name links to it.
+// talksWith is who sent name messages and whom it sent them, by how many,
+// in the history shown; each filters history to those messages.
+function talksWith(name) {
+  const ins = new Map(), outs = new Map();
+  for (const e of entries) {
+    if (e.kind === "note") continue;
+    const a = from(e), b = to(e);
+    if (b === name && a !== name) ins.set(a, (ins.get(a) || 0) + 1);
+    if (a === name && b !== name) outs.set(b, (outs.get(b) || 0) + 1);
+  }
+  const box = el("div", "talks");
+  const line = (label, counts, query) => {
+    if (!counts.size) return;
+    const p = el("p", "", label + " ");
+    for (const [x, n] of [...counts].sort((p, q) => q[1] - p[1])) {
+      const who = x === "client" ? "client" : ":" + x;
+      const b = el("button", "", `${who} ${n}`);
+      b.type = "button";
+      b.title = "show these messages: " + query(x);
+      b.onclick = () => setQuery(query(x));
+      p.append(b, " ");
+    }
+    box.append(p);
+  };
+  line("From", ins, (x) => `from:${x} to:${name}`);
+  line("To", [...outs.keys()].includes("client") ? new Map([...outs].filter(([x]) => x !== "client")) : outs, (x) => `from:${name} to:${x}`);
+  if (!box.childElementCount) box.append(el("p", "hint", "No messages in the history shown."));
+  return box;
+}
+
 async function showAddress(name) {
   history.replaceState(null, "", "#:" + encodeURIComponent(name));
   selected = null;
@@ -464,34 +671,61 @@ async function showAddress(name) {
   meta.append(el("span", "badge", a.client ? "client" : "service"));
   if (a.state) meta.append(el("span", "badge", "state"));
   d.append(meta);
+  // Its state, fetched again after you call one of its functions.
+  const stateBox = el("div", "", "…");
+  const loadState = async () => {
+    try {
+      const t = await getJSON("api/state?address=" + encodeURIComponent(name));
+      stateBox.replaceChildren(drawn(t.t === "tag" && t.n === "ok" ? t.v[0] : t));
+    } catch (err) {
+      stateBox.replaceChildren(el("p", "hint", err.message));
+    }
+  };
   const table = el("table", "fns");
   for (const f of a.fns) {
     const tr = el("tr");
     const sig = (f.form === "ask" ? "ask " : "") + "(" + [f.fn, ...f.params].join(" ") + ")";
     const mk = el("span", "badge " + f.mark, ":" + f.mark);
     const c1 = el("td"), c2 = el("td"), c3 = el("td", "doc", f.doc);
-    // A :read function of no arguments links to its answer's page.
+    // A :read function of no arguments links to its answer's page, a tab;
+    // any other opens a form under it that calls it as you.
     if (f.mark === "read" && !f.params.length && f.form !== "ask") {
       const link = el("a", "", sig);
       link.href = pageOf(name + "/" + f.fn, { t: "vec", v: [] });
-      link.title = "open what :" + name + "/" + f.fn + " answers as a page";
+      link.title = "open what :" + name + "/" + f.fn + " answers as a tab";
       c1.append(link);
     } else {
-      c1.textContent = sig;
+      const b = el("button", "fn-call", sig);
+      b.type = "button";
+      b.title = "call :" + name + "/" + f.fn + " as you";
+      b.setAttribute("aria-expanded", "false");
+      b.onclick = () => {
+        const open = tr.nextElementSibling?.classList.contains("call-row");
+        b.setAttribute("aria-expanded", String(!open));
+        if (open) return tr.nextElementSibling.remove();
+        const row = el("tr", "call-row"), td = el("td");
+        td.colSpan = 3;
+        const box = callBox("[:" + name + "/" + f.fn + f.params.map(() => ' "…"').join("") + "]", a.state ? loadState : null);
+        td.append(box);
+        row.append(td);
+        tr.after(row);
+        // The first "…" selected, so typing replaces it.
+        const input = box.querySelector("input"), at = input.value.indexOf("…");
+        input.focus();
+        if (at >= 0) input.setSelectionRange(at, at + 1);
+      };
+      c1.append(b);
     }
     c2.append(mk);
     tr.append(c1, c2, c3);
     table.append(tr);
   }
   d.append(section("Functions", a.fns.length ? table : el("p", "hint", "None.")));
+  d.append(section("Talks with", talksWith(name)));
   if (agent) showSession(d, name);
   if (a.state) {
-    try {
-      const t = await getJSON("api/state?address=" + encodeURIComponent(name));
-      d.append(section("State", drawn(t.t === "tag" && t.n === "ok" ? t.v[0] : t)));
-    } catch (err) {
-      d.append(section("State", el("p", "hint", err.message)));
-    }
+    d.append(section("State", stateBox));
+    await loadState();
   }
 }
 
@@ -507,6 +741,13 @@ $("rows").addEventListener("click", (ev) => {
   if (h) {
     const id = Number(h.dataset.id);
     if (!folded.delete(id)) folded.add(id);
+    redraw();
+    return;
+  }
+  const rh = ev.target.closest(".reads-head");
+  if (rh) {
+    const id = Number(rh.dataset.id);
+    if (!openReads.delete(id)) openReads.add(id);
     redraw();
     return;
   }
@@ -570,12 +811,12 @@ function setQuery(q) {
 
 function drawChips(q) {
   const terms = q.split(" ");
-  for (const c of document.querySelectorAll(".filters .chip")) {
+  for (const c of document.querySelectorAll(".filters .chip[data-term]")) {
     c.setAttribute("aria-pressed", String(terms.includes(c.dataset.term)));
   }
 }
 
-for (const c of document.querySelectorAll(".filters .chip")) {
+for (const c of document.querySelectorAll(".filters .chip[data-term]")) {
   c.onclick = () => {
     const terms = query.split(" ").filter(Boolean);
     const i = terms.indexOf(c.dataset.term);

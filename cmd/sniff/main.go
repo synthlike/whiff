@@ -334,6 +334,7 @@ func (s *server) handler() http.Handler {
 	mux.Handle("GET /", http.FileServerFS(files))
 	mux.HandleFunc("GET /view/", s.page)
 	mux.HandleFunc("POST /act", s.act)
+	mux.HandleFunc("POST /api/call", s.call)
 	mux.HandleFunc("POST /render", s.render)
 	mux.HandleFunc("GET /events", s.events)
 	mux.HandleFunc("GET /api/addresses", s.addresses)
@@ -740,47 +741,34 @@ func (s *server) render(w http.ResponseWriter, r *http.Request) {
 	pages.ExecuteTemplate(w, "value", n)
 }
 
-// act sends what a page's form picked, an item's action, as you, as whiff
-// act does, with your answer added if the form asked for one, and goes
-// back to the page it came from, which shows what it answered. Only
-// sniff's own pages can post it: the cookie is SameSite, and a browser
-// says where a post comes from, with Sec-Fetch-Site, which no page can
-// set; or, an older one, with Origin.
-func (s *server) act(w http.ResponseWriter, r *http.Request) {
+// posted parses r's form, or answers why not: only sniff's own pages can
+// post one. The cookie is SameSite, and a browser says where a post comes
+// from, with Sec-Fetch-Site, which no page can set; or, an older one, with
+// Origin.
+func (s *server) posted(w http.ResponseWriter, r *http.Request) bool {
 	site, o := r.Header.Get("Sec-Fetch-Site"), r.Header.Get("Origin")
 	if site != "" && site != "same-origin" {
 		http.Error(w, fmt.Sprintf("send it from sniff's page, not from a %s one", site), http.StatusForbidden)
-		return
+		return false
 	}
 	if site == "" && o != "" && o != fmt.Sprintf("http://127.0.0.1:%d", s.port) && o != fmt.Sprintf("http://localhost:%d", s.port) {
 		http.Error(w, fmt.Sprintf("send it from sniff's page, not from %s", o), http.StatusForbidden)
-		return
+		return false
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+		return false
 	}
-	msg := r.PostForm.Get("action")
-	if answer, ok := r.PostForm["answer"]; ok {
-		v, err := puff.ReadValue(msg)
-		if vec, ok := v.(puff.Vector); err == nil && ok {
-			items := make([]puff.Value, vec.Len(), vec.Len()+1)
-			for i := range items {
-				items[i] = vec.At(i)
-			}
-			msg = puff.Print(puff.NewVector(append(items, puff.String(strings.TrimSpace(strings.Join(answer, ""))))...))
-		}
-	}
+	return true
+}
+
+// send calls msg, a printed [:address/fn args...], as you, as whiff act
+// does, and says what it answered; the error is for msg not being one.
+func (s *server) send(msg string) (said, error) {
 	target, args, err := action(msg)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	// back is a page of sniff's own, never another site.
-	back := r.PostForm.Get("back")
-	if !strings.HasPrefix(back, "/") || strings.HasPrefix(back, "//") || strings.HasPrefix(back, "/\\") {
-		back = "/"
+		return said{}, err
 	}
 	sd := said{Sends: msg}
 	if c, err := s.dial(); err != nil {
@@ -797,6 +785,51 @@ func (s *server) act(w http.ResponseWriter, r *http.Request) {
 			sd.Reply = resp.Value
 			sd.OK = strings.HasPrefix(resp.Value, "(ok ")
 		}
+	}
+	return sd, nil
+}
+
+// call sends the action posted, as act does, and answers its reply as a
+// tree: the page's Call again.
+func (s *server) call(w http.ResponseWriter, r *http.Request) {
+	if !s.posted(w, r) {
+		return
+	}
+	sd, err := s.send(r.PostForm.Get("action"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, treeOf(sd.Reply))
+}
+
+// act sends what a page's form picked, an item's action, as you, with your
+// answer added if the form asked for one, and goes back to the page it
+// came from, which shows what it answered.
+func (s *server) act(w http.ResponseWriter, r *http.Request) {
+	if !s.posted(w, r) {
+		return
+	}
+	msg := r.PostForm.Get("action")
+	if answer, ok := r.PostForm["answer"]; ok {
+		v, err := puff.ReadValue(msg)
+		if vec, ok := v.(puff.Vector); err == nil && ok {
+			items := make([]puff.Value, vec.Len(), vec.Len()+1)
+			for i := range items {
+				items[i] = vec.At(i)
+			}
+			msg = puff.Print(puff.NewVector(append(items, puff.String(strings.TrimSpace(strings.Join(answer, ""))))...))
+		}
+	}
+	sd, err := s.send(msg)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// back is a page of sniff's own, never another site.
+	back := r.PostForm.Get("back")
+	if !strings.HasPrefix(back, "/") || strings.HasPrefix(back, "//") || strings.HasPrefix(back, "/\\") {
+		back = "/"
 	}
 	s.mu.Lock()
 	s.saidN++

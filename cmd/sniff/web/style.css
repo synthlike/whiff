@@ -356,10 +356,54 @@ aside {
 }
 
 /* Chains: a row per message, indented under the one that led to it. */
-#rows.chains .row { grid-template-columns: 96px minmax(0, 3fr) minmax(0, 2fr) 56px 64px; align-items: center; min-height: 28px; }
-#rows.chains .time, #rows.chains .took { padding-top: 0; }
+#rows.chains .row { grid-template-columns: 112px minmax(0, 3fr) minmax(0, 2fr) 56px 64px; align-items: center; min-height: 28px; }
+#rows.chains .time, #rows.chains .took { padding-top: 0; white-space: nowrap; }
+.times { color: var(--text); font-weight: 600; }
+/* A client's reads in a row, folded: quiet, as they change nothing. */
+.reads { margin: 0 11px; }
+.reads-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  min-height: 28px;
+  padding: 0 8px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: 12px var(--sans);
+  text-align: left;
+  cursor: pointer;
+}
+.reads-head:hover { color: var(--text); background: color-mix(in srgb, var(--select) 50%, transparent); }
+.reads-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.reads-head .what-read { font: 11px var(--mono); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.reads-head .sum { margin-left: auto; flex: none; font: 11px var(--mono); }
+.reads[open], .reads:has(.row) { border-left: 2px solid var(--line); }
 #rows.chains .note-text { grid-column: 2 / 6; }
+#rows.chains { padding: 4px 0; }
+/* Single messages line up with the rows in a chain's box. */
+#rows.chains > .row { margin: 0 11px; }
+.chain {
+  margin: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  overflow: hidden;
+}
+.chain .row + .row { border-top: 1px solid color-mix(in srgb, var(--line) 50%, transparent); }
 .what, .args { font: 12px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 8px; }
+/* A line down each level a message is under, so its depth shows. */
+.what {
+  --depth: 0;
+  align-self: stretch;
+  line-height: 28px;
+  padding-left: calc(var(--depth) * 18px);
+  background-image: repeating-linear-gradient(to right, transparent 0 5px, var(--lane) 5px 6px, transparent 6px 18px);
+  background-size: calc(var(--depth) * 18px) 100%;
+  background-repeat: no-repeat;
+}
+.what > b { font-weight: 600; }
 .args { color: var(--muted); }
 .args .gate { color: var(--muted); }
 .glyph { display: inline-block; width: 1.4em; color: var(--muted); }
@@ -378,7 +422,6 @@ aside {
   min-width: 0;
   padding: 7px 12px;
   border: 0;
-  border-top: 1px solid var(--line);
   background: color-mix(in srgb, var(--line) 35%, var(--bg));
   color: var(--text);
   font: 13px var(--sans);
@@ -401,6 +444,33 @@ aside h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; co
 .badge.held { color: var(--accent); border-color: currentColor; }
 .badge.through { color: var(--done); border-color: currentColor; }
 .label .gate { color: var(--muted); font-weight: normal; }
+.crumbs { font: 11px var(--mono); color: var(--muted); margin-bottom: 6px; overflow-wrap: anywhere; }
+.crumbs button { font: inherit; color: var(--accent); background: none; border: 0; padding: 0; cursor: pointer; }
+.crumbs button:hover { text-decoration: underline; }
+.crumbs b { color: var(--text); }
+.entry-actions { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 6px; margin-top: 16px; }
+.entry-actions > button, .again > summary, .call-box button, .talks button {
+  font: 12px var(--sans);
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.entry-actions > button:hover, .again > summary:hover, .call-box button:hover, .talks button:hover { border-color: var(--accent); }
+.again > summary { list-style: none; display: inline-block; }
+.again > summary::-webkit-details-marker { display: none; }
+.again[open] { flex-basis: 100%; }
+.call-box form { display: flex; gap: 6px; margin-top: 6px; }
+.call-box input { flex: 1; min-width: 0; font: 12px var(--mono); color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 4px 8px; }
+.call-box button { color: #fff; background: var(--accent); border-color: var(--accent); }
+.call-reply { margin-top: 8px; }
+.call-row > td { padding: 0 0 10px; }
+.fn-call { font: inherit; color: var(--accent); background: none; border: 0; padding: 0; text-align: left; cursor: pointer; }
+.fn-call:hover { text-decoration: underline; }
+.talks p { margin: 0 0 6px; color: var(--muted); }
+.talks button { font: 12px var(--mono); padding: 1px 8px; margin-bottom: 2px; }
 .session .line {
   display: block;
   width: 100%;

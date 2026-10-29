@@ -440,6 +440,19 @@ func TestViews(t *testing.T) {
 		t.Errorf("view after acting = %s", got)
 	}
 
+	// Call again: an action posted as a form, its reply as a tree.
+	call := url.Values{"action": {"[:board/times 3]"}}.Encode()
+	if r, b := do("POST", "/api/call", "application/x-www-form-urlencoded", call, "Sec-Fetch-Site", "same-origin"); r.StatusCode != http.StatusOK ||
+		strings.TrimSpace(b) != `{"t":"tag","n":"ok","v":[{"t":"tag","n":"text","v":[{"t":"str","v":"6"}]}]}` {
+		t.Errorf("call: %s %s", r.Status, b)
+	}
+	if r, _ := do("POST", "/api/call", "application/x-www-form-urlencoded", call, "Sec-Fetch-Site", "cross-site"); r.StatusCode != http.StatusForbidden {
+		t.Errorf("another site's call: %s", r.Status)
+	}
+	if r, _ := do("POST", "/api/call", "application/x-www-form-urlencoded", "action=%5B1%5D"); r.StatusCode != http.StatusBadRequest {
+		t.Errorf("a bad call: %s", r.Status)
+	}
+
 	// A :read function's view with args, as a :read action links to it.
 	if r, b := do("GET", "/api/view?target=board/times&args="+url.QueryEscape("[3]"), "", ""); r.StatusCode != http.StatusOK ||
 		strings.TrimSpace(b) != `{"t":"tag","n":"ok","v":[{"t":"tag","n":"text","v":[{"t":"str","v":"6"}]}]}` {
