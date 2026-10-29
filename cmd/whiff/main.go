@@ -227,7 +227,7 @@ func try(dir, file, fn string, args []string, stdout, stderr io.Writer) int {
 
 // test runs the tests in each service file, from here, printing each that
 // fails and how many passed: 0 if they all did, 1 if any failed or a file
-// didn't load.
+// didn't load. A file that isn't formatted, as puff -f would, fails too.
 func test(dir string, files []string, stdout, stderr io.Writer) int {
 	wd, err := os.Getwd()
 	if err != nil {
@@ -246,6 +246,11 @@ func test(dir string, files []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "whiff: %v\n", err)
 			failed++
 			continue
+		}
+		// A file that doesn't read is left for the daemon to say why.
+		if out, err := puff.Format(file, string(src)); err == nil && out != string(src) {
+			fmt.Fprintf(stdout, "FAIL %s: not formatted; puff -f %s\n", file, file)
+			failed++
 		}
 		resp, err := c.Test(file, string(src), wd)
 		if err != nil {

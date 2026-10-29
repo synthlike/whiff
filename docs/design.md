@@ -127,7 +127,8 @@ subscribers and private `def`s.
   when not. Loading a service skips its tests; `whiff test file.puff` loads
   it under a scratch address without its `:start` and runs them, as you,
   and so only from your connections. `puff -t` does the same for a plain
-  puff file.
+  puff file. `whiff test` also fails a file that isn't formatted as `puff
+  -f` would, so a service an agent wrote comes back in the one layout.
 - **State.** `(service gh :state {} ...)` gives every handler the state as its
   first parameter. An `:update` handler returns `(ok [reply state])`, or
   `(ok state)` for a subscriber or `whiff/done`, where nobody waits for a
