@@ -152,3 +152,61 @@ func TestMeInbox(t *testing.T) {
 		t.Errorf("dismiss again = %s", r)
 	}
 }
+
+// A question offers its choices, and a report its actions; an agent's
+// report's actions are labelled with their messages, since clicking one
+// sends it as you.
+func TestMeChoicesAndActions(t *testing.T) {
+	dir := tempDir(t)
+	start(t, dir)
+	c := dial(t, dir)
+	agent := dial(t, dir)
+	agent.Agent = true
+	call := func(c *rpc.Client, target, args string) string {
+		t.Helper()
+		resp, err := c.Message("call", target, args, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.Value + resp.Error
+	}
+	id := func(r string) string {
+		t.Helper()
+		v, _ := puff.ReadValue(r)
+		n, ok := pendingID(v)
+		if !ok {
+			t.Fatalf("%s isn't pending", r)
+		}
+		return puff.Print(puff.Int(n))
+	}
+
+	q := id(call(c, "me/ask", `["merge whiff/2?" {:choices ["yes" "no"]}]`))
+	yours := id(call(c, "me/tell", `["plan 1 done" {:actions [{:label "Show the diff" :action [:me/inbox]}]}]`))
+	agents := id(call(agent, "me/tell", `["plan 2 done" {:actions [{:label "Show the diff" :action [:me/answer 1 "x"]}]}]`))
+	want := `(ok (items [` +
+		`{:actions [{:action [:me/answer ` + q + ` "yes"] :label "yes"} {:action [:me/answer ` + q + ` "no"] :label "no"} {:action [:me/answer ` + q + `] :ask "Your answer" :label "Other"}] :detail "` + q + `: client asks" :label "merge whiff/2?"} ` +
+		`{:actions [{:action [:me/inbox] :label "Show the diff"} {:action [:me/answer ` + yours + `] :label "Dismiss"}] :detail "` + yours + `: client tells you" :label "plan 1 done"} ` +
+		`{:actions [{:action [:me/answer 1 "x"] :label "[:me/answer 1 \"x\"]"} {:action [:me/answer ` + agents + `] :label "Dismiss"}] :detail "` + agents + `: client tells you" :label "plan 2 done"}` +
+		`] {:changed :me/changed}))`
+	if r := call(c, "me/inbox", `[]`); r != want {
+		t.Errorf("me/inbox = %s\nwant %s", r, want)
+	}
+	if r := call(c, "me/answer", "["+q+` "yes"]`); r != "(ok :done)" {
+		t.Errorf("answer with a choice = %s", r)
+	}
+
+	// Bad opts fail at once, rather than waiting in your inbox.
+	for _, tt := range [][2]string{
+		{"me/ask", `["q" {:choices []}]`},
+		{"me/ask", `["q" {:choices ["a" 1]}]`},
+		{"me/ask", `["q" {:actions []}]`},
+		{"me/ask", `["q" [:choices]]`},
+		{"me/tell", `["t" {:actions [{:label "x"}]}]`},
+		{"me/tell", `["t" {:choices ["a"]}]`},
+		{"me/tell", `["t" {} 1]`},
+	} {
+		if r := call(c, tt[0], tt[1]); !strings.Contains(r, ":kind :bad-call") {
+			t.Errorf("%s %s = %s", tt[0], tt[1], r)
+		}
+	}
+}

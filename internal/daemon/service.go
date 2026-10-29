@@ -68,10 +68,13 @@ type handler struct {
 	body    []*puff.Form
 	ask     bool
 	expires time.Duration // ask: how long a message waits for a reply; 0 for ever
+	// check is for an ask of whiff's own, as :me/ask: it checks a
+	// message's args before it waits, so a bad one fails at once.
+	check func(args puff.Vector) error
 	// native is a function of whiff's own services, in Go, instead of a
 	// body. Its error replies (err {:kind :bad-call}).
 	native   func(m message, args []puff.Value) (puff.Value, error)
-	optional int // native: how many of the last params can be left out
+	optional int // native or whiff's own ask: how many of the last params can be left out
 	// cmd is for a native that runs its first argument, a command: :read
 	// for one in puff's table of read-only commands.
 	cmd bool

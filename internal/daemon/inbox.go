@@ -75,10 +75,19 @@ func (d *daemon) ask(st *state, s *service, m message) puff.Value {
 	switch {
 	case err != nil:
 		return puff.Errorf("bad-call", "%v", err)
-	case args.Len() != len(h.params):
-		return puff.Errorf("bad-call", ":%s takes %d arguments, got %d", m.to(s.name), len(h.params), args.Len())
+	case args.Len() > len(h.params) || args.Len() < len(h.params)-h.optional:
+		want := fmt.Sprint(len(h.params))
+		if h.optional > 0 {
+			want = fmt.Sprintf("%d to %d", len(h.params)-h.optional, len(h.params))
+		}
+		return puff.Errorf("bad-call", ":%s takes %s arguments, got %d", m.to(s.name), want, args.Len())
 	case len(st.inbox(s.name)) >= inboxSize:
 		return puff.Errorf("full", ":%s's inbox is full", s.name)
+	}
+	if h.check != nil {
+		if err := h.check(args); err != nil {
+			return puff.Errorf("bad-call", ":%s: %v", m.to(s.name), err)
+		}
 	}
 	st.nextID++
 	a := &asked{ticket: ticket{id: st.nextID, from: m.from, dir: m.dir, user: m.user, session: m.session}, addr: s.name, fn: m.fn, args: args, at: time.Now()}
