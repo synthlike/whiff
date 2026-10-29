@@ -281,7 +281,7 @@ func (s *server) guard(next http.Handler) http.Handler {
 		h := w.Header()
 		h.Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'")
 		h.Set("X-Content-Type-Options", "nosniff")
-		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("Referrer-Policy", "same-origin")
 		h.Set("Cache-Control", "no-store")
 		if t := r.URL.Query().Get("token"); t != "" {
 			if !s.valid(t) {
@@ -670,14 +670,16 @@ func (s *server) render(w http.ResponseWriter, r *http.Request) {
 // act does, with your answer added if the form asked for one, and goes
 // back to the page it came from, which shows what it answered. Only
 // sniff's own pages can post it: the cookie is SameSite, and a browser
-// says where a post comes from.
+// says where a post comes from, with Sec-Fetch-Site, which no page can
+// set; or, an older one, with Origin.
 func (s *server) act(w http.ResponseWriter, r *http.Request) {
-	if site := r.Header.Get("Sec-Fetch-Site"); site != "" && site != "same-origin" {
-		http.Error(w, "send it from sniff's page", http.StatusForbidden)
+	site, o := r.Header.Get("Sec-Fetch-Site"), r.Header.Get("Origin")
+	if site != "" && site != "same-origin" {
+		http.Error(w, fmt.Sprintf("send it from sniff's page, not from a %s one", site), http.StatusForbidden)
 		return
 	}
-	if o := r.Header.Get("Origin"); o != "" && o != fmt.Sprintf("http://127.0.0.1:%d", s.port) && o != fmt.Sprintf("http://localhost:%d", s.port) {
-		http.Error(w, "send it from sniff's page", http.StatusForbidden)
+	if site == "" && o != "" && o != fmt.Sprintf("http://127.0.0.1:%d", s.port) && o != fmt.Sprintf("http://localhost:%d", s.port) {
+		http.Error(w, fmt.Sprintf("send it from sniff's page, not from %s", o), http.StatusForbidden)
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)

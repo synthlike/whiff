@@ -379,7 +379,8 @@ func TestViews(t *testing.T) {
 	if r := post(url.Values{"action": {"[1]"}}); r.StatusCode != http.StatusBadRequest {
 		t.Errorf("a bad action: %s", r.Status)
 	}
-	r := post(form, "Sec-Fetch-Site", "same-origin")
+	// As a browser posts it from sniff's page, its Origin may be null.
+	r := post(form, "Sec-Fetch-Site", "same-origin", "Origin", "null")
 	if r.StatusCode != http.StatusSeeOther || r.Header.Get("Location") != "/view/board/show?said=1" {
 		t.Fatalf("the form: %s %s", r.Status, r.Header.Get("Location"))
 	}
