@@ -182,7 +182,7 @@ function showView(view, reply, acted) {
 // first, and adds the answer as its last argument, "" if you give none.
 function item(m, acted) {
   const r = el("div", "item");
-  r.append(el("span", "", str(m, "label")));
+  r.append(prose(str(m, "label")));
   if (str(m, "detail")) r.append(el("span", "detail", str(m, "detail")));
   const actions = [];
   if (field(m, "action")) actions.push({ label: "", action: field(m, "action"), ask: "" });
@@ -250,6 +250,45 @@ function item(m, acted) {
   }
   r.append(buttons, out);
   return r;
+}
+
+// prose is text, a report or a task, as Claude and people write it: a line
+// as it is; more than that as paragraphs, lists whose lines start "1. " or
+// "- ", and ```code blocks```, with `code` in them. Only text nodes are
+// made from it, so it can't add markup.
+function prose(text) {
+  if (!text.includes("\n") && !text.includes("`")) return el("span", "", text);
+  const box = el("div", "prose");
+  // Code fences split text: every other part is a block of code.
+  text.split(/^```[^\n]*\n?/m).forEach((part, i) => {
+    if (i % 2) {
+      const pre = el("pre");
+      pre.append(el("code", "", part.replace(/\n$/, "")));
+      box.append(pre);
+      return;
+    }
+    for (const para of part.split(/\n\s*\n/)) {
+      const lines = para.split("\n").filter((l) => l.trim());
+      if (!lines.length) continue;
+      const numbered = lines.every((l) => /^\s*\d+[.)]\s/.test(l));
+      const bulleted = lines.every((l) => /^\s*[-*]\s/.test(l));
+      if (numbered || bulleted) {
+        const list = el(numbered ? "ol" : "ul");
+        if (numbered) list.start = parseInt(lines[0], 10);
+        for (const l of lines) list.append(code(el("li"), l.replace(/^\s*(\d+[.)]|[-*])\s+/, "")));
+        box.append(list);
+      } else {
+        box.append(code(el("p"), lines.join("\n")));
+      }
+    }
+  });
+  return box;
+}
+
+// code appends text to e, with `code` in it as code.
+function code(e, text) {
+  text.split("`").forEach((s, i) => e.append(i % 2 ? el("code", "", s) : s));
+  return e;
 }
 
 // act sends action, a message as [:address/fn args...], as you; its reply
