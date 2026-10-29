@@ -67,6 +67,7 @@ type agent struct {
 	c     *rpc.Client
 	addr  string            // its :agent/<n>, without the colon
 	tools map[string]string // the function tools listed, by name: their JSON, to see a change
+	fns   map[string]fnTool // the same, by address/fn, to name an action's tool
 	mode  string            // the session's mode as the tools describe it, printed
 }
 
@@ -196,6 +197,7 @@ type fnTool struct {
 	tool   *mcp.Tool
 	target string // address/fn
 	params []string
+	waits  bool // a :write that waits for the user's review
 }
 
 // functions are every address's functions as tools, but the agent's own
@@ -249,6 +251,7 @@ func (a *agent) functions(mode sessionMode) ([]fnTool, error) {
 				how = "Your session's mode lets it through without review: it runs at once."
 			case mark == "write":
 				how = "It waits for the user's review, so you get a pending id; wait gives the result."
+				t.waits = true
 			}
 			t.tool = &mcp.Tool{Name: name, Title: ":" + t.target,
 				Description: fmt.Sprintf("%s\n\n:%s, %s. %s", doc, t.target, puff.Print(mark), how),
@@ -290,8 +293,10 @@ func (a *agent) refresh() error {
 		a.addEval(mode)
 	}
 	now := map[string]bool{}
+	a.fns = map[string]fnTool{}
 	for _, f := range fns {
 		now[f.tool.Name] = true
+		a.fns[f.target] = f
 		js, _ := json.Marshal(f.tool)
 		if a.tools[f.tool.Name] == string(js) {
 			continue
@@ -339,7 +344,7 @@ func (a *agent) callTool(f fnTool) mcp.ToolHandler {
 			return failed("%v", err), nil
 		}
 		a.noticeMode()
-		return resultOf(resp.Value), nil
+		return a.answer(resp.Value), nil
 	}
 }
 
@@ -388,7 +393,7 @@ func (a *agent) addEval(mode sessionMode) {
 				return failed("%s%s", resp.Out, resp.Error), nil
 			}
 			a.noticeMode()
-			r := resultOf(resp.Value)
+			r := a.answer(resp.Value)
 			if resp.Out != "" {
 				r.Content = append([]mcp.Content{&mcp.TextContent{Text: resp.Out}}, r.Content...)
 			}
@@ -462,7 +467,7 @@ func (a *agent) wait(ctx context.Context, id int64, d time.Duration) *mcp.CallTo
 		if ans.err != nil {
 			return failed("%v", ans.err)
 		}
-		return resultOf(ans.resp.Value)
+		return a.answer(ans.resp.Value)
 	case <-time.After(d):
 		return toolText(fmt.Sprintf("%d is still pending: wait again later", id))
 	case <-ctx.Done():
@@ -492,6 +497,88 @@ func resultOf(printed string) *mcp.CallToolResult {
 	res := toolText(puff.Print(r.At(0)))
 	res.IsError = true
 	return res
+}
+
+// answer is resultOf(printed), and, if its value offers actions as a view's
+// items do, each as the tool call that sends it: what the agent can do from
+// here. An action is an offer, sent under the same rules as any call.
+func (a *agent) answer(printed string) *mcp.CallToolResult {
+	r := resultOf(printed)
+	if r.IsError {
+		return r
+	}
+	v, _ := puff.ReadValue(printed)
+	var lines []string
+	a.mu.Lock()
+	for _, act := range actionsIn(okValue(v)) {
+		if line, ok := a.toolCall(act); ok {
+			lines = append(lines, line)
+		}
+	}
+	a.mu.Unlock()
+	if len(lines) > 0 {
+		r.Content = append(r.Content, &mcp.TextContent{Text: "What you can do from here, each as a tool call:\n" + strings.Join(lines, "\n")})
+	}
+	return r
+}
+
+// actionsIn is every action in v, a map with an :action message, in order.
+func actionsIn(v puff.Value) []puff.Map {
+	var acts []puff.Map
+	var walk func(puff.Value)
+	walk = func(v puff.Value) {
+		switch v := v.(type) {
+		case puff.Map:
+			if _, ok := field(v, "action").(puff.Vector); ok {
+				acts = append(acts, v)
+				return
+			}
+			for i := range v.Len() {
+				walk(v.Entry(i).Val)
+			}
+		case puff.Vector:
+			for i := range v.Len() {
+				walk(v.At(i))
+			}
+		case puff.Tag:
+			for i := range v.Len() {
+				walk(v.At(i))
+			}
+		}
+	}
+	walk(v)
+	return acts
+}
+
+// toolCall is action act as a line: its label, the tool that sends it and
+// the tool's arguments, with a placeholder for the answer an :ask action
+// wants; false if no tool sends it, as for a function only the user may
+// use.
+func (a *agent) toolCall(act puff.Map) (string, bool) {
+	label, _ := field(act, "label").(puff.String)
+	msg, _ := field(act, "action").(puff.Vector)
+	if msg.Len() == 0 {
+		return "", false
+	}
+	target, _ := msg.At(0).(puff.Keyword)
+	f, ok := a.fns[string(target)]
+	ask, asks := field(act, "ask").(puff.String)
+	n := msg.Len() - 1
+	if !ok || asks && n >= len(f.params) || n > len(f.params) {
+		return "", false
+	}
+	var args []string
+	for i := range n {
+		args = append(args, fmt.Sprintf("%q: %q", f.params[i], puff.Print(msg.At(i+1))))
+	}
+	if asks {
+		args = append(args, fmt.Sprintf("%q: <your answer to %s>", f.params[n], puff.Print(ask)))
+	}
+	line := fmt.Sprintf("- %s: %s {%s}", label, f.tool.Name, strings.Join(args, ", "))
+	if f.waits {
+		line += ", which waits for the user's review"
+	}
+	return line, true
 }
 
 func toolText(s string) *mcp.CallToolResult {

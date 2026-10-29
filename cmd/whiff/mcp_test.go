@@ -26,7 +26,11 @@ func TestMCP(t *testing.T) {
   (on (hello name) "Greets name."
     (ok (string/concat "hello, " name)))
   (on (save x) :write "Saves x."
-    (ok x)))`
+    (ok x))
+  (on (menu) "What to do next."
+    (ok (view/items [{:label "Say hi" :action [:greet/hello "you"]}
+                     {:label "Keep it" :action [:greet/save] :ask "What?"}
+                     {:label "Answer" :action [:me/answer 1]}]))))`
 	if err := os.WriteFile(filepath.Join(services, "greet.puff"), []byte(greet), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -105,6 +109,15 @@ func TestMCP(t *testing.T) {
 		if isError != tt.isError || tt.want != "" && !strings.HasPrefix(got, tt.want) {
 			t.Errorf("%s %v = %q, error %v; want %q, error %v", tt.name, tt.args, got, isError, tt.want, tt.isError)
 		}
+	}
+
+	// A view's actions come as tool calls, saying which wait for review;
+	// one only you may use isn't offered.
+	next := "What you can do from here, each as a tool call:\n" +
+		`- Say hi: greet_hello {"name": "\"you\""}` + "\n" +
+		`- Keep it: greet_save {"x": <your answer to "What?">}, which waits for the user's review`
+	if got, _ := call("greet_menu", nil); !strings.HasSuffix(got, next) {
+		t.Errorf("greet_menu = %q, want it to end with\n%s", got, next)
 	}
 
 	if _, err := you.Message("accept", "", "[1]", ""); err != nil {
