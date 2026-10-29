@@ -4,6 +4,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/synthlike/whiff/internal/puff"
 )
 
 // drawn is printed, a reply, as sniff draws it, with marks.
@@ -82,5 +84,23 @@ func TestProse(t *testing.T) {
 	}
 	if p := proseOf("one line"); !p.Plain || p.Text != "one line" {
 		t.Errorf("one line = %+v", p)
+	}
+}
+
+func TestLongString(t *testing.T) {
+	long := strings.Repeat("é", longString-1) + "\n<b>"
+	n := fold(puff.String(long), 0)
+	if !n.Fold || n.Open || n.Short != `"`+strings.Repeat("é", shortString-1)+"…" || n.Raw != long {
+		t.Errorf("a long string = %+v", n)
+	}
+	if n := fold(puff.String(long[:20]), 0); n.Fold {
+		t.Errorf("a short string folds: %+v", n)
+	}
+	// Open, it is text, with its line breaks, escaped.
+	var b strings.Builder
+	pages.ExecuteTemplate(&b, "value", fold(puff.NewVector(puff.String(long)), 0))
+	open := `</summary><div class="str text">` + strings.Repeat("é", longString-1) + "\n&lt;b&gt;</div></details>"
+	if !strings.Contains(b.String(), `<details class="long"><summary><span class="str">&#34;éé`) || !strings.Contains(b.String(), open) {
+		t.Errorf("a long string drawn: %s", b.String())
 	}
 }

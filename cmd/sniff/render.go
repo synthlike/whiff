@@ -357,7 +357,16 @@ type node struct {
 	Pairs []pair // a map's
 	Fold  bool
 	Open  bool
+	Short string // a long string's start, what it shows folded
+	Raw   string // a long string as it is, what it shows open: a report reads as text
 }
+
+// A string longer than longString folds, showing its first shortString
+// runes.
+const (
+	longString  = 160
+	shortString = 100
+)
 
 type pair struct {
 	Key, Val node
@@ -389,6 +398,10 @@ func fold(v puff.Value, depth int) node {
 		n.Kind = "kw"
 	case puff.String:
 		n.Kind = "str"
+		if r := []rune(n.Text); len(r) > longString {
+			n.Fold, n.Open, n.Short, n.Raw = true, false, string(r[:shortString])+"…", string(v)
+		}
+		return n
 	default:
 		n.Kind = "lit"
 	}

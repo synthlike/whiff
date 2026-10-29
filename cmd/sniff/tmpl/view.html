@@ -70,7 +70,8 @@
 {{define "spans"}}{{range .}}{{if .Code}}<code>{{.Text}}</code>{{else}}{{.Text}}{{end}}{{end}}{{end}}
 
 {{/* A value, folded: short ones on a line, longer ones as a tree. */}}
-{{define "value"}}{{if .Fold}}<details{{if .Open}} open{{end}}><summary>
+{{define "value"}}{{if and .Fold (eq .Kind "str")}}<details class="long"><summary><span class="str">{{.Short}}</span></summary><div class="str text">{{.Raw}}</div></details>
+{{- else if .Fold}}<details{{if .Open}} open{{end}}><summary>
 {{- if eq .Kind "map"}}{{"{"}}{{else if eq .Kind "vec"}}[{{else}}<span class="tag">({{.Name}}</span>{{end}}<span class="count"> {{.Count}}</span></summary>
 <div class="kids">{{if eq .Kind "map"}}{{range .Pairs}}<div>{{template "inline" .Key}} {{template "value" .Val}}</div>{{end}}{{else}}{{range .Kids}}<div>{{template "value" .}}</div>{{end}}{{end}}</div>
 {{- if eq .Kind "map"}}{{"}"}}{{else if eq .Kind "vec"}}]{{else}}){{end}}</details>{{else}}{{template "inline" .}}{{end}}{{end}}
