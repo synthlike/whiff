@@ -285,6 +285,11 @@ func TestTodoService(t *testing.T) {
 			`{:action [:todo/done 10] :detail "TODO.md:10  v1" :label "nested"} ` +
 			`{:action [:todo/done 17] :detail "TODO.md:17  v2" :label "last"} ` +
 			`{:action [:todo/done 18] :detail "TODO.md:18  v2" :label "new one"}]))`},
+		{"board", "[]", `(ok (board [` +
+			`{:items [{:action [:todo/done 3] :detail "TODO.md:3" :label "under the title"}] :title "TODO"} ` +
+			`{:items [{:action [:todo/done 10] :detail "TODO.md:10" :label "nested"}] :title "v1"} ` +
+			`{:items [{:action [:todo/done 17] :detail "TODO.md:17" :label "last"} ` +
+			`{:action [:todo/done 18] :detail "TODO.md:18" :label "new one"}] :title "v2"}]))`},
 		{"add", `["first"]`, `(ok 1)`}, // in dir, which has no TODO.md
 	}
 	for i, tt := range tests {

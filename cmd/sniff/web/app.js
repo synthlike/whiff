@@ -258,17 +258,22 @@ function wrap(v) {
 }
 
 // Views, as a service answers with them, (ok view): (items [...]), (text
-// "...") or (locations [...]). viewOf is the view in reply, or null if it
-// holds none, or one of a shape sniff doesn't know.
+// "..."), (locations [...]) or (board [...]). viewOf is the view in reply,
+// or null if it holds none, or one of a shape sniff doesn't know.
 function viewOf(reply) {
   if (reply.t !== "tag" || reply.n !== "ok" || reply.v.length !== 1) return null;
   const v = reply.v[0];
   if (v.t !== "tag" || v.v.length !== 1) return null;
   const arg = v.v[0];
-  if (v.n === "text") return arg.t === "str" ? v : null;
-  const need = { items: "label", locations: "file" }[v.n];
-  if (!need || arg.t !== "vec") return null;
-  return arg.v.every((m) => m.t === "map" && field(m, need)?.t === "str") ? v : null;
+  // maps says whether t is a vector of maps, each with a string at need.
+  const maps = (t, need) => t?.t === "vec" && t.v.every((m) => m.t === "map" && field(m, need)?.t === "str");
+  switch (v.n) {
+    case "text": return arg.t === "str" ? v : null;
+    case "items": return maps(arg, "label") ? v : null;
+    case "locations": return maps(arg, "file") ? v : null;
+    case "board": return maps(arg, "title") && arg.v.every((c) => maps(field(c, "items"), "label")) ? v : null;
+  }
+  return null;
 }
 
 // field is map m's value at the keyword name, or undefined.
@@ -290,6 +295,15 @@ function showView(view, reply) {
   const arg = view.v[0];
   if (view.n === "text") {
     box.append(el("pre", "", arg.v));
+  } else if (view.n === "board") {
+    box.classList.add("board");
+    for (const c of arg.v) {
+      const col = el("div", "column");
+      const items = field(c, "items").v;
+      col.append(el("h4", "", str(c, "title")), ...items.map(item));
+      if (!items.length) col.append(el("p", "hint", "None."));
+      box.append(col);
+    }
   } else {
     for (const m of arg.v) box.append(view.n === "items" ? item(m) : place(m));
     if (!arg.v.length) box.append(el("p", "hint", "None."));

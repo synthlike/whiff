@@ -58,7 +58,8 @@ a string if it doesn't read as one: 12 is 12, ann is "ann", '"12"' is "12".
 A reply that isn't (ok v) or (err e) is sent as (ok value).
 
 A view prints as lines: items as label, detail and action apart by tabs,
-locations as file:line:col: note, text as it is. Pick items with fzf and
+locations as file:line:col: note, text as it is, a board as a "# title"
+line per column above its items. Pick items with fzf and
 act on them: whiff call todo/view | fzf | whiff act
 `
 

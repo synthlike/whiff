@@ -228,3 +228,4 @@ mark rather than `:write`, and `publish` to a literal topic as its subscribers'.
 - `(view/items items)`: (items items): a view of items to pick from, each {:label "..."} with an optional :detail string and :action, a message as [:address/fn args...] that picking it sends.
 - `(view/text text)`: (text text): a view of text, shown as it is.
 - `(view/locations locations)`: (locations locations): a view of places in files, each {:file "..."} with an optional :line and :col, counting from 1, and :note string.
+- `(view/board columns)`: (board columns): a view of items in columns, each {:title "..." :items [...]}, its items as view/items has them.

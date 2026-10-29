@@ -15,6 +15,7 @@ import (
 //	items      a line each, label, detail and action apart by tabs, for fzf
 //	text       as it is
 //	locations  file:line:col: note, a line each, as compilers print them
+//	board      a column each, "# title" and its items' lines, a blank line apart
 func viewText(v puff.Value) (string, bool) {
 	t, ok := v.(puff.Tag)
 	if !ok || t.Len() != 1 {
@@ -25,6 +26,19 @@ func viewText(v puff.Value) (string, bool) {
 		return oneLine(string(s))
 	}
 	var b strings.Builder
+	items := func(vs puff.Vector) {
+		for i := range vs.Len() {
+			line := str(vs.At(i), "label")
+			action := field(vs.At(i), "action")
+			if d := str(vs.At(i), "detail"); d != "" || action != nil {
+				line += "\t" + d
+			}
+			if action != nil {
+				line += "\t" + puff.Print(action)
+			}
+			b.WriteString(line + "\n")
+		}
+	}
 	switch vs, _ := t.At(0).(puff.Vector); {
 	case t.Name() == "text":
 		s, ok := t.At(0).(puff.String)
@@ -36,16 +50,15 @@ func viewText(v puff.Value) (string, bool) {
 			b.WriteByte('\n')
 		}
 	case t.Name() == "items":
+		items(vs)
+	case t.Name() == "board":
 		for i := range vs.Len() {
-			line := str(vs.At(i), "label")
-			action := field(vs.At(i), "action")
-			if d := str(vs.At(i), "detail"); d != "" || action != nil {
-				line += "\t" + d
+			if i > 0 {
+				b.WriteByte('\n')
 			}
-			if action != nil {
-				line += "\t" + puff.Print(action)
-			}
-			b.WriteString(line + "\n")
+			b.WriteString("# " + str(vs.At(i), "title") + "\n")
+			col, _ := field(vs.At(i), "items").(puff.Vector)
+			items(col)
 		}
 	case t.Name() == "locations":
 		for i := range vs.Len() {

@@ -22,6 +22,12 @@ func TestViews(t *testing.T) {
 		{`(view/items {:label "a"})`, `want a vector of maps`},
 		{`(view/text 1)`, `want a string, got 1`},
 		{`(view/locations [{:file "a.go" :line 0}])`, `want :line as an int from 1, got 0`},
+		{`(view/board [{:title "Now" :items [{:label "a" :action [:todo/done 1]}]} {:title "Later" :items []}])`,
+			`(board [{:items [{:action [:todo/done 1] :label "a"}] :title "Now"} {:items [] :title "Later"}])`},
+		{`(view/board [{:title "Now"}])`, `has no :items`},
+		{`(view/board [{:items []}])`, `has no :title`},
+		{`(view/board [{:title "Now" :items [{:label 1}]}])`, `column "Now": want :label as a string, got 1`},
+		{`(view/board [{:title "Now" :items {}}])`, `column "Now": want a vector of maps`},
 	}
 	for _, tt := range tests {
 		resp, err := c.Eval(tt.src, "")

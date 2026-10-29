@@ -35,7 +35,9 @@ func TestRun(t *testing.T) {
   (on (places) "Locations."
     (ok (view/locations [{:file "a.go" :line 3 :col 2 :note "here"} {:file "b.go"}])))
   (on (say) "Text."
-    (ok (view/text "two\nlines"))))`
+    (ok (view/text "two\nlines")))
+  (on (board) "A board."
+    (ok (view/board [{:title "Now" :items [{:label "a" :action [:greet/hello "x"]}]} {:title "Later" :items [{:label "b"}]}]))))`
 	if err := os.WriteFile(filepath.Join(services, "greet.puff"), []byte(greet), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -85,6 +87,7 @@ func TestRun(t *testing.T) {
 		{name: "items", args: []string{"call", "greet/pick"}, wantOut: "a\t\t[:greet/hello \"x\"]\nb c\td\n"},
 		{name: "locations", args: []string{"call", "greet/places"}, wantOut: "a.go:3:2: here\nb.go\n"},
 		{name: "text", args: []string{"call", "greet/say"}, wantOut: "two\nlines\n"},
+		{name: "board", args: []string{"call", "greet/board"}, wantOut: "# Now\na\t\t[:greet/hello \"x\"]\n\n# Later\nb\n"},
 		{name: "act on a line", args: []string{"act", "a\t\t[:greet/hello \"x\"]"}, wantOut: "hello, x\n"},
 		{name: "act on stdin", args: []string{"act"}, stdin: "a\t\t[:greet/hello \"x\"]\n[:greet/hello \"y\"]\n", wantOut: "hello, x\nhello, y\n"},
 		{name: "act without an action", args: []string{"act", "b c\td"}, code: 1,

@@ -20,7 +20,7 @@ Or try one without installing it: `whiff try services/git.puff status`.
 - `todo`: the checkbox items in `TODO.md` in the caller's directory (`items`,
   `open`), `add text` and `done line`. The file is its state. `view` is the
   open items as a view: `whiff call todo/view | fzf | whiff act` ticks the
-  one you pick.
+  one you pick; `board` is the same items as a board, a column per heading.
 - `reviewer`: `review` has Claude review the uncommitted changes (`git diff
   HEAD`) with no tools; it answers at once with a pending id, and `whiff wait
   <id>` gives the review. Needs the claude CLI.
