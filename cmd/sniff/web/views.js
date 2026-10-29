@@ -179,7 +179,7 @@ function showView(view, reply, acted) {
 // page; any other is a button, which sends it as you, as whiff act does,
 // and shows the reply under the item. A :write button shows its target too,
 // as its label can say anything. One with :ask asks it under the item
-// first, and adds the answer, if you give one, as its last argument.
+// first, and adds the answer as its last argument, "" if you give none.
 function item(m, acted) {
   const r = el("div", "item");
   r.append(el("span", "", str(m, "label")));
@@ -223,7 +223,7 @@ function item(m, acted) {
     form.onsubmit = (ev) => {
       ev.preventDefault();
       const text = input.value.trim();
-      send(text ? { t: "vec", v: [...action.v, { t: "str", v: text }] } : action);
+      send({ t: "vec", v: [...action.v, { t: "str", v: text }] });
     };
     form.append(input, go, cancel);
     out.className = "reply";

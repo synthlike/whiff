@@ -14,7 +14,7 @@ import (
 //
 //	items      a line each, label, detail and action apart by tabs, for fzf;
 //	           an item with :actions has a line for each, with its label
-//	           before the action
+//	           before the action, and "" after one that asks for an answer
 //	text       as it is
 //	locations  file:line:col: note, a line each, as compilers print them
 //	board      a column each, "# title" and its items' lines, a blank line apart
@@ -47,7 +47,17 @@ func viewText(v puff.Value) (string, bool) {
 			}
 			for j := range actions.Len() {
 				a := actions.At(j)
-				b.WriteString(line + "\t" + str(a, "label") + "\t" + puff.Print(field(a, "action")) + "\n")
+				msg := field(a, "action")
+				// One that asks for an answer gets "", no answer, as a
+				// client adds it: edit the line to give one.
+				if vec, ok := msg.(puff.Vector); ok && field(a, "ask") != nil {
+					args := make([]puff.Value, vec.Len(), vec.Len()+1)
+					for k := range vec.Len() {
+						args[k] = vec.At(k)
+					}
+					msg = puff.NewVector(append(args, puff.String(""))...)
+				}
+				b.WriteString(line + "\t" + str(a, "label") + "\t" + puff.Print(msg) + "\n")
 			}
 		}
 	}

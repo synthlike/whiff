@@ -37,7 +37,7 @@ func TestRun(t *testing.T) {
   (on (say) "Text."
     (ok (view/text "two\nlines" {:changed :greet/changed})))
   (on (board) "A board."
-    (ok (view/board [{:title "Now" :items [{:label "a" :actions [{:label "Greet x" :action [:greet/hello "x"]} {:label "Greet y" :action [:greet/hello "y"]}]}]}
+    (ok (view/board [{:title "Now" :items [{:label "a" :actions [{:label "Greet x" :action [:greet/hello "x"]} {:label "Greet someone" :action [:greet/hello] :ask "Who?"}]}]}
                      {:title "Later" :items [{:label "b"}]}]))))`
 	if err := os.WriteFile(filepath.Join(services, "greet.puff"), []byte(greet), 0o600); err != nil {
 		t.Fatal(err)
@@ -88,7 +88,7 @@ func TestRun(t *testing.T) {
 		{name: "items", args: []string{"call", "greet/pick"}, wantOut: "a\t\t[:greet/hello \"x\"]\nb c\td\n"},
 		{name: "locations", args: []string{"call", "greet/places"}, wantOut: "a.go:3:2: here\nb.go\n"},
 		{name: "text", args: []string{"call", "greet/say"}, wantOut: "two\nlines\n"},
-		{name: "board", args: []string{"call", "greet/board"}, wantOut: "# Now\na\t\tGreet x\t[:greet/hello \"x\"]\na\t\tGreet y\t[:greet/hello \"y\"]\n\n# Later\nb\n"},
+		{name: "board", args: []string{"call", "greet/board"}, wantOut: "# Now\na\t\tGreet x\t[:greet/hello \"x\"]\na\t\tGreet someone\t[:greet/hello \"\"]\n\n# Later\nb\n"},
 		{name: "act on an action's line", args: []string{"act", "a\t\tGreet y\t[:greet/hello \"y\"]"}, wantOut: "hello, y\n"},
 		{name: "act on a line", args: []string{"act", "a\t\t[:greet/hello \"x\"]"}, wantOut: "hello, x\n"},
 		{name: "act on stdin", args: []string{"act"}, stdin: "a\t\t[:greet/hello \"x\"]\n[:greet/hello \"y\"]\n", wantOut: "hello, x\nhello, y\n"},

@@ -23,7 +23,7 @@ const optsDoc = " opts, {:changed :address/topic}, names the topic published whe
 func viewBuiltins() []*puff.Builtin {
 	return []*puff.Builtin{
 		{Name: "view/items", Args: "items [opts]", Mark: puff.MarkRead,
-			Doc: "(items items): a view of items to pick from, each {:label \"...\"} with an optional :detail string and :actions, what can be done with it, each {:label \"Move to Done\" :action [:address/fn args...]}, the message picking it sends, and an optional :ask, a question whose answer, text, a client adds as its last argument if you give one; :action alone is one action without a label." + optsDoc,
+			Doc: "(items items): a view of items to pick from, each {:label \"...\"} with an optional :detail string and :actions, what can be done with it, each {:label \"Move to Done\" :action [:address/fn args...]}, the message picking it sends, and an optional :ask, a question whose answer, text, a client adds as its last argument, \"\" if you give none; :action alone is one action without a label." + optsDoc,
 			Fn: func(_ *puff.Call, args []puff.Value) (puff.Value, error) {
 				return withOpts(view("items", args[0], itemFields, "label"))(args)
 			}},

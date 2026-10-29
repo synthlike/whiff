@@ -23,7 +23,7 @@ func (d *daemon) meService() *service {
 			"inbox": {mark: puff.MarkRead, marked: true, yours: true, native: d.meInbox,
 				doc: "(ok view): what waits in your inbox, oldest first: questions to answer and reports to dismiss."},
 			"answer": {params: []string{"id", "text"}, optional: 1, mark: puff.MarkWrite, marked: true, yours: true, native: d.meAnswer,
-				doc: "Reply to message id in your inbox (ok text), or (ok :done) without text, which dismisses a report."},
+				doc: "Reply to message id in your inbox (ok text), or (ok :done) without text or with \"\", which dismisses a report."},
 		},
 		subs: map[string]subscriber{}, code: map[string][]*puff.Form{},
 		mailbox: make(chan message, mailboxSize), quit: make(chan struct{}), done: make(chan struct{})}
@@ -166,7 +166,10 @@ func (d *daemon) meAnswer(_ message, args []puff.Value) (puff.Value, error) {
 		if !ok {
 			return nil, fmt.Errorf("want your answer as a string, got %s", puff.Print(args[1]))
 		}
-		result = puff.Ok(text)
+		// An :ask action sends "" for no answer, as a dismissal.
+		if text != "" {
+			result = puff.Ok(text)
+		}
 	}
 	return d.reply("me", true, args[0], result)
 }

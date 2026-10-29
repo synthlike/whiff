@@ -138,7 +138,7 @@ func TestLs(t *testing.T) {
   (list)            :read   The running jobs, each {:id :cmd :cwd :from}.
   (run cmd [opts])  :write  Run cmd, [program args...], here; pending now, {:exit :stdout :stderr} when done. Options: :timeout (1h); :stdin, a string; :dir, where it runs; :as :text answers (ok stdout), or (err {:kind :exit}) unless it exits 0; :origin :agent, for a job whose output a model writes, answers as :agent's. :read for a read-only command, as whiff ls lists them.
 :me
-  (answer id [text])         :write  Reply to message id in your inbox (ok text), or (ok :done) without text, which dismisses a report.
+  (answer id [text])         :write  Reply to message id in your inbox (ok text), or (ok :done) without text or with "", which dismisses a report.
   ask (ask question [opts])  :read   Asks you question: pending now, your answer when you reply. opts, {:choices ["yes" "no"]}, offers answers to pick.
   (inbox)                    :read   (ok view): what waits in your inbox, oldest first: questions to answer and reports to dismiss.
   ask (tell text [opts])     :read   Tells you text, a report: it waits in your inbox until you reply, which dismisses it. opts, {:actions [{:label "Show the diff" :action [:address/fn args...]}]}, offers what to do about it.
