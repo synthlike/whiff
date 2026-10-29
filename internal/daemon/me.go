@@ -173,3 +173,60 @@ func (d *daemon) meAnswer(_ message, args []puff.Value) (puff.Value, error) {
 	}
 	return d.reply("me", true, args[0], result)
 }
+
+// actedOn dismisses each report in your inbox that offers msg,
+// [:address/fn args...], which m, to addr, sent: you did what it offered, as
+// a call of yours that answered (ok v). Only a :write does: one that shows
+// you something leaves the report, for what else it offers.
+func (d *daemon) actedOn(addr string, m message, msg puff.Vector) {
+	var ids []int64
+	d.do(func(st *state) {
+		s := st.addrs[addr]
+		if s == nil || (&marker{base: d.base, services: st.addrs}).msgMark(s, m) != puff.MarkWrite {
+			return
+		}
+		for _, a := range st.inbox("me") {
+			if a.offers(msg) {
+				ids = append(ids, a.id)
+			}
+		}
+	})
+	for _, id := range ids {
+		d.reply("me", true, puff.Int(id), puff.Done)
+	}
+}
+
+// offers is whether a is a report with an action that sends msg: its
+// message, or, for an action that asks, its message and your answer, a
+// string.
+func (a *asked) offers(msg puff.Vector) bool {
+	if a.fn != "tell" || a.args.Len() < 2 {
+		return false
+	}
+	opts, _ := a.args.At(1).(puff.Map)
+	v, _ := opts.Get(puff.Keyword("actions"))
+	acts, _ := v.(puff.Vector)
+	for i := range acts.Len() {
+		act, _ := acts.At(i).(puff.Map)
+		v, _ := act.Get(puff.Keyword("action"))
+		sends, _ := v.(puff.Vector)
+		n := sends.Len()
+		if _, asks := act.Get(puff.Keyword("ask")); asks {
+			if _, ok := msg.At(msg.Len() - 1).(puff.String); !ok {
+				continue
+			}
+			n++
+		}
+		if sends.Len() == 0 || n != msg.Len() {
+			continue
+		}
+		same := true
+		for j := range sends.Len() {
+			same = same && puff.Equal(sends.At(j), msg.At(j))
+		}
+		if same {
+			return true
+		}
+	}
+	return false
+}

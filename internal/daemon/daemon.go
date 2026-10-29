@@ -326,6 +326,8 @@ func (d *daemon) message(ctx context.Context, from string, req rpc.Request) rpc.
 		}
 	} else if r, err = d.request(ctx, cur, addr, m); err != nil {
 		return rpc.Response{Error: err.Error()}
+	} else if t, ok := r.(puff.Tag); ok && t.Name() == "ok" && cur.user {
+		d.actedOn(addr, m, puff.NewVector(vals...))
 	}
 	return rpc.Response{Value: puff.Print(r)}
 }

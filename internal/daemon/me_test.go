@@ -210,3 +210,48 @@ func TestMeChoicesAndActions(t *testing.T) {
 		}
 	}
 }
+
+// TestMeActedOn checks that a :write call you make that a report offers,
+// and that answers (ok v), dismisses the report; one that shows you
+// something, or fails, leaves it.
+func TestMeActedOn(t *testing.T) {
+	dir := tempDir(t)
+	writeServices(t, dir, map[string]string{"jot": `(service jot
+  (on (look) :read "Looks." (ok 1))
+  (on (keep x) :write "Keeps x." (if (= x 0) (err {:kind :zero}) (ok x))))`})
+	start(t, dir)
+	c := dial(t, dir)
+	call := func(target, args string) string {
+		t.Helper()
+		resp, err := c.Message("call", target, args, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.Value + resp.Error
+	}
+	call("me/tell", `["one" {:actions [{:label "Look" :action [:jot/look]} {:label "Keep 1" :action [:jot/keep 1]}]}]`)
+	call("me/tell", `["two" {:actions [{:label "Keep" :action [:jot/keep] :ask "What?"}]}]`)
+	call("me/tell", `["three" {:actions [{:label "Keep 0" :action [:jot/keep 0]}]}]`)
+	left := func() string {
+		t.Helper()
+		text, _ := c.Inbox("me")
+		var labels []string
+		for _, line := range strings.Split(text, "\n") {
+			if _, rest, ok := strings.Cut(line, `:me/tell "`); ok {
+				labels = append(labels, rest[:strings.Index(rest, `"`)])
+			}
+		}
+		return strings.Join(labels, " ")
+	}
+	for _, tt := range [][3]string{
+		{"jot/look", "[]", "one two three"},  // a :read leaves it
+		{"jot/keep", "[0]", "one two three"}, // so does a failure
+		{"jot/keep", "[1]", "two three"},     // done what it offered
+		{"jot/keep", `["x"]`, "three"},       // with your answer
+	} {
+		call(tt[0], tt[1])
+		if got := left(); got != tt[2] {
+			t.Errorf("after %s %s, your inbox has %q, want %q", tt[0], tt[1], got, tt[2])
+		}
+	}
+}
