@@ -7,6 +7,9 @@
 ; went lands in your inbox, with what you can do about it. Needs git, the
 ; claude CLI and services/pipeline.puff.
 ;   whiff call plan/start "a todo CLI: add, list and done, kept in todo.json" '["go" "test" "./..."]'
+;   whiff call plan/draft "..." '["go" "test" "./..."]'   ; the same, but waits for you
+;   whiff call plan/edit 3 2 "store todos in a map"        ; a drafted plan's task 2
+;   whiff call plan/approve 3      ; build a drafted plan's tasks
 ;   whiff call plan/retry 1 "store todos in a map"   ; after a task's run gave up
 ;   whiff call plan/merge 1        ; once done: its last branch, fast-forward only
 ;   whiff call plan/discard 2      ; or throw its runs away, worktrees and branches
@@ -81,14 +84,26 @@
 
   (def (discard-action n) {:label "Discard" :action [:plan/discard n]})
 
+  (def (approve-action n) {:label "Build it" :action [:plan/approve n]})
+
+  (def (edit-action n i) {:label "Edit" :action [:plan/edit n i] :ask "The task, as it should be"})
+
+  ; propose stops plan n at its tasks, for you to edit and approve.
+  (def (propose state n)
+    (let [{:tasks ts} (plan-of state n)
+          listed (vector/map (vector/range 0 (vector/length ts)) (fn (i) (str (+ i 1) ". " (unwrap (vector/get ts i)))))]
+      (finish state n :proposed (str "Its tasks:\n\n" (string/join listed "\n"))
+        [(approve-action n) (discard-action n)])))
+
   ; moved is r, once :plan/changed says plan n's tickets moved, so a client
   ; showing the board fetches it again.
   (def (moved n r)
     (do (publish :plan/changed {:plan n})
       r))
 
-  (on (start state goal check) :write :update
-    "Plans goal in the repository here with a planner Claude, then builds its tasks one after another as :pipeline runs, each from the last one's branch, with check (a command, like [\"go\" \"test\" \"./...\"]). (ok n), the plan's number; how it went lands in your inbox."
+  ; begin plans goal with check as plan n, (ok [n state]); a draft waits
+  ; for your approval once planned.
+  (def (begin state goal check draft)
     (let [repo (string/trim (try (proc/output ["git" "rev-parse" "--show-toplevel"])))
           base (string/trim (try (proc/output ["git" "-C" repo "rev-parse" "HEAD"])))
           n (map/get-or state :next 1)
@@ -97,11 +112,19 @@
                     [{:kind :pending :id id} (ok id)]))]
       (moved n (ok [n (-> state
                         (map/set :next (+ n 1))
-                        (map/set-in [:plans n] {:goal goal :repo repo :base base :check check :step :planning :tasks []})
+                        (map/set-in [:plans n] {:goal goal :repo repo :base base :check check :step :planning :tasks [] :draft draft})
                         (map/set-in [:jobs id] n))]))))
 
+  (on (start state goal check) :write :update
+    "Plans goal in the repository here with a planner Claude, then builds its tasks one after another as :pipeline runs, each from the last one's branch, with check (a command, like [\"go\" \"test\" \"./...\"]). (ok n), the plan's number; how it went lands in your inbox."
+    (begin state goal check #f))
+
+  (on (draft state goal check) :write :update
+    "Plans goal as start does, then waits for you: its tasks land in your inbox, edit changes one, and approve builds them. (ok n), the plan's number."
+    (begin state goal check #t))
+
   (on (plans state) :read
-    "Every plan, oldest first: {:plan :goal :step :tasks :task :run}, with :step one of :planning, :building, :done, :failed, :merged or :discarded, and :task the index of the task :run builds; :built is each task's run so far."
+    "Every plan, oldest first: {:plan :goal :step :tasks :task :run}, with :step one of :planning, :proposed, :building, :done, :failed, :merged or :discarded, and :task the index of the task :run builds; :built is each task's run so far."
     (ok (vector/map (map/entries (map/get-or state :plans {}))
           (fn ([n p]) (map/set p :plan n)))))
 
@@ -139,7 +162,13 @@
                                              [(show-action r) (retry-action n) (discard-action n)]]
                                             [(and (= step :done) (= i (- total 1))) [(show-action r) (merge-action n b)]]
                                             [_ [(show-action r)]])}}]
-                [_ {:step (if (= step :building) :planned :skipped) :item {:label task :detail where}}])))))))
+                [_ (if (= step :proposed)
+                     ; A drafted plan's tasks can be edited; the first ticket
+                     ; builds or discards it.
+                     {:step :planned :item {:label task :detail where
+                                            :actions (vector/concat [(edit-action n (+ i 1))]
+                                                       (if (= i 0) [(approve-action n) (discard-action n)] []))}}
+                     {:step (if (= step :building) :planned :skipped) :item {:label task :detail where}})])))))))
 
   (test "a ticket per task, at its run's step"
     (= (tickets 1 {:goal "g" :step :building :tasks ["a" "b"] :built [7]}
@@ -161,6 +190,15 @@
                      [{:run 6 :step :ready :round 1 :branch "whiff/6"} {:run 7 :step :ready :round 1 :branch "whiff/7"}])
          (fn ({:item {:actions as}}) (vector/length as)))
       [1 2]))
+
+  (test "a drafted plan's tasks can be edited, and it built or discarded"
+    (= (tickets 6 {:goal "g" :step :proposed :tasks ["a" "b"]} [])
+      [{:step :planned :item {:label "a" :detail "plan 6, task 1 of 2"
+                              :actions [{:label "Edit" :action [:plan/edit 6 1] :ask "The task, as it should be"}
+                                        {:label "Build it" :action [:plan/approve 6]}
+                                        {:label "Discard" :action [:plan/discard 6]}]}}
+       {:step :planned :item {:label "b" :detail "plan 6, task 2 of 2"
+                              :actions [{:label "Edit" :action [:plan/edit 6 2] :ask "The task, as it should be"}]}}]))
 
   (test "the goal while it has no tasks, and the tasks a failed plan didn't start"
     (= [(tickets 2 {:goal "g" :step :planning :tasks []} [])
@@ -192,7 +230,9 @@
              {:base base} (plan-of state n)
              step (match r
                     [(ok text) (match (tasks text)
-                                 [(ok ts) (next-run (set-plan state n {:tasks ts}) n 0 base)]
+                                 [(ok ts) (if (map/get-or (plan-of state n) :draft #f)
+                                            (propose (set-plan state n {:tasks ts}) n)
+                                            (next-run (set-plan state n {:tasks ts}) n 0 base))]
                                  [e e])]
                     [e e])]
          (moved n (catch step
@@ -244,11 +284,31 @@
   (on (discard state n) :write :update
     "Discards plan n, done or failed: every run it built, worktrees, uncommitted work and branches, as :pipeline/discard does; it leaves the board. (ok :discarded); (err {:kind :no-plan}) unless plan n is done or failed."
     (match (map/get-in state [:plans n])
-      [(some p) when (vector/contains? [:done :failed] (map/get-or p :step :none))
+      [(some p) when (vector/contains? [:proposed :done :failed] (map/get-or p :step :none))
        (let [_ (vector/each (map/get-or p :built [])
                  (fn (r) (ok (or-else (call :pipeline/discard r) ""))))]
          (moved n (ok [:discarded (set-plan state n {:step :discarded})])))]
       [_ (err {:kind :no-plan :message (str "plan " n " isn't done or failed: nothing to discard")})]))
+
+  (on (approve state n) :write :update
+    "Builds drafted plan n's tasks, as they are now, as start does. (ok :building); (err {:kind :no-plan}) unless plan n waits for approval."
+    (match (map/get-in state [:plans n])
+      [(some {:step :proposed :base base})
+       (moved n (ok [:building (try (next-run state n 0 base))]))]
+      [_ (err {:kind :no-plan :message (str "plan " n " doesn't wait for approval")})]))
+
+  (on (edit state n i task) :write :update
+    "Sets task i, from 1, of drafted plan n to task, a string. (ok tasks); (err {:kind :no-plan}) unless plan n waits for approval, (err {:kind :no-task}) unless it has task i."
+    (match (map/get-in state [:plans n])
+      [(some {:step :proposed :tasks ts})
+       (cond
+         [(not (= (value/type task) :string)) (err {:kind :bad-task :message "want the task as a string"})]
+         [(= (string/trim task) "") (err {:kind :bad-task :message "the task is empty"})]
+         [(not (and (= (value/type i) :int) (>= i 1) (<= i (vector/length ts))))
+          (err {:kind :no-task :message (str "plan " n " has tasks 1 to " (vector/length ts))})]
+         [_ (let [ts (vector/set ts (- i 1) task)]
+              (moved n (ok [ts (set-plan state n {:tasks ts})])))])]
+      [_ (err {:kind :no-plan :message (str "plan " n " doesn't wait for approval")})]))
 
   (on (retry state n note) :write :update
     "Takes plan n on after the run of the task it stopped at gave up, failed or was cancelled: its dev Claude gets note, your words for it (\"\" for none), and up to 3 more rounds, and the plan goes on from there. (ok :retrying); (err {:kind :no-plan}) unless plan n stopped so."

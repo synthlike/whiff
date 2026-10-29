@@ -859,6 +859,35 @@ esac
 	if got := call("discard", "[2]"); !strings.Contains(got, ":no-plan") {
 		t.Errorf("discard of a discarded plan = %s", got)
 	}
+
+	// A draft waits with its tasks; edited and approved, it builds them.
+	// (main has plan 1's one.txt and two.txt by now: new tasks change it.)
+	if got := call("draft", `["drafted" ["true"]]`); got != "(ok 3)" {
+		t.Fatalf("plan/draft = %s", got)
+	}
+	inboxHas("the draft", `"plan 3, drafted: proposed. Its tasks:\n\n1. one\n2. two" {:actions [{:action [:plan/approve 3] :label "Build it"} {:action [:plan/discard 3] :label "Discard"}]}`)
+	if got := call("approve", "[1]"); !strings.Contains(got, ":no-plan") {
+		t.Errorf("approve of a merged plan = %s", got)
+	}
+	for _, args := range []string{`[3 3 "x"]`, `[3 0 "x"]`, `[3 1 ""]`} {
+		if got := call("edit", args); !strings.Contains(got, ":no-task") && !strings.Contains(got, ":bad-task") {
+			t.Errorf("edit %s = %s", args, got)
+		}
+	}
+	call("edit", `[3 1 "uno"]`)
+	if got := call("edit", `[3 2 "three"]`); got != `(ok ["uno" "three"])` {
+		t.Errorf("edit = %s", got)
+	}
+	if got := call("approve", "[3]"); got != "(ok :building)" {
+		t.Fatalf("approve = %s", got)
+	}
+	inboxHas("the approved draft", `"plan 3, drafted: done. All 2 tasks built; whiff/6 has them all."`)
+	if got := git("log", "--format=%s", "whiff/6"); got != "three\nuno\ntwo\none\nfirst\n" {
+		t.Errorf("whiff/6's log = %q", got)
+	}
+	if got := call("edit", `[3 1 "x"]`); !strings.Contains(got, ":no-plan") {
+		t.Errorf("edit of a built plan = %s", got)
+	}
 }
 
 // TestServiceFileTests runs the (test ...)s in every file in services/, as
