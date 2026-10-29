@@ -88,8 +88,8 @@ nav button, .lanes button {
 nav button:hover, .lanes button:hover { border-color: var(--accent); }
 nav button.client { border-style: dashed; }
 .follow { color: var(--muted); user-select: none; }
-header .review { color: var(--accent); white-space: nowrap; }
-header .review .count {
+header .review, header .inbox { color: var(--accent); white-space: nowrap; }
+header .count {
   display: inline-block;
   min-width: 18px;
   padding: 0 5px;

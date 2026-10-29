@@ -75,6 +75,10 @@ type handler struct {
 	// cmd is for a native that runs its first argument, a command: :read
 	// for one in puff's table of read-only commands.
 	cmd bool
+	// yours is for a native only you may use, as :review/accept: it
+	// answers only a message from one of your connections, so the review
+	// gate never holds one, which would protect nothing.
+	yours bool
 }
 
 // readsCmd says whether h is :read for args, whatever its mark: they start
@@ -504,6 +508,21 @@ func (s *service) run(ctx context.Context) {
 	}
 }
 
+// yours says whether m comes from one of your connections: a client's
+// that isn't an agent's, with an address or without, rather than from a
+// service, even one in a chain you began.
+func (d *daemon) yours(m message) bool {
+	if !m.user || m.from == "" {
+		return m.user
+	}
+	client := false
+	d.do(func(st *state) {
+		s := st.addrs[m.from]
+		client = s != nil && s.client
+	})
+	return client
+}
+
 // handle runs the function or subscriber m is for and returns its Result,
 // printed. A fault in it replies (err {:kind :fault}) and reports faulted,
 // unless it was the caller giving up.
@@ -529,6 +548,9 @@ func (s *service) handle(ctx context.Context, m message) (reply string, faulted 
 			// An ask's messages go to the inbox; this one came before a
 			// reload turned an on into an ask.
 			return fail("no-function", ":%s has no function %s", s.name, m.fn)
+		}
+		if h.yours && !s.d.yours(m) {
+			return fail("refused", "only you may use %s, from your own connection: not a service or an agent", what)
 		}
 		if native = h.native; native == nil {
 			f, _ = s.env.Lookup(m.fn)

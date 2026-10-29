@@ -149,6 +149,12 @@ func TestMCP(t *testing.T) {
 			t.Errorf("%s's description doesn't say %q", name, want)
 		}
 	}
+	// What only you may use isn't a tool: reviewing, and your inbox.
+	for name, want := range map[string]bool{"me_ask": true, "me_inbox": false, "me_answer": false, "review_accept": false, "review_pending": false} {
+		if got := slices.ContainsFunc(list.Tools, func(tool *mcp.Tool) bool { return tool.Name == name }); got != want {
+			t.Errorf("tool %s offered = %v, want %v", name, got, want)
+		}
+	}
 	if got, isError := call("greet_save", map[string]any{"x": "2"}); got != "2" || isError {
 		t.Errorf("trusted save = %q, error %v", got, isError)
 	}

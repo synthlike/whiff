@@ -83,6 +83,9 @@ func (d *daemon) ask(st *state, s *service, m message) puff.Value {
 	st.nextID++
 	a := &asked{ticket: ticket{id: st.nextID, from: m.from, dir: m.dir, user: m.user, session: m.session}, addr: s.name, fn: m.fn, args: args, at: time.Now()}
 	st.asked = append(st.asked, a)
+	if s.name == "me" {
+		st.meChanged(m.user)
+	}
 	if h.expires > 0 {
 		time.AfterFunc(h.expires, func() {
 			if d.ctx.Err() != nil {
@@ -110,7 +113,8 @@ func (st *state) inbox(addr string) []*asked {
 }
 
 // take removes the message id from addr's inbox, or from any inbox if addr
-// is "", and returns it; nil if it isn't there.
+// is "", and returns it; nil if it isn't there. Taken from :me's, it
+// publishes :me/changed.
 func (st *state) take(addr string, id int64) *asked {
 	i := slices.IndexFunc(st.asked, func(a *asked) bool { return a.id == id && (addr == "" || a.addr == addr) })
 	if i < 0 {
@@ -118,6 +122,9 @@ func (st *state) take(addr string, id int64) *asked {
 	}
 	a := st.asked[i]
 	st.asked = slices.Delete(st.asked, i, i+1)
+	if a.addr == "me" {
+		st.meChanged(a.user)
+	}
 	return a
 }
 

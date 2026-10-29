@@ -338,31 +338,39 @@ events.addEventListener("entry", (ev) => append(JSON.parse(ev.data)));
 events.addEventListener("status", (ev) => setStatus(JSON.parse(ev.data)));
 events.onerror = () => setStatus({ connected: false, why: "sniff stopped" });
 
-// followReview keeps how many wait for review beside the review link and in
-// the tab's title, fetching the queue each time it changes. It follows
-// :review/pending to do so, so while sniff is open, it reviews: agents'
-// writes wait for you rather than failing with :no-reviewer. A watch that
-// sniff refuses, while whiff isn't running, is tried again.
-function followReview() {
-  const link = document.querySelector("header .review");
+// waiting is how many wait for you in each queue the header links to: the
+// review queue and your inbox. The tab's title shows them all.
+const waiting = {};
+
+// followQueue keeps how many items target's view has beside the header's
+// link of class name, and in the tab's title, fetching it each time one
+// of topics fires. Following :review/pending so, while sniff is open, it
+// reviews: agents' writes wait for you rather than failing with
+// :no-reviewer. A watch that sniff refuses, while whiff isn't running, is
+// tried again.
+function followQueue(name, target, topics) {
+  const link = document.querySelector("header ." + name);
   const count = async () => {
     let n = 0;
     try {
-      const v = viewOf(await getJSON("api/view?target=review/pending"));
+      const v = viewOf(await getJSON("api/view?target=" + target));
       n = v ? v.v[0].v.length : 0;
     } catch {
       return;
     }
-    link.replaceChildren("review");
+    link.replaceChildren(name);
     if (n) link.append(" ", el("span", "count", String(n)));
     link.classList.toggle("waiting", n > 0);
-    document.title = (n ? `(${n}) ` : "") + "sniff";
+    waiting[name] = n;
+    const all = Object.values(waiting).reduce((a, b) => a + b, 0);
+    document.title = (all ? `(${all}) ` : "") + "sniff";
   };
-  const w = new EventSource("api/watch?topic=review/pending&topic=review/done");
+  const w = new EventSource("api/watch?" + topics.map((t) => "topic=" + t).join("&"));
   w.addEventListener("open", count);
   w.addEventListener("changed", count);
   w.onerror = () => {
-    if (w.readyState === EventSource.CLOSED) setTimeout(followReview, 2000);
+    if (w.readyState === EventSource.CLOSED) setTimeout(() => followQueue(name, target, topics), 2000);
   };
 }
-followReview();
+followQueue("review", "review/pending", ["review/pending", "review/done"]);
+followQueue("inbox", "me/inbox", ["me/changed"]);

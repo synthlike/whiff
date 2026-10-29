@@ -212,7 +212,7 @@ Only in whiff: in services, `whiff eval` and `whiff repl`. In a handler,
 `call`, `send` or `send-after` with a literal target counts as that target's
 mark rather than `:write`, and `publish` to a literal topic as its subscribers'.
 
-- `(describe address)`: (ok fns): address's functions, each {:fn :params :doc :mark :form}.
+- `(describe address)`: (ok fns): address's functions, each {:fn :params :doc :mark :form}, and :yours #t on one only your connections may use.
 - `(reset service)` `:write`: Deletes service's stored state and reloads it from its file, so it starts from its :state again: (ok :done), or (err e).
 - `(addresses)`: (ok addrs): every address, sorted, each {:address :client :state}: :client for a client's, :state for a service with :state.
 - `(state service)`: (ok state): service's state as it last committed it; (err {:kind :stateless}) for a service without :state, (err {:kind :no-address}) if there is none.

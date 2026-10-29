@@ -21,15 +21,14 @@ import (
 
 // gated says whether the review gate holds m, for s: an agent's message to
 // a :write function that you haven't accepted. Not an ask, which waits for
-// a person anyway, nor a whiff/done, the answer to something s started.
+// a person anyway, nor a whiff/done, the answer to something s started,
+// nor a function only you may use, which refuses it anyway.
 func (d *daemon) gated(st *state, s *service, m message) bool {
-	// :review's own functions refuse an agent's message anyway: holding
-	// one would be a review that protects nothing.
-	if m.user || m.reviewed || m.topic != "" || m.fn == "whiff/done" || s.name == "review" {
+	if m.user || m.reviewed || m.topic != "" || m.fn == "whiff/done" {
 		return false
 	}
 	h, ok := s.fns[m.fn]
-	if !ok || h.ask {
+	if !ok || h.ask || h.yours {
 		return false
 	}
 	mk := &marker{base: d.base, services: st.addrs}
@@ -226,35 +225,27 @@ func (d *daemon) reviewed(a *asked, result puff.Value) {
 // reviewService is :review, whose inbox holds what the review gate holds:
 // its functions show it as a view and accept or reject a message, as whiff
 // pending, accept and reject do, so any client that sends messages can
-// review. Only your messages may: one in a chain an agent began is
-// refused, as an agent's connection is by whiff accept.
+// review. They are yours: only your connections may use them, as only
+// yours may run whiff accept.
 func (d *daemon) reviewService() *service {
 	return &service{name: "review", d: d, cur: caller{addr: "review"},
 		fns: map[string]handler{
-			"pending": {mark: puff.MarkRead, marked: true, native: d.pendingView,
+			"pending": {mark: puff.MarkRead, marked: true, yours: true, native: d.pendingView,
 				doc: "(ok view): what waits for your review, as items to accept or reject, oldest first."},
-			"accept": {params: []string{"id"}, mark: puff.MarkWrite, marked: true, native: d.acceptFn,
+			"accept": {params: []string{"id"}, mark: puff.MarkWrite, marked: true, yours: true, native: d.acceptFn,
 				doc: "Deliver the held message id as it was sent, or run the code it holds; its result, which its sender gets too."},
-			"reject": {params: []string{"id", "reason"}, optional: 1, mark: puff.MarkWrite, marked: true, native: d.rejectFn,
+			"reject": {params: []string{"id", "reason"}, optional: 1, mark: puff.MarkWrite, marked: true, yours: true, native: d.rejectFn,
 				doc: "Answer the held message id (err {:kind :rejected :reason reason}) without delivering it; reason, a string, tells its sender why."},
-			"trust": {params: []string{"id"}, mark: puff.MarkWrite, marked: true, native: d.trustFn,
+			"trust": {params: []string{"id"}, mark: puff.MarkWrite, marked: true, yours: true, native: d.trustFn,
 				doc: "Accept the held message id, an agent session's to a service, and trust the session for that service from now on, as whiff trust does."},
 		},
 		subs: map[string]subscriber{}, code: map[string][]*puff.Form{},
 		mailbox: make(chan message, mailboxSize), quit: make(chan struct{}), done: make(chan struct{})}
 }
 
-// notYours is what :review's functions answer a message you didn't send.
-func notYours() puff.Value {
-	return puff.Errorf("refused", "only you review: an agent's message, or one in a chain an agent began, can't")
-}
-
 // pendingView is :review's inbox as (items [...]), each item a held message
 // with Accept and Reject, fetched again when the queue changes.
-func (d *daemon) pendingView(m message, _ []puff.Value) (puff.Value, error) {
-	if !m.user {
-		return notYours(), nil
-	}
+func (d *daemon) pendingView(message, []puff.Value) (puff.Value, error) {
 	var items []puff.Value
 	d.do(func(st *state) {
 		for _, a := range st.inbox("review") {
@@ -309,9 +300,6 @@ func (a *asked) reviewItem() puff.Value {
 // trustFn trusts the agent session that sent the held message id for its
 // service, and accepts it.
 func (d *daemon) trustFn(m message, args []puff.Value) (puff.Value, error) {
-	if !m.user {
-		return notYours(), nil
-	}
 	id, ok := args[0].(puff.Int)
 	if !ok {
 		return nil, fmt.Errorf("want a message id, got %s", puff.Print(args[0]))
@@ -337,9 +325,6 @@ func (d *daemon) trustFn(m message, args []puff.Value) (puff.Value, error) {
 }
 
 func (d *daemon) acceptFn(m message, args []puff.Value) (puff.Value, error) {
-	if !m.user {
-		return notYours(), nil
-	}
 	id, ok := args[0].(puff.Int)
 	if !ok {
 		return nil, fmt.Errorf("want a message id, got %s", puff.Print(args[0]))
@@ -348,10 +333,7 @@ func (d *daemon) acceptFn(m message, args []puff.Value) (puff.Value, error) {
 	return r, nil
 }
 
-func (d *daemon) rejectFn(m message, args []puff.Value) (puff.Value, error) {
-	if !m.user {
-		return notYours(), nil
-	}
+func (d *daemon) rejectFn(_ message, args []puff.Value) (puff.Value, error) {
 	id, ok := args[0].(puff.Int)
 	if !ok {
 		return nil, fmt.Errorf("want a message id, got %s", puff.Print(args[0]))

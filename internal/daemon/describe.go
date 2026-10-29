@@ -292,7 +292,8 @@ func (mk *marker) missing(s *service) []string {
 }
 
 // describe is addr's interface as data: (ok [{:fn :params :doc :mark :form}
-// ...]) sorted by name, or (err {:kind :no-address}).
+// ...]) sorted by name, with :yours #t on a function only your connections
+// may use; or (err {:kind :no-address}).
 func (mk *marker) describe(addr string) puff.Value {
 	s, ok := mk.services[addr]
 	if !ok {
@@ -309,13 +310,17 @@ func (mk *marker) describe(addr string) puff.Value {
 		if h.ask {
 			form = "ask"
 		}
-		m, _ := puff.NewMap(
-			puff.Entry{Key: puff.Keyword("fn"), Val: puff.Keyword(fn)},
-			puff.Entry{Key: puff.Keyword("params"), Val: puff.NewVector(params...)},
-			puff.Entry{Key: puff.Keyword("doc"), Val: puff.String(h.doc)},
-			puff.Entry{Key: puff.Keyword("mark"), Val: puff.Keyword(strings.TrimPrefix(mk.mark(s, fn).String(), ":"))},
-			puff.Entry{Key: puff.Keyword("form"), Val: puff.Keyword(form)},
-		)
+		es := []puff.Entry{
+			{Key: puff.Keyword("fn"), Val: puff.Keyword(fn)},
+			{Key: puff.Keyword("params"), Val: puff.NewVector(params...)},
+			{Key: puff.Keyword("doc"), Val: puff.String(h.doc)},
+			{Key: puff.Keyword("mark"), Val: puff.Keyword(strings.TrimPrefix(mk.mark(s, fn).String(), ":"))},
+			{Key: puff.Keyword("form"), Val: puff.Keyword(form)},
+		}
+		if h.yours {
+			es = append(es, puff.Entry{Key: puff.Keyword("yours"), Val: puff.Bool(true)})
+		}
+		m, _ := puff.NewMap(es...)
 		fns = append(fns, m)
 	}
 	return puff.Ok(puff.NewVector(fns...))

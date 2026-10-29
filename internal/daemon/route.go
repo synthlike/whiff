@@ -231,7 +231,7 @@ func (st *state) publish(m message) {
 func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 	return append([]*puff.Builtin{
 		{Name: "describe", Args: "address", Mark: puff.MarkRead,
-			Doc: "(ok fns): address's functions, each {:fn :params :doc :mark :form}.",
+			Doc: "(ok fns): address's functions, each {:fn :params :doc :mark :form}, and :yours #t on one only your connections may use.",
 			Fn: func(_ *puff.Call, args []puff.Value) (puff.Value, error) {
 				addr, ok := args[0].(puff.Keyword)
 				if !ok {
