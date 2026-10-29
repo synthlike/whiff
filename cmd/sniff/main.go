@@ -8,10 +8,10 @@
 // It prints the page's address, with a token that only you have: the page
 // is yours, as the socket is, and what it sends is sent as you, as from the
 // CLI. A :read function's view can be a page of its own,
-// /view/address/fn?args=[...], fetched again each time the topic it names
-// fires ({:changed topic}, ?on=topic, or address/changed). An item's
-// action to a :read function is a link to its page; clicking any other
-// sends it, as whiff act does.
+// /view/address/fn?args=[...], drawn here (render.go) and fetched again
+// each time the topic it names fires ({:changed topic}, ?on=topic, or
+// address/changed). An item's action to a :read function is a link to its
+// page; any other is a form that sends it, as whiff act does.
 package main
 
 import (
@@ -113,6 +113,15 @@ type server struct {
 	entries  []json.RawMessage // history, oldest first, as pages get it
 	status   status
 	watchers map[chan event]bool
+	said     map[int]said // what the last actions sent from a page answered, by number
+	saidN    int
+}
+
+// said is what an action a page sent answered, for the page it goes back
+// to to show.
+type said struct {
+	Sends, Reply string
+	OK           bool
 }
 
 // status is whether sniff follows the daemon, and why not.
@@ -133,7 +142,7 @@ func newServer(dir string, port int) *server {
 	rand.Read(b)
 	wd, _ := os.Getwd()
 	return &server{dir: dir, wd: wd, port: port, token: hex.EncodeToString(b),
-		status: status{Why: "connecting to whiff"}, watchers: map[chan event]bool{}}
+		status: status{Why: "connecting to whiff"}, watchers: map[chan event]bool{}, said: map[int]said{}}
 }
 
 // follow traces the daemon's history until ctx ends, connecting again a
@@ -248,7 +257,8 @@ func (s *server) handler() http.Handler {
 	mux := http.NewServeMux()
 	files, _ := fs.Sub(web, "web")
 	mux.Handle("GET /", http.FileServerFS(files))
-	mux.HandleFunc("GET /view/", func(w http.ResponseWriter, r *http.Request) { http.ServeFileFS(w, r, files, "view.html") })
+	mux.HandleFunc("GET /view/", s.page)
+	mux.HandleFunc("POST /act", s.actForm)
 	mux.HandleFunc("GET /events", s.events)
 	mux.HandleFunc("GET /api/addresses", s.addresses)
 	mux.HandleFunc("GET /api/state", s.state)
@@ -347,10 +357,19 @@ func (s *server) addresses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer c.Close()
-	addrs, err := evalOk(c, "(address/list)")
+	out, err := describeAll(c)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
+	}
+	writeJSON(w, out)
+}
+
+// describeAll is every address with its functions, as addresses answers.
+func describeAll(c *rpc.Client) ([]any, error) {
+	addrs, err := evalOk(c, "(address/list)")
+	if err != nil {
+		return nil, err
 	}
 	out := []any{}
 	vec, _ := addrs.(puff.Vector)
@@ -364,7 +383,28 @@ func (s *server) addresses(w http.ResponseWriter, r *http.Request) {
 		a["fns"] = plain(fns)
 		out = append(out, a)
 	}
-	writeJSON(w, out)
+	return out, nil
+}
+
+// marks is each function's mark, "read" or "write", by its target,
+// address/fn: whether an action to it is a link or a form.
+func marks(c *rpc.Client) (map[string]string, error) {
+	all, err := describeAll(c)
+	if err != nil {
+		return nil, err
+	}
+	ms := map[string]string{}
+	for _, a := range all {
+		a, _ := a.(map[string]any)
+		addr, _ := a["address"].(string)
+		fns, _ := a["fns"].([]any)
+		for _, f := range fns {
+			f, _ := f.(map[string]any)
+			fn, _ := f["fn"].(string)
+			ms[addr+"/"+fn], _ = f["mark"].(string)
+		}
+	}
+	return ms, nil
 }
 
 // state answers the address's state, (service/state :address)'s Result as a
@@ -427,60 +467,118 @@ func (s *server) session(w http.ResponseWriter, r *http.Request) {
 // Only a :read function's, so fetching a page, again and again, changes
 // nothing.
 func (s *server) view(w http.ResponseWriter, r *http.Request) {
-	target, ok := keyword(r.URL.Query().Get("target"))
-	i := strings.LastIndex(target, "/")
-	if !ok || i <= 0 {
-		http.Error(w, "want a target, address/fn", http.StatusBadRequest)
+	reply, _, code, err := s.fetch(r.URL.Query().Get("target"), r.URL.Query().Get("args"))
+	if err != nil {
+		http.Error(w, err.Error(), code)
 		return
 	}
-	addr, fn := target[:i], target[i+1:]
-	args := r.URL.Query().Get("args")
+	writeJSON(w, treeOf(reply))
+}
+
+// fetch is what target, address/fn, answers called as you with args, a
+// printed vector ("" for none), if it is a :read function: its reply,
+// printed, and every function's mark by target; or why not, with the HTTP
+// status that says so.
+func (s *server) fetch(target, args string) (string, map[string]string, int, error) {
+	target, ok := keyword(target)
+	i := strings.LastIndex(target, "/")
+	if !ok || i <= 0 {
+		return "", nil, http.StatusBadRequest, errors.New("want a target, address/fn")
+	}
 	if args == "" {
 		args = "[]"
 	}
 	if v, err := puff.ReadValue(args); err != nil {
-		http.Error(w, "want args as a vector, [2]: "+err.Error(), http.StatusBadRequest)
-		return
+		return "", nil, http.StatusBadRequest, errors.New("want args as a vector, [2]: " + err.Error())
 	} else if _, ok := v.(puff.Vector); !ok {
-		http.Error(w, "want args as a vector, [2], got "+args, http.StatusBadRequest)
-		return
+		return "", nil, http.StatusBadRequest, errors.New("want args as a vector, [2], got " + args)
 	}
 	c, err := s.dial()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
-		return
+		return "", nil, http.StatusServiceUnavailable, err
 	}
 	defer c.Close()
-	fns, err := evalOk(c, "(address/describe "+puff.Print(puff.Keyword(addr))+")")
+	ms, err := marks(c)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
+		return "", nil, http.StatusBadGateway, err
 	}
-	mark := ""
-	list, _ := plain(fns).([]any)
-	for _, f := range list {
-		if f, _ := f.(map[string]any); f["fn"] == fn {
-			mark, _ = f["mark"].(string)
-		}
-	}
-	switch mark {
+	switch mark := ms[target]; mark {
 	case "read":
 	case "":
-		http.Error(w, fmt.Sprintf(":%s has no function %s", addr, fn), http.StatusNotFound)
-		return
+		return "", nil, http.StatusNotFound, fmt.Errorf(":%s has no function %s", target[:i], target[i+1:])
 	default:
-		http.Error(w, fmt.Sprintf(":%s is :%s: a page fetches only :read functions", target, mark), http.StatusForbidden)
-		return
+		return "", nil, http.StatusForbidden, fmt.Errorf(":%s is :%s: a page fetches only :read functions", target, mark)
 	}
 	resp, err := c.Message("call", target, args, s.wd)
 	if err == nil && resp.Error != "" {
 		err = errors.New(resp.Error)
 	}
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		return "", nil, http.StatusBadGateway, err
+	}
+	return resp.Value, ms, http.StatusOK, nil
+}
+
+// page draws a :read function's view as a page of its own,
+// /view/address/fn?args=[...], fetched again each time one of its topics
+// fires: ?on=topic, as often as needed, or the ones the view names, or
+// address/changed. ?part=view draws only the view, for the page to swap
+// in; ?said=n shows what the action sent from it answered.
+func (s *server) page(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	target := strings.TrimPrefix(r.URL.Path, "/view/")
+	args := q.Get("args")
+	title := ":" + target
+	if args != "" && args != "[]" {
+		title += " " + strings.TrimSuffix(strings.TrimPrefix(args, "["), "]")
+	}
+	// Back is the page itself, without what only this request asks for.
+	part := q.Get("part")
+	n, _ := strconv.Atoi(q.Get("said"))
+	q.Del("part")
+	q.Del("said")
+	back := r.URL.Path
+	if len(q) > 0 {
+		back += "?" + q.Encode()
+	}
+	data := struct {
+		Shown, On, Topics, Error string
+		Reply                    shown
+		Said                     *said
+	}{Shown: title}
+	reply, ms, code, err := s.fetch(target, args)
+	if err != nil {
+		if part != "" {
+			http.Error(w, err.Error(), code)
+			return
+		}
+		data.Error = err.Error()
+	} else {
+		data.Reply = show(reply, ms, back)
+		topics := q["on"]
+		if len(topics) == 0 && data.Reply.View != nil {
+			topics = data.Reply.View.Topics
+		}
+		if len(topics) == 0 {
+			topics = []string{target[:max(strings.LastIndex(target, "/"), 0)] + "/changed"}
+		}
+		data.Topics = strings.Join(topics, " ")
+		data.On = ":" + strings.Join(topics, ", :")
+	}
+	s.mu.Lock()
+	if sd, ok := s.said[n]; ok {
+		data.Said = &sd
+	}
+	s.mu.Unlock()
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if part != "" {
+		pages.ExecuteTemplate(w, "shown", data.Reply)
 		return
 	}
-	writeJSON(w, treeOf(resp.Value))
+	if err != nil {
+		w.WriteHeader(code)
+	}
+	pages.ExecuteTemplate(w, "page", data)
 }
 
 // watch streams an event, changed, each time one of its topics is
@@ -578,6 +676,75 @@ func (s *server) act(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, treeOf(resp.Value))
+}
+
+// actForm sends what a page's form picked, an item's action, as you, as
+// act does, with your answer added if the form asked for one, and goes
+// back to the page it came from, which shows what it answered. Only
+// sniff's own pages can post it: the cookie is SameSite, and a browser
+// says where a post comes from.
+func (s *server) actForm(w http.ResponseWriter, r *http.Request) {
+	if site := r.Header.Get("Sec-Fetch-Site"); site != "" && site != "same-origin" {
+		http.Error(w, "send it from sniff's page", http.StatusForbidden)
+		return
+	}
+	if o := r.Header.Get("Origin"); o != "" && o != fmt.Sprintf("http://127.0.0.1:%d", s.port) && o != fmt.Sprintf("http://localhost:%d", s.port) {
+		http.Error(w, "send it from sniff's page", http.StatusForbidden)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	msg := r.PostForm.Get("action")
+	if answer, ok := r.PostForm["answer"]; ok {
+		v, err := puff.ReadValue(msg)
+		if vec, ok := v.(puff.Vector); err == nil && ok {
+			items := make([]puff.Value, vec.Len(), vec.Len()+1)
+			for i := range items {
+				items[i] = vec.At(i)
+			}
+			msg = puff.Print(puff.NewVector(append(items, puff.String(strings.TrimSpace(strings.Join(answer, ""))))...))
+		}
+	}
+	target, args, err := action(msg)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// back is a page of sniff's own, never another site.
+	back := r.PostForm.Get("back")
+	if !strings.HasPrefix(back, "/") || strings.HasPrefix(back, "//") || strings.HasPrefix(back, "/\\") {
+		back = "/"
+	}
+	sd := said{Sends: msg}
+	if c, err := s.dial(); err != nil {
+		sd.Reply = err.Error()
+	} else {
+		resp, err := c.Message("call", target, args, s.wd)
+		c.Close()
+		switch {
+		case err != nil:
+			sd.Reply = err.Error()
+		case resp.Error != "":
+			sd.Reply = resp.Error
+		default:
+			sd.Reply = resp.Value
+			sd.OK = strings.HasPrefix(resp.Value, "(ok ")
+		}
+	}
+	s.mu.Lock()
+	s.saidN++
+	n := s.saidN
+	s.said[n] = sd
+	delete(s.said, n-64)
+	s.mu.Unlock()
+	sep := "?"
+	if strings.Contains(back, "?") {
+		sep = "&"
+	}
+	http.Redirect(w, r, fmt.Sprintf("%s%ssaid=%d", back, sep, n), http.StatusSeeOther)
 }
 
 // action is the target and args of a, a printed [:address/fn args...].

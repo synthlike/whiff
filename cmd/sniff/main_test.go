@@ -397,4 +397,63 @@ func TestViews(t *testing.T) {
 			t.Errorf("args %s: %s %s", args, r.Status, b)
 		}
 	}
+
+	// The page sniff draws: the view, its action a form; and the view
+	// alone, for the page to swap in.
+	if r, b := do("GET", "/view/board/show", "", ""); r.StatusCode != http.StatusOK || !strings.Contains(b, `data-topics="board/changed"`) ||
+		!strings.Contains(b, `<span>n 2</span>`) || !strings.Contains(b, `<input type="hidden" name="action" value="[:board/bump 2]">`) {
+		t.Errorf("the page: %s %s", r.Status, b)
+	}
+	if r, b := do("GET", "/view/board/show?part=view", "", ""); r.StatusCode != http.StatusOK || strings.Contains(b, "<html") || !strings.Contains(b, `<span>n 2</span>`) {
+		t.Errorf("the view alone: %s %s", r.Status, b)
+	}
+	if r, b := do("GET", "/view/board/bump", "", ""); r.StatusCode != http.StatusForbidden || !strings.Contains(b, "a page fetches only :read functions") {
+		t.Errorf("a :write function's page: %s %s", r.Status, b)
+	}
+
+	// A form posts its action, from sniff's own page only, and goes back to
+	// the page, which shows what it answered.
+	noRedirect := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	post := func(form url.Values, header ...string) *http.Response {
+		t.Helper()
+		req, _ := http.NewRequest("POST", base+"/act", strings.NewReader(form.Encode()))
+		req.AddCookie(cookie)
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		for i := 0; i+1 < len(header); i += 2 {
+			req.Header.Set(header[i], header[i+1])
+		}
+		resp, err := noRedirect.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp
+	}
+	form := url.Values{"action": {"[:board/bump 2]"}, "back": {"/view/board/show"}}
+	if r := post(form, "Sec-Fetch-Site", "cross-site"); r.StatusCode != http.StatusForbidden {
+		t.Errorf("another site's form: %s", r.Status)
+	}
+	if r := post(form, "Origin", "http://evil.example"); r.StatusCode != http.StatusForbidden {
+		t.Errorf("another origin's form: %s", r.Status)
+	}
+	r := post(form, "Sec-Fetch-Site", "same-origin")
+	if r.StatusCode != http.StatusSeeOther || r.Header.Get("Location") != "/view/board/show?said=1" {
+		t.Fatalf("the form: %s %s", r.Status, r.Header.Get("Location"))
+	}
+	if _, b := do("GET", r.Header.Get("Location"), "", ""); !strings.Contains(b, `<p class="said ok">Sent <code>[:board/bump 2]</code>: (ok :done)</p>`) ||
+		!strings.Contains(b, `<span>n 4</span>`) {
+		t.Errorf("back on the page: %s", b)
+	}
+	// One that asks gets your answer as its last argument; back never
+	// leaves sniff.
+	r = post(url.Values{"action": {"[:board/bump]"}, "answer": {" 1 "}, "back": {"//evil.example/"}})
+	if r.Header.Get("Location") != "/?said=2" {
+		t.Errorf("a form going elsewhere: %s", r.Header.Get("Location"))
+	}
+	s.mu.Lock()
+	sd := s.said[2]
+	s.mu.Unlock()
+	if sd.Sends != `[:board/bump "1"]` || sd.OK {
+		t.Errorf("an answered form sent %+v", sd)
+	}
 }

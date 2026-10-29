@@ -1,0 +1,78 @@
+{{/* A view pinned as a page of its own, /view/address/fn?args=[...]. */}}
+{{define "page"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Shown}} · sniff</title>
+<link rel="stylesheet" href="/style.css">
+<script src="/page.js" defer></script>
+</head>
+<body>
+<header>
+  <h1><a href="/">sniff</a></h1>
+  <span class="target">{{.Shown}}</span>
+  <span id="status" class="status{{if not .Error}} on{{end}}">{{if .Error}}{{.Error}}{{else}}fetched again on {{.On}}{{end}}</span>
+</header>
+<main>
+  {{with .Said}}<p class="said {{if .OK}}ok{{else}}err{{end}}">Sent <code>{{.Sends}}</code>: {{.Reply}}</p>{{end}}
+  <section id="view" class="pinned" aria-label="View" data-topics="{{.Topics}}"{{if .Error}} data-error{{end}}>{{if not .Error}}{{template "shown" .Reply}}{{end}}</section>
+</main>
+</body>
+</html>
+{{end}}
+
+{{/* A reply: its view, with the reply folded under it as puff; or the reply. */}}
+{{define "shown"}}{{if .View}}{{template "view" .View}}
+<details class="raw"><summary>as puff</summary><div class="value">{{template "value" .Value}}</div></details>{{else}}<div class="value">{{template "value" .Value}}</div>{{end}}{{end}}
+
+{{define "view"}}<div class="view{{if eq .Kind "board"}} board{{end}}">
+{{- if eq .Kind "text"}}<pre>{{.Text}}</pre>
+{{- else if eq .Kind "board"}}{{range .Columns}}<div class="column"><h4>{{.Title}}</h4>{{range .Items}}{{template "item" .}}{{else}}<p class="hint">None.</p>{{end}}</div>{{end}}
+{{- else if eq .Kind "items"}}{{range .Items}}{{template "item" .}}{{else}}<p class="hint">None.</p>{{end}}
+{{- else}}{{range .Places}}<button type="button" class="place" data-copy="{{.At}}" title="copy {{.At}}"><span class="at">{{.At}}</span>{{if .Note}}<span class="detail">{{.Note}}</span>{{end}}</button>{{else}}<p class="hint">None.</p>{{end}}
+{{- end}}</div>{{end}}
+
+{{/* An item, with what can be done with it. */}}
+{{define "item"}}<div class="item">{{template "prose" .Label}}{{if .Detail}}<span class="detail">{{.Detail}}</span>{{end}}
+{{- if .Actions}}<span class="actions">{{range .Actions}}{{template "act" .}}{{end}}</span>{{end}}</div>{{end}}
+
+{{/* An action to a :read function is a link to its answer's page; any
+     other a form that sends it as you, and one that asks shows a box for
+     your answer first, added as its last argument. */}}
+{{define "act"}}
+{{- if .Link}}<a class="action link{{if .Labelled}} labelled{{end}}" href="{{.Link}}" target="_blank" rel="noopener" title="opens what {{.Sends}} answers">{{.Label}}</a>
+{{- else if .Ask}}<details class="asks"><summary class="action{{if .Labelled}} labelled{{end}}" title="sends {{.Sends}} as you, asking first: {{.Ask}}">{{.Label}}{{template "to" .}}</summary>
+<form class="ask" method="post" action="/act">{{template "hidden" .}}<input name="answer" placeholder="{{.Ask}}" aria-label="{{.Ask}}" autocomplete="off"><button class="action">Send</button></form></details>
+{{- else}}<form class="act" method="post" action="/act">{{template "hidden" .}}<button class="action{{if .Labelled}} labelled{{end}}" title="sends {{.Sends}} as you">{{.Label}}{{template "to" .}}</button></form>
+{{- end}}{{end}}
+
+{{define "to"}}{{if and .Labelled .Write}}<span class="to"> → :{{.Target}}</span>{{end}}{{end}}
+
+{{define "hidden"}}<input type="hidden" name="action" value="{{.Sends}}"><input type="hidden" name="back" value="{{.Back}}">{{end}}
+
+{{define "prose"}}{{if .Plain}}<span>{{.Text}}</span>{{else}}<div class="prose">
+{{- range .Blocks}}
+{{- if eq .Tag "pre"}}<pre><code>{{.Code}}</code></pre>
+{{- else if eq .Tag "p"}}<p>{{template "spans" index .Lines 0}}</p>
+{{- else if eq .Tag "ol"}}<ol start="{{.Start}}">{{range .Lines}}<li>{{template "spans" .}}</li>{{end}}</ol>
+{{- else}}<ul>{{range .Lines}}<li>{{template "spans" .}}</li>{{end}}</ul>
+{{- end}}
+{{- end}}</div>{{end}}{{end}}
+
+{{define "spans"}}{{range .}}{{if .Code}}<code>{{.Text}}</code>{{else}}{{.Text}}{{end}}{{end}}{{end}}
+
+{{/* A value, folded: short ones on a line, longer ones as a tree. */}}
+{{define "value"}}{{if .Fold}}<details{{if .Open}} open{{end}}><summary>
+{{- if eq .Kind "map"}}{{"{"}}{{else if eq .Kind "vec"}}[{{else}}<span class="tag">({{.Name}}</span>{{end}}<span class="count"> {{.Count}}</span></summary>
+<div class="kids">{{if eq .Kind "map"}}{{range .Pairs}}<div>{{template "inline" .Key}} {{template "value" .Val}}</div>{{end}}{{else}}{{range .Kids}}<div>{{template "value" .}}</div>{{end}}{{end}}</div>
+{{- if eq .Kind "map"}}{{"}"}}{{else if eq .Kind "vec"}}]{{else}}){{end}}</details>{{else}}{{template "inline" .}}{{end}}{{end}}
+
+{{define "inline"}}
+{{- if eq .Kind "kw"}}<span class="kw">{{.Text}}</span>
+{{- else if eq .Kind "str"}}<span class="str">{{.Text}}</span>
+{{- else if eq .Kind "lit"}}<span class="lit">{{.Text}}</span>
+{{- else if eq .Kind "tag"}}<span>(<span class="tag">{{.Name}}</span>{{range .Kids}} {{template "inline" .}}{{end}})</span>
+{{- else if eq .Kind "vec"}}<span>[{{range $i, $k := .Kids}}{{if $i}} {{end}}{{template "inline" $k}}{{end}}]</span>
+{{- else}}<span>{{"{"}}{{range $i, $p := .Pairs}}{{if $i}} {{end}}{{template "inline" $p.Key}} {{template "inline" $p.Val}}{{end}}{{"}"}}</span>
+{{- end}}{{end}}
