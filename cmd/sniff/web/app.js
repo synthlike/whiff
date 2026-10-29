@@ -337,3 +337,32 @@ events.addEventListener("snapshot", (ev) => {
 events.addEventListener("entry", (ev) => append(JSON.parse(ev.data)));
 events.addEventListener("status", (ev) => setStatus(JSON.parse(ev.data)));
 events.onerror = () => setStatus({ connected: false, why: "sniff stopped" });
+
+// followReview keeps how many wait for review beside the review link and in
+// the tab's title, fetching the queue each time it changes. It follows
+// :review/pending to do so, so while sniff is open, it reviews: agents'
+// writes wait for you rather than failing with :no-reviewer. A watch that
+// sniff refuses, while whiff isn't running, is tried again.
+function followReview() {
+  const link = document.querySelector("header .review");
+  const count = async () => {
+    let n = 0;
+    try {
+      const v = viewOf(await getJSON("api/view?target=review/pending"));
+      n = v ? v.v[0].v.length : 0;
+    } catch {
+      return;
+    }
+    link.replaceChildren("review");
+    if (n) link.append(" ", el("span", "count", String(n)));
+    link.classList.toggle("waiting", n > 0);
+    document.title = (n ? `(${n}) ` : "") + "sniff";
+  };
+  const w = new EventSource("api/watch?topic=review/pending&topic=review/done");
+  w.addEventListener("open", count);
+  w.addEventListener("changed", count);
+  w.onerror = () => {
+    if (w.readyState === EventSource.CLOSED) setTimeout(followReview, 2000);
+  };
+}
+followReview();

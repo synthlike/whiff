@@ -89,6 +89,16 @@ nav button:hover, .lanes button:hover { border-color: var(--accent); }
 nav button.client { border-style: dashed; }
 .follow { color: var(--muted); user-select: none; }
 header .review { color: var(--accent); white-space: nowrap; }
+header .review .count {
+  display: inline-block;
+  min-width: 18px;
+  padding: 0 5px;
+  font: 600 11px/16px var(--sans);
+  text-align: center;
+  color: var(--panel);
+  background: var(--err);
+  border-radius: 8px;
+}
 
 main { flex: 1; display: flex; min-height: 0; }
 #trace { flex: 1; overflow: auto; position: relative; min-width: 0; }

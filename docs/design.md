@@ -213,6 +213,7 @@ Rules that keep the gate honest:
 - An agent answers only its own inbox: it can't answer a question to you.
 - Nobody reviewing (no client follows `:review/pending`) means a gated
   message fails with `:no-reviewer` at once, rather than waiting unseen.
+  An open sniff follows it, showing how many wait, so it reviews.
 
 Your attention is what the gate spends, so it holds only what something
 further on won't hold anyway. An agent's reply to its own inbox goes
