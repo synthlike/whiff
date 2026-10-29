@@ -679,6 +679,10 @@ esac
 	git("init", "-q", "-b", "main")
 	git("commit", "-q", "--allow-empty", "-m", "first")
 
+	watch := dial(t, dir)
+	if _, err := watch.Sub("plan/changed"); err != nil {
+		t.Fatal(err)
+	}
 	resp, err := c.Message("call", "plan/start", `["two files" ["true"]]`, repo)
 	if err != nil || resp.Value != "(ok 1)" {
 		t.Fatalf("plan/start = %+v %v", resp, err)
@@ -711,6 +715,22 @@ esac
 	resp, err = c.Message("call", "pipeline/show", "[2]", repo)
 	if err != nil || !strings.Contains(resp.Value, `VERDICT: approve`) || !strings.Contains(resp.Value, `+++ b/two.txt`) {
 		t.Errorf("show = %+v %v", resp, err)
+	}
+	// Tickets move as the plan starts and gets its tasks, at each run's
+	// dev, check and review, and as each run ends: 10 times.
+	var changes []string
+	for len(changes) < 10 {
+		select {
+		case e := <-watch.Events():
+			changes = append(changes, e.Topic+" "+e.Value)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%d :plan/changed, want 10: %q", len(changes), changes)
+		}
+	}
+	for _, ch := range changes {
+		if ch != "plan/changed {:plan 1}" {
+			t.Errorf("change = %q", ch)
+		}
 	}
 }
 

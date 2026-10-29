@@ -12,6 +12,7 @@
 ;   whiff call pipeline/cancel 1
 ;   whiff inbox                     ; how a run ended
 ;   whiff sub pipeline/done
+;   whiff sub pipeline/step         ; {:run :step} as a run takes each step
 ;
 ; A run's worktree is ~/.whiff/pipelines/<repo>-<n>, on branch whiff/<n>.
 ; Its state is the runs and the jobs they wait for; a run whose job was
@@ -51,11 +52,13 @@
   ; started is (ok id), the id of the job r says has started, or r.
   (def (started r) (catch r [{:kind :pending :id id} (ok id)]))
 
-  ; waiting notes that run n waits for job id at step.
+  ; waiting notes that run n waits for job id at step, and says so on
+  ; :pipeline/step.
   (def (waiting state n step id)
-    (-> state
-      (map/set-in [:jobs id] [n step])
-      (set-run n {:step step :job id})))
+    (do (publish :pipeline/step {:run n :step step})
+      (-> state
+        (map/set-in [:jobs id] [n step])
+        (set-run n {:step step :job id}))))
 
   ; dev-cmd is the dev's claude: its session's first turn, or a later one.
   ; It may run the check, as it is or with more arguments, and no MCP
@@ -217,6 +220,7 @@
     (match (map/get-in state [:runs n])
       [(some {:step s :job id}) when (active? s)
        (do (or-else (call :jobs/cancel id) :gone)
+         (publish :pipeline/step {:run n :step :cancelled})
          (ok [:cancelled (set-run state n {:step :cancelled})]))]
       [_ (err {:kind :no-run :message (str "no run " n " is going")})]))
 
