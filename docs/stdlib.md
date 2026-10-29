@@ -212,14 +212,14 @@ Only in whiff: in services, `whiff eval` and `whiff repl`. In a handler,
 `call`, `send` or `send-after` with a literal target counts as that target's
 mark rather than `:write`, and `publish` to a literal topic as its subscribers'.
 
-- `(describe address)`: (ok fns): address's functions, each {:fn :params :doc :mark :form}, and :yours #t on one only your connections may use.
-- `(reset service)` `:write`: Deletes service's stored state and reloads it from its file, so it starts from its :state again: (ok :done), or (err e).
-- `(addresses)`: (ok addrs): every address, sorted, each {:address :client :state}: :client for a client's, :state for a service with :state.
-- `(state service)`: (ok state): service's state as it last committed it; (err {:kind :stateless}) for a service without :state, (err {:kind :no-address}) if there is none.
+- `(address/describe address)`: (ok fns): address's functions, each {:fn :params :doc :mark :form}, and :yours #t on one only your connections may use.
+- `(service/reset service)` `:write`: Deletes service's stored state and reloads it from its file, so it starts from its :state again: (ok :done), or (err e).
+- `(address/list)`: (ok addrs): every address, sorted, each {:address :client :state}: :client for a client's, :state for a service with :state.
+- `(service/state service)`: (ok state): service's state as it last committed it; (err {:kind :stateless}) for a service without :state, (err {:kind :no-address}) if there is none.
 - `(inbox [fn])`: This service's messages waiting for a reply, oldest first, each {:id :fn :args :from :cwd :at}; only fn's, a keyword, if given.
 - `(reply id result)`: Answer the message id in this service's inbox with result: its sender gets [:whiff/done id result]. (err {:kind :no-id}) if it isn't there.
 - `(self)`: This service's address, as a keyword: :assistant, or :try/3/assistant in whiff try.
-- `(mode)`: (ok m): this agent session's mode, {:mode :gated}, {:mode :free} or {:mode :trusted :services [:todo ...]}, with :until, a time, if it runs out. (err {:kind :no-session}) for anyone else.
+- `(session/mode)`: (ok m): this agent session's mode, {:mode :gated}, {:mode :free} or {:mode :trusted :services [:todo ...]}, with :until, a time, if it runs out. (err {:kind :no-session}) for anyone else.
 - `(hand-on r)`: r; if r is the pending of a job or ask this service started, its answer goes to the caller of the message being handled instead. (err {:kind :no-id}) for another pending.
 - `(publish topic v)` `:write`: Send v to every service subscribed to topic, a keyword: :done at once; pending if the review gate holds it.
 - `(call target [arg] ...)` `:write`: Send target, :address/fn, a message and wait for its Result; (err {:kind :timeout}) after 5s.

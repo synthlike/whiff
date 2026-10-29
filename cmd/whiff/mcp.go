@@ -70,7 +70,7 @@ type agent struct {
 	mode  string            // the session's mode as the tools describe it, printed
 }
 
-// sessionMode is the agent's mode, as (mode) gives it: what it lets
+// sessionMode is the agent's mode, as (session/mode) gives it: what it lets
 // through without review.
 type sessionMode struct {
 	printed string
@@ -83,7 +83,7 @@ func (m sessionMode) lets(addr string) bool { return m.free || m.trust[addr] }
 
 // sessionMode asks the daemon for the agent's mode.
 func (a *agent) sessionMode() (sessionMode, error) {
-	v, err := a.eval("(mode)")
+	v, err := a.eval("(session/mode)")
 	if err != nil {
 		return sessionMode{}, err
 	}
@@ -201,7 +201,7 @@ type fnTool struct {
 // functions are every address's functions as tools, but the agent's own
 // and those only you may use, :yours, described as mode treats them.
 func (a *agent) functions(mode sessionMode) ([]fnTool, error) {
-	v, err := a.eval("(addresses)")
+	v, err := a.eval("(address/list)")
 	if err != nil {
 		return nil, err
 	}
@@ -214,7 +214,7 @@ func (a *agent) functions(mode sessionMode) ([]fnTool, error) {
 		if addr == "" || string(addr) == self {
 			continue
 		}
-		v, err := a.eval("(describe " + puff.Print(addr) + ")")
+		v, err := a.eval("(address/describe " + puff.Print(addr) + ")")
 		if err != nil {
 			return nil, err
 		}

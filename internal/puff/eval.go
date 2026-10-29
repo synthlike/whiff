@@ -52,7 +52,10 @@ type Env struct {
 	Stdout io.Writer
 	// Dir is where relative paths, os/cwd and proc/run start; "" is the
 	// process's working directory.
-	Dir     string
+	Dir string
+	// Hints are words for an unknown name's error, by name: why it isn't
+	// here, for a function another host has, as whiff's are in puff.
+	Hints   map[string]string
 	globals map[string]*global
 	tests   []*Test
 }
@@ -429,6 +432,9 @@ func (c *compiler) name(f *Form, s *scope) (expr, error) {
 		g = c.env.globals[f.Name]
 	}
 	if g == nil {
+		if hint := c.env.Hints[f.Name]; hint != "" {
+			return nil, errorf(f.Pos, "unknown name %s: %s", f.Name, hint)
+		}
 		return nil, errorf(f.Pos, "unknown name %s", f.Name)
 	}
 	c.refs = append(c.refs, g)

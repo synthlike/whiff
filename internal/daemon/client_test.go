@@ -84,7 +84,7 @@ func TestClient(t *testing.T) {
 	}
 	historyHas(t, c, `  done  user   client -> :hiss/whiff/done `+id+` (ok 1)  (ok :thanks)`)
 
-	describe := eval(c, `(describe :hiss)`)
+	describe := eval(c, `(address/describe :hiss)`)
 	for _, want := range []string{`{:doc "Shows text." :fn :toast :form :on :mark :read :params [:text]}`,
 		`{:doc "Waits for a person." :fn :review :form :ask :mark :write :params [:x]}`} {
 		if !strings.Contains(describe, want) {

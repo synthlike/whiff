@@ -370,7 +370,7 @@ func serviceOp(dir, op, service string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	defer c.Close()
-	resp, err := c.Eval("("+op+" "+puff.Print(puff.Keyword(strings.TrimPrefix(service, ":")))+")", "")
+	resp, err := c.Eval("(service/"+op+" "+puff.Print(puff.Keyword(strings.TrimPrefix(service, ":")))+")", "")
 	switch {
 	case err != nil:
 		fmt.Fprintf(stderr, "whiff: %v\n", err)

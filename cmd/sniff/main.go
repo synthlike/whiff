@@ -347,7 +347,7 @@ func (s *server) addresses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer c.Close()
-	addrs, err := evalOk(c, "(addresses)")
+	addrs, err := evalOk(c, "(address/list)")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -357,7 +357,7 @@ func (s *server) addresses(w http.ResponseWriter, r *http.Request) {
 	for i := range vec.Len() {
 		a, _ := plain(vec.At(i)).(map[string]any)
 		name, _ := a["address"].(string)
-		fns, err := evalOk(c, "(describe "+puff.Print(puff.Keyword(name))+")")
+		fns, err := evalOk(c, "(address/describe "+puff.Print(puff.Keyword(name))+")")
 		if err != nil {
 			continue // gone since
 		}
@@ -367,7 +367,8 @@ func (s *server) addresses(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
-// state answers the address's state, (state :address)'s Result as a tree.
+// state answers the address's state, (service/state :address)'s Result as a
+// tree.
 func (s *server) state(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimPrefix(r.URL.Query().Get("address"), ":")
 	if k, err := puff.ReadValue(":" + name); err != nil || name == "" || !puff.Equal(k, puff.Keyword(name)) {
@@ -380,7 +381,7 @@ func (s *server) state(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer c.Close()
-	resp, err := c.Eval("(state "+puff.Print(puff.Keyword(name))+")", "")
+	resp, err := c.Eval("(service/state "+puff.Print(puff.Keyword(name))+")", "")
 	if err == nil && resp.Error != "" {
 		err = errors.New(resp.Error)
 	}
@@ -450,7 +451,7 @@ func (s *server) view(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer c.Close()
-	fns, err := evalOk(c, "(describe "+puff.Print(puff.Keyword(addr))+")")
+	fns, err := evalOk(c, "(address/describe "+puff.Print(puff.Keyword(addr))+")")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return

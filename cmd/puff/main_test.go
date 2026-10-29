@@ -1,11 +1,27 @@
 package main
 
 import (
+	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/synthlike/whiff/internal/daemon"
 )
+
+// puff's hints name whiff's functions as whiff has them.
+func TestWhiffFunctions(t *testing.T) {
+	if got := daemon.Functions(); !slices.Equal(whiffFunctions, got) {
+		t.Errorf("whiffFunctions = %q, want whiff's: %q", whiffFunctions, got)
+	}
+	var stderr strings.Builder
+	if code := run([]string{"-e", "(call :a/b)"}, nil, io.Discard, &stderr, false, nil); code == 0 ||
+		!strings.Contains(stderr.String(), "unknown name call: it is whiff's") {
+		t.Errorf("puff -e (call :a/b) = %d %q", code, stderr.String())
+	}
+}
 
 func TestRun(t *testing.T) {
 	dir := t.TempDir()

@@ -225,12 +225,15 @@ func (st *state) publish(m message) {
 }
 
 // builtins are whiff's functions on top of puff's base table, acting for
-// cur. call, send, send-after and publish are :write: in a handler, one with
+// cur. What a service does with messages is bare, as puff's core is: call,
+// send, publish, reply...; what inspects or manages whiff is in a module:
+// address/, service/, session/. call, send, send-after and publish are
+// :write: in a handler, one with
 // a literal target or topic counts as its target's mark instead (see
 // marker), and under a :read mark they fault only on a :write target.
 func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 	return append([]*puff.Builtin{
-		{Name: "describe", Args: "address", Mark: puff.MarkRead,
+		{Name: "address/describe", Args: "address", Mark: puff.MarkRead,
 			Doc: "(ok fns): address's functions, each {:fn :params :doc :mark :form}, and :yours #t on one only your connections may use.",
 			Fn: func(_ *puff.Call, args []puff.Value) (puff.Value, error) {
 				addr, ok := args[0].(puff.Keyword)
@@ -239,7 +242,7 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 				}
 				return d.marker().describe(string(addr)), nil
 			}},
-		{Name: "reset", Args: "service", Mark: puff.MarkWrite,
+		{Name: "service/reset", Args: "service", Mark: puff.MarkWrite,
 			Doc: "Deletes service's stored state and reloads it from its file, so it starts from its :state again: (ok :done), or (err e).",
 			Fn: func(c *puff.Call, args []puff.Value) (puff.Value, error) {
 				addr, ok := args[0].(puff.Keyword)
@@ -258,7 +261,7 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 				}
 				return <-r.done, nil
 			}},
-		{Name: "addresses", Mark: puff.MarkRead,
+		{Name: "address/list", Mark: puff.MarkRead,
 			Doc: "(ok addrs): every address, sorted, each {:address :client :state}: :client for a client's, :state for a service with :state.",
 			Fn: func(_ *puff.Call, _ []puff.Value) (puff.Value, error) {
 				var addrs []puff.Value
@@ -275,7 +278,7 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 				})
 				return puff.Ok(puff.NewVector(addrs...)), nil
 			}},
-		{Name: "state", Args: "service", Mark: puff.MarkRead,
+		{Name: "service/state", Args: "service", Mark: puff.MarkRead,
 			Doc: "(ok state): service's state as it last committed it; (err {:kind :stateless}) for a service without :state, (err {:kind :no-address}) if there is none.",
 			Fn: func(_ *puff.Call, args []puff.Value) (puff.Value, error) {
 				addr, ok := args[0].(puff.Keyword)
@@ -325,7 +328,7 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 				}
 				return puff.Keyword(cur.addr), nil
 			}},
-		{Name: "mode", Mark: puff.MarkRead,
+		{Name: "session/mode", Mark: puff.MarkRead,
 			Doc: "(ok m): this agent session's mode, {:mode :gated}, {:mode :free} or {:mode :trusted :services [:todo ...]}, with :until, a time, if it runs out. (err {:kind :no-session}) for anyone else.",
 			Fn: func(_ *puff.Call, _ []puff.Value) (puff.Value, error) {
 				var r puff.Value
@@ -428,6 +431,17 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 				return puff.Done, nil
 			}},
 	}, viewBuiltins()...)
+}
+
+// Functions are the names of whiff's functions, sorted: what puff tells
+// you are only in whiff.
+func Functions() []string {
+	var names []string
+	for _, b := range (&daemon{}).builtins(&caller{}) {
+		names = append(names, b.Name)
+	}
+	slices.Sort(names)
+	return names
 }
 
 // request sends m to addr for cur and waits for its reply: the target's

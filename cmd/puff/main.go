@@ -76,9 +76,21 @@ func cancelOn(interrupts <-chan os.Signal) (context.Context, context.CancelFunc)
 	return ctx, cancel
 }
 
+// whiffFunctions are whiff's functions, which puff hasn't: a test keeps them
+// whiff's, without the puff binary depending on whiff.
+var whiffFunctions = []string{
+	"address/describe", "address/list", "call", "hand-on", "inbox", "publish", "reply", "self",
+	"send", "send-after", "service/reset", "service/state", "session/mode",
+	"view/board", "view/items", "view/locations", "view/text",
+}
+
 func newEnv(stdout io.Writer) *puff.Env {
 	env := puff.NewEnv()
 	env.Stdout = stdout
+	env.Hints = map[string]string{}
+	for _, name := range whiffFunctions {
+		env.Hints[name] = "it is whiff's: run this in a service, or with whiff eval"
+	}
 	return env
 }
 

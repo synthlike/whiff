@@ -48,7 +48,7 @@ func TestDescribe(t *testing.T) {
 
 	// marks is each function's name and mark from describe.
 	marks := func(addr string) string {
-		got, err := c.Eval("(describe :"+addr+")", "")
+		got, err := c.Eval("(address/describe :"+addr+")", "")
 		if err != nil || got.Error != "" {
 			t.Fatalf("describe %s: %v %s", addr, err, got.Error)
 		}
@@ -93,14 +93,14 @@ func TestDescribe(t *testing.T) {
 		}
 	}
 
-	got, err := c.Eval("(describe :files)", "")
+	got, err := c.Eval("(address/describe :files)", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if want := `{:doc "Reads a file." :fn :peek :form :on :mark :read :params [:path]}`; !strings.Contains(got.Value, want) {
 		t.Errorf("describe :files = %s, want it to hold %s", got.Value, want)
 	}
-	got, err = c.Eval("(describe :nobody)", "")
+	got, err = c.Eval("(address/describe :nobody)", "")
 	if want := `(err {:kind :no-address :message "no address :nobody"})`; err != nil || got.Value != want {
 		t.Errorf("describe :nobody = %v %s, want %s", err, got.Value, want)
 	}
@@ -223,7 +223,7 @@ func TestBackstop(t *testing.T) {
 	}()
 	<-held
 	writeServices(t, dir, map[string]string{"b": `(service b (on (x) "Writes." (file/write "` + file + `" "y")))`})
-	for deadline := time.Now().Add(2 * time.Second); !strings.Contains(eval(`(describe :b)`), ":mark :write"); time.Sleep(5 * time.Millisecond) {
+	for deadline := time.Now().Add(2 * time.Second); !strings.Contains(eval(`(address/describe :b)`), ":mark :write"); time.Sleep(5 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatal(":b didn't reload")
 		}

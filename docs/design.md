@@ -227,7 +227,7 @@ treats its messages to `:todo` as accepted (and so what `:todo` does for
 it), and so its eval whose only writes are calls and sends to `:todo`;
 `whiff free agent/3 --for 2h` treats everything it sends, publishes and
 evaluates as accepted; `whiff gate agent/3` goes back. The session sees its
-mode, `(mode)`, and `whiff mcp`'s tools say what goes through, so it doesn't
+mode, `(session/mode)`, and `whiff mcp`'s tools say what goes through, so it doesn't
 wait on what won't wait; they change at its next call. History records how
 the gate treated each of an agent's writes (`held 5`, `accepted 5`,
 `trusted`, `free`), and `whiff session agent/3` reads it back: the review at

@@ -77,9 +77,9 @@ func TestModes(t *testing.T) {
 	if r, err := you.Mode("agent/9", "free", nil, 0); err != nil || !strings.Contains(r.Value, ":no-address") {
 		t.Errorf("free for no session = %+v %v", r, err)
 	}
-	expect("the agent's mode", eval(`(mode)`), "(ok {:mode :gated})")
-	if r, err := you.Eval(`(mode)`, ""); err != nil || r.Value != `(err {:kind :no-session :message "only an agent session has a mode"})` {
-		t.Errorf("your (mode) = %+v %v", r, err)
+	expect("the agent's mode", eval(`(session/mode)`), "(ok {:mode :gated})")
+	if r, err := you.Eval(`(session/mode)`, ""); err != nil || r.Value != `(err {:kind :no-session :message "only an agent session has a mode"})` {
+		t.Errorf("your (session/mode) = %+v %v", r, err)
 	}
 
 	// Trusted: messages to notes go through; to relay, which isn't
@@ -90,7 +90,7 @@ func TestModes(t *testing.T) {
 	// What a trusted service does for the agent goes through too.
 	expect("trust relay", mode(you, "trusted", []string{"relay"}, 0), "(ok :done)")
 	expect("trusted relay", call("relay/add", `["d"]`), "ok")
-	expect("the trusted mode", eval(`(mode)`), "(ok {:mode :trusted :services [:relay]})")
+	expect("the trusted mode", eval(`(session/mode)`), "(ok {:mode :trusted :services [:relay]})")
 	// An eval whose only writes are messages to relay runs; one that
 	// reaches another :write still waits, and so does a publish.
 	expect("trusted eval", eval(`(match (call :notes/list) [(err {:kind k}) k] [_ :ran])`), ":ran")

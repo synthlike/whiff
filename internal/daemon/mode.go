@@ -78,7 +78,7 @@ func (st *state) lets(from, addr string) bool {
 	return m != nil && (m.free || addr != "" && m.trust[addr])
 }
 
-// modeValue is addr's mode as (mode) gives it: (ok {:mode ...}), or (err
+// modeValue is addr's mode as (session/mode) gives it: (ok {:mode ...}), or (err
 // {:kind :no-session}) if addr isn't an agent session.
 func (st *state) modeValue(addr string) puff.Value {
 	if s := st.addrs[addr]; s == nil || !s.client || !strings.HasPrefix(addr, "agent/") {
