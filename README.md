@@ -31,7 +31,7 @@ client.
 
 ## Status
 
-v0.3. `go install ./cmd/...` installs two binaries:
+v0.4. `go install ./cmd/...` installs three binaries:
 
 - `puff` runs puff without a daemon: `puff file.puff args...` runs a file
   (calling its `main` if it defines one), `puff -e '(...)'` evaluates an
@@ -45,6 +45,10 @@ v0.3. `go install ./cmd/...` installs two binaries:
   `sub` talk to them; `whiff inbox`, `reply` and `wait` answer the questions
   they ask you and pick up long jobs; `whiff history -f` follows every
   message; `whiff -h` lists the rest.
+- `sniff` is whiff's web UI, a client of the daemon like the CLI. It prints
+  a local URL with a token, and shows every message live, a lane per
+  address, each address's functions and state, and your review queue and
+  inbox, where you accept, reject and answer.
 
 Services keep state across restarts (`:state`, kept in `~/.whiff/whiff.db`;
 `whiff reset` forgets it), subscribe to topics, run long work as jobs and
