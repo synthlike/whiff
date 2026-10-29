@@ -11,20 +11,40 @@
 <header>
   <h1>sniff</h1>
   <span id="status" class="status">connecting…</span>
-  <nav id="addresses" aria-label="Addresses"></nav>
-  <a class="review" href="view/review/pending" target="_blank" title="what waits for your review; while sniff is open, agents' writes wait here for you">review</a>
-  <a class="inbox" href="view/me/inbox" target="_blank" title="questions and reports sent to you, :me">inbox</a>
+  <span class="grow"></span>
   <label class="follow"><input type="checkbox" id="follow" checked> follow</label>
 </header>
-<main>
-  <section id="trace" aria-label="Messages">
-    <div id="lanes" class="lanes"></div>
-    <div id="rows"></div>
-    <p id="empty" class="empty">No messages yet. Call a service and it shows here.</p>
-  </section>
-  <aside id="detail" aria-label="Details">
-    <p class="hint">Click a message for its arguments and reply, or an address for its functions and state.</p>
-  </aside>
-</main>
+<div class="window">
+  <nav class="side" aria-label="Sidebar">
+    <div class="group">
+      <h2>Needs you</h2>
+      <a class="queue review" href="/view/review/pending" title="what waits for your review; while sniff is open, agents' writes wait here for you"><span class="name">Review</span></a>
+      <a class="queue inbox" href="/view/me/inbox" title="questions and reports sent to you, :me"><span class="name">Inbox</span></a>
+    </div>
+    <div class="group">
+      <h2>Views</h2>
+      <div id="pins"></div>
+    </div>
+    <div class="group">
+      <h2>Addresses</h2>
+      <div id="addresses"></div>
+    </div>
+  </nav>
+  <div class="work">
+    <div id="tabs" class="tabs" role="tablist" aria-label="Tabs">
+      <div class="tab"><button role="tab" id="tab-activity" aria-selected="true" aria-controls="activity">Activity</button></div>
+    </div>
+    <main id="activity" role="tabpanel" aria-labelledby="tab-activity">
+      <section id="trace" aria-label="Messages">
+        <div id="lanes" class="lanes"></div>
+        <div id="rows"></div>
+        <p id="empty" class="empty">No messages yet. Call a service and it shows here.</p>
+      </section>
+      <aside id="detail" aria-label="Details">
+        <p class="hint">Click a message for its arguments and reply, or an address for its functions and state.</p>
+      </aside>
+    </main>
+  </div>
+</div>
 </body>
 </html>

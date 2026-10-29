@@ -522,7 +522,8 @@ func (s *server) fetch(target, args string) (string, map[string]string, int, err
 // /view/address/fn?args=[...], fetched again each time one of its topics
 // fires: ?on=topic, as often as needed, or the ones the view names, or
 // address/changed. ?part=view draws only the view, for the page to swap
-// in; ?said=n shows what the action sent from it answered.
+// in, and ?part=panel the view with its topics, for a tab of the main page;
+// ?said=n shows what the action sent from it answered.
 func (s *server) page(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	target := strings.TrimPrefix(r.URL.Path, "/view/")
@@ -570,7 +571,12 @@ func (s *server) page(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Unlock()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if part != "" {
+	switch part {
+	case "":
+	case "panel":
+		pages.ExecuteTemplate(w, "panel", data)
+		return
+	default:
 		pages.ExecuteTemplate(w, "shown", data.Reply)
 		return
 	}

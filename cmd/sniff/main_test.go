@@ -434,6 +434,13 @@ func TestViews(t *testing.T) {
 		!strings.Contains(b, `<span>n 2</span>`) {
 		t.Errorf("back on the page: %s", b)
 	}
+	// A tab of the main page gets the view with its topics, and what the
+	// form answered, without the page around it.
+	if r, b := do("GET", "/view/board/show?part=panel&said=1", "", ""); r.StatusCode != http.StatusOK || strings.Contains(b, "<html") ||
+		!strings.Contains(b, `<div class="shown" data-topics="board/changed">`) || !strings.Contains(b, `<p class="said ok">`) ||
+		!strings.Contains(b, `name="back" value="/view/board/show"`) {
+		t.Errorf("the view as a tab: %s %s", r.Status, b)
+	}
 	// One that asks gets your answer as its last argument; back never
 	// leaves sniff.
 	r = post(url.Values{"action": {"[:board/bump]"}, "answer": {" 1 "}, "back": {"//evil.example/"}})

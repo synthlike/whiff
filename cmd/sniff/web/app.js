@@ -1,6 +1,7 @@
 // sniff's page: history from sniff's event stream, drawn as a lane per
 // address and an arrow per message; details from its JSON endpoints, with
-// values and views drawn by sniff (render).
+// values and views drawn by sniff (render); and views as tabs beside it,
+// each its /view page drawn in this one.
 "use strict";
 
 const $ = (id) => document.getElementById(id);
@@ -96,6 +97,8 @@ function laneOf(addr) {
   if (i < 0) {
     lanes.push(addr);
     i = lanes.length - 1;
+    // A new address shows in the sidebar too.
+    if (addr !== "client" && !addresses.some((a) => a.address === addr)) reloadSoon();
     if (!bulk) {
       drawLanes();
       redraw(); // every arrow moves
@@ -185,6 +188,7 @@ function append(e) {
   let i = entries.length;
   while (i > 0 && entries[i - 1].us > e.us) i--;
   entries.splice(i, 0, e);
+  if (noteFault(e)) drawAddresses();
   if (selected !== null && selected >= i) selected++;
   const n = lanes.length;
   const r = row(e, i);
@@ -231,11 +235,11 @@ function showEntry(i) {
     return;
   }
   d.append(section("Reply", drawn(e.reply, "reply")));
-  // A view a :read function answers can be a page of its own, where its
+  // A view a :read function answers can be a tab of its own, where its
   // actions work.
   const view = e.reply.t === "tag" && e.reply.n === "ok" && e.reply.v[0]?.t === "tag";
   if (view && e.kind === "call" && e.args && marks.get(e.to) === "read") {
-    const a = el("a", "pin", "Open :" + e.to + " as a page");
+    const a = el("a", "open", "Open :" + e.to + " as a tab");
     a.href = pageOf(e.to, e.args);
     d.append(a);
   }
@@ -285,6 +289,7 @@ function showSession(d, name) {
 }
 
 let addresses = [];
+let linked = false; // #:name has been shown
 
 async function loadAddresses() {
   try {
@@ -294,15 +299,47 @@ async function loadAddresses() {
   }
   marks = new Map();
   for (const a of addresses) for (const f of a.fns) marks.set(a.address + "/" + f.fn, f.mark);
-  if (location.hash.startsWith("#:")) showAddress(decodeURIComponent(location.hash.slice(2)));
-  const nav = $("addresses");
-  nav.replaceChildren();
+  if (!linked && location.hash.startsWith("#:")) showAddress(decodeURIComponent(location.hash.slice(2)));
+  linked = true;
+  drawAddresses();
+}
+
+let reloading = 0;
+function reloadSoon() {
+  clearTimeout(reloading);
+  reloading = setTimeout(loadAddresses, 500);
+}
+
+// faulted is each address whose last call faulted, as history shows it:
+// whiff restarted it, but what it last answered was its own bug.
+const faulted = new Set();
+
+// noteFault notes whether e's address faulted, and says if that changed.
+function noteFault(e) {
+  if (e.kind !== "call" || !e.to) return false;
+  const k = kindOf(e.reply), a = to(e);
+  if (k === "fault" && !faulted.has(a)) return faulted.add(a), true;
+  return k === "ok" && faulted.delete(a);
+}
+
+// drawAddresses lists every address in the sidebar, with a dot: a
+// service, one whose last call faulted, or a client's.
+function drawAddresses() {
+  const box = $("addresses");
+  box.replaceChildren();
   for (const a of addresses) {
-    const b = el("button", a.client ? "client" : "", ":" + a.address);
-    b.title = a.client ? "a client's address" : "a service";
-    b.onclick = () => showAddress(a.address);
-    nav.append(b);
+    const fault = faulted.has(a.address);
+    const b = el("button", "addr" + (a.client ? " client" : "") + (fault ? " fault" : ""));
+    b.append(el("span", "dot"), el("span", "name", ":" + a.address));
+    if (fault || a.client) b.append(el("span", "note", fault ? "fault" : "client"));
+    b.title = fault ? "a service whose last call faulted; whiff restarted it" : a.client ? "a client's address" : "a service";
+    b.onclick = () => {
+      activate(null);
+      showAddress(a.address);
+    };
+    box.append(b);
   }
+  if (!addresses.length) box.append(el("p", "hint", "None while whiff isn't running."));
 }
 
 // showAddress shows an address's functions and state; #:name links to it.
@@ -373,12 +410,15 @@ events.addEventListener("snapshot", (ev) => {
   lanes = ["client"];
   selected = null;
   bulk = true;
+  faulted.clear();
   for (const e of snap.entries) {
     entries.push(e);
     if (e.kind !== "note") { laneOf(from(e)); laneOf(to(e)); }
   }
   bulk = false;
   entries.sort((a, b) => a.us - b.us);
+  entries.forEach(noteFault);
+  drawAddresses();
   drawLanes();
   redraw();
   setStatus(snap.status);
@@ -389,18 +429,19 @@ events.addEventListener("entry", (ev) => append(JSON.parse(ev.data)));
 events.addEventListener("status", (ev) => setStatus(JSON.parse(ev.data)));
 events.onerror = () => setStatus({ connected: false, why: "sniff stopped" });
 
-// waiting is how many wait for you in each queue the header links to: the
-// review queue and your inbox. The tab's title shows them all.
+// waiting is how many wait for you in each queue the sidebar links to: the
+// review queue and your inbox. The browser tab's title shows them all.
 const waiting = {};
 
-// followQueue keeps how many items target's view has beside the header's
-// link of class name, and in the tab's title, fetching it each time one
-// of topics fires. Following :review/pending so, while sniff is open, it
-// reviews: agents' writes wait for you rather than failing with
+// followQueue keeps how many items target's view has beside the sidebar's
+// link of class name, and in the browser tab's title, fetching it each
+// time one of topics fires. Following :review/pending so, while sniff is
+// open, it reviews: agents' writes wait for you rather than failing with
 // :no-reviewer. A watch that sniff refuses, while whiff isn't running, is
 // tried again.
 function followQueue(name, target, topics) {
-  const link = document.querySelector("header ." + name);
+  const link = document.querySelector(".side ." + name);
+  const label = link.textContent;
   const count = async () => {
     let n = 0;
     try {
@@ -411,8 +452,8 @@ function followQueue(name, target, topics) {
     } catch {
       return;
     }
-    link.replaceChildren(name);
-    if (n) link.append(" ", el("span", "count", String(n)));
+    link.replaceChildren(el("span", "name", label));
+    if (n) link.append(el("span", "count", String(n)));
     link.classList.toggle("waiting", n > 0);
     waiting[name] = n;
     const all = Object.values(waiting).reduce((a, b) => a + b, 0);
@@ -427,3 +468,254 @@ function followQueue(name, target, topics) {
 }
 followQueue("review", "review/pending", ["review/pending", "review/done"]);
 followQueue("inbox", "me/inbox", ["me/changed"]);
+
+// Tabs: Activity, then a view per tab, each its /view page's href, drawn
+// in this page as that page draws it. Only the tab shown follows its
+// topics, so a browser's few connections to sniff go further; one shown
+// again fetches its view then. Open tabs and pinned views are kept in this
+// browser, as conveniences: losing them loses nothing else.
+const store = {
+  get(k, none) {
+    try { return JSON.parse(localStorage.getItem("sniff." + k)) ?? none; } catch { return none; }
+  },
+  set(k, v) {
+    try { localStorage.setItem("sniff." + k, JSON.stringify(v)); } catch {}
+  },
+};
+
+let tabs = []; // the view tabs, in order
+let active = null; // the view tab shown, or null for Activity
+let pins = store.get("pins", []);
+
+// hrefOf is a view page's href without what only one request asks for:
+// what a tab and a pin are known by.
+function hrefOf(href) {
+  const u = new URL(href, location.origin);
+  u.searchParams.delete("said");
+  u.searchParams.delete("part");
+  return u.pathname + u.search;
+}
+
+// titleOf is how a view's href reads: plan/board, pipeline/show 2.
+function titleOf(href) {
+  const u = new URL(href, location.origin);
+  const args = (u.searchParams.get("args") || "").slice(1, -1).trim();
+  return decodeURIComponent(u.pathname.slice("/view/".length)) + (args ? " " + args : "");
+}
+
+// part is href's URL for part=panel: the view with its topics.
+function part(href) {
+  return href + (href.includes("?") ? "&" : "?") + "part=panel";
+}
+
+function openTab(href, show = true) {
+  href = hrefOf(href);
+  let t = tabs.find((t) => t.href === href);
+  if (!t) {
+    t = makeTab(href);
+    tabs.push(t);
+    store.set("tabs", tabs.map((t) => t.href));
+  }
+  if (show) activate(t);
+  return t;
+}
+
+function makeTab(href) {
+  const title = titleOf(href);
+  const t = { href, topics: [], watch: null, stale: false };
+  t.el = el("div", "tab");
+  t.button = el("button", "", title);
+  t.button.setAttribute("role", "tab");
+  t.button.title = ":" + title;
+  t.button.onclick = () => activate(t);
+  const close = el("button", "close", "×");
+  close.setAttribute("aria-label", "Close " + title);
+  close.onclick = () => closeTab(t);
+  t.el.append(t.button, close);
+  t.el.addEventListener("auxclick", (ev) => { if (ev.button === 1) closeTab(t); });
+  $("tabs").append(t.el);
+
+  t.panel = el("div", "panel");
+  t.panel.setAttribute("role", "tabpanel");
+  t.panel.hidden = true;
+  const head = el("div", "panel-head");
+  t.status = el("span", "status", "…");
+  t.pin = el("button", "toggle");
+  t.pin.onclick = () => togglePin(href);
+  const page = el("a", "", "Open as a page");
+  page.href = href;
+  page.target = "_blank";
+  page.rel = "noopener";
+  page.dataset.page = "";
+  page.title = "a page of its own, to keep open or share";
+  head.append(el("span", "target", ":" + title), t.status, el("span", "grow"), t.pin, page);
+  t.said = el("div");
+  t.box = el("div", "panel-body");
+  t.panel.append(head, t.said, t.box);
+  t.box.addEventListener("submit", (ev) => send(t, ev));
+  // A change that came while you typed shows once you're done.
+  t.box.addEventListener("focusout", () => setTimeout(() => { if (t.stale) load(t); }, 0));
+  document.querySelector(".work").append(t.panel);
+  drawPin(t);
+  return t;
+}
+
+function closeTab(t) {
+  stopWatch(t);
+  const i = tabs.indexOf(t);
+  tabs.splice(i, 1);
+  t.el.remove();
+  t.panel.remove();
+  store.set("tabs", tabs.map((t) => t.href));
+  if (active === t) activate(tabs[i] || tabs[i - 1] || null);
+}
+
+// activate shows t, or Activity for null.
+function activate(t) {
+  if (active && active !== t) stopWatch(active);
+  active = t;
+  $("activity").hidden = !!t;
+  $("tab-activity").setAttribute("aria-selected", String(!t));
+  for (const x of tabs) {
+    x.panel.hidden = x !== t;
+    x.button.setAttribute("aria-selected", String(x === t));
+  }
+  store.set("active", t ? t.href : "");
+  markSide();
+  if (!t) return;
+  if (t.topics.length) watch(t); // it loads when the watch opens
+  else load(t);
+}
+$("tab-activity").onclick = () => activate(null);
+
+// load fetches t's view again, unless you are typing in it.
+async function load(t) {
+  if (t.box.contains(document.activeElement) && document.activeElement.tagName === "INPUT") {
+    t.stale = true;
+    return;
+  }
+  t.stale = false;
+  try {
+    const r = await fetch(part(t.href));
+    const html = await r.text();
+    if (!r.ok) throw new Error(html.trim());
+    fill(t, html);
+  } catch (err) {
+    setTabStatus(t, err.message, false);
+    // Not drawn, as whiff isn't running: try again while it shows.
+    if (!t.watch) setTimeout(() => { if (active === t && !t.watch) load(t); }, 2000);
+  }
+}
+
+// fill shows html, a panel sniff drew, in t, and follows the topics it
+// names while t shows.
+function fill(t, html) {
+  t.box.innerHTML = html; // sniff drew it, escaping what it shows
+  const said = t.box.querySelector(":scope > .said");
+  if (said) t.said.replaceChildren(said); // it stays as the view changes
+  const topics = (t.box.querySelector(".shown")?.dataset.topics || "").split(" ").filter(Boolean);
+  setTabStatus(t, "fetched again on " + topics.map((x) => ":" + x).join(", "), true);
+  if (active === t && topics.join(" ") !== t.topics.join(" ")) {
+    t.topics = topics;
+    watch(t);
+  }
+}
+
+function setTabStatus(t, text, on) {
+  t.status.textContent = text;
+  t.status.classList.toggle("on", on);
+}
+
+// watch follows t's topics, fetching its view each time one fires and
+// when the watch opens, so what changed meanwhile shows too. One that
+// sniff refuses, while whiff isn't running, is tried again.
+function watch(t) {
+  stopWatch(t);
+  if (!t.topics.length) return;
+  const w = new EventSource("api/watch?" + t.topics.map((x) => "topic=" + encodeURIComponent(x)).join("&"));
+  t.watch = w;
+  w.addEventListener("open", () => load(t));
+  w.addEventListener("changed", () => load(t));
+  w.onerror = () => {
+    setTabStatus(t, "not following " + t.topics.map((x) => ":" + x).join(", ") + ": is whiff running?", false);
+    if (w.readyState === EventSource.CLOSED) setTimeout(() => { if (t.watch === w) watch(t); }, 2000);
+  };
+}
+
+function stopWatch(t) {
+  if (t.watch) t.watch.close();
+  t.watch = null;
+}
+
+// send sends what a form in t's view picked, as its page's form would, and
+// shows the view drawn again with what it answered.
+async function send(t, ev) {
+  ev.preventDefault();
+  const body = new URLSearchParams(new FormData(ev.target));
+  body.set("back", part(t.href));
+  try {
+    const r = await fetch("/act", { method: "POST", body });
+    const html = await r.text();
+    if (!r.ok) throw new Error(html.trim());
+    fill(t, html);
+  } catch (err) {
+    setTabStatus(t, err.message, false);
+  }
+}
+
+function togglePin(href) {
+  pins = pins.includes(href) ? pins.filter((p) => p !== href) : [...pins, href];
+  store.set("pins", pins);
+  drawPins();
+  for (const t of tabs) drawPin(t);
+}
+
+function drawPin(t) {
+  const on = pins.includes(t.href);
+  t.pin.textContent = on ? "Unpin" : "Pin";
+  t.pin.title = on ? "take it off the sidebar" : "keep it in the sidebar";
+}
+
+function drawPins() {
+  const box = $("pins");
+  box.replaceChildren();
+  for (const p of pins) {
+    const a = el("a", "view-link", titleOf(p));
+    a.href = p;
+    box.append(a);
+  }
+  if (!pins.length) box.append(el("p", "hint", "Pin a view from its tab."));
+  markSide();
+}
+
+// markSide marks the sidebar's link to the tab shown.
+function markSide() {
+  for (const a of document.querySelectorAll(".side a[href]")) {
+    if (active && hrefOf(a.getAttribute("href")) === active.href) a.setAttribute("aria-current", "page");
+    else a.removeAttribute("aria-current");
+  }
+}
+
+// A link to a view opens it as a tab; with a modifier key, or "Open as a
+// page", as the browser opens links.
+document.addEventListener("click", (ev) => {
+  const a = ev.target.closest('a[href^="/view/"]');
+  if (!a || "page" in a.dataset || ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+  ev.preventDefault();
+  openTab(a.getAttribute("href"));
+});
+
+// A location copies itself, file:line:col, for hiss or a terminal: a page
+// can't open a file.
+document.addEventListener("click", (ev) => {
+  const b = ev.target.closest("[data-copy]");
+  if (!b) return;
+  navigator.clipboard.writeText(b.dataset.copy).then(() => {
+    b.classList.add("copied");
+    setTimeout(() => b.classList.remove("copied"), 1200);
+  }, (err) => { b.title = err.message; });
+});
+
+drawPins();
+for (const href of store.get("tabs", [])) openTab(href, false);
+activate(tabs.find((t) => t.href === store.get("active", "")) || null);

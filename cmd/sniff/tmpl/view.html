@@ -15,12 +15,19 @@
   <span id="status" class="status{{if not .Error}} on{{end}}">{{if .Error}}{{.Error}}{{else}}fetched again on {{.On}}{{end}}</span>
 </header>
 <main>
-  {{with .Said}}<p class="said {{if .OK}}ok{{else}}err{{end}}">Sent <code>{{.Sends}}</code>: {{.Reply}}</p>{{end}}
+  {{template "said" .Said}}
   <section id="view" class="pinned" aria-label="View" data-topics="{{.Topics}}"{{if .Error}} data-error{{end}}>{{if not .Error}}{{template "shown" .Reply}}{{end}}</section>
 </main>
 </body>
 </html>
 {{end}}
+
+{{/* The same view as a tab of sniff's main page shows it: what the
+     action sent from it answered, then the view, with the topics it
+     follows. */}}
+{{define "panel"}}{{template "said" .Said}}<div class="shown" data-topics="{{.Topics}}">{{template "shown" .Reply}}</div>{{end}}
+
+{{define "said"}}{{with .}}<p class="said {{if .OK}}ok{{else}}err{{end}}">Sent <code>{{.Sends}}</code>: {{.Reply}}</p>{{end}}{{end}}
 
 {{/* A reply: its view, with the reply folded under it as puff; or the reply. */}}
 {{define "shown"}}{{if .View}}{{template "view" .View}}
