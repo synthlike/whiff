@@ -134,13 +134,14 @@ function append(e) {
   let i = entries.length;
   while (i > 0 && entries[i - 1].us > e.us) i--;
   entries.splice(i, 0, e);
+  if (selected !== null && selected >= i) selected++;
   const n = lanes.length;
-  if (i < entries.length - 1) {
-    if (selected !== null && selected >= i) selected++;
-    redraw();
-  } else {
-    const r = row(e, i);
-    if (lanes.length === n) $("rows").append(r); // else redraw drew it
+  const r = row(e, i);
+  if (lanes.length === n) { // else redraw drew it
+    // Only the rows after it move: renumber them rather than draw them all.
+    const rows = $("rows");
+    for (let j = i; j < rows.children.length; j++) rows.children[j].dataset.i = j + 1;
+    rows.insertBefore(r, rows.children[i] || null);
   }
   $("empty").hidden = true;
   if ($("follow").checked && atEnd) trace.scrollTop = trace.scrollHeight;
