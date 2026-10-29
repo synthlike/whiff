@@ -610,7 +610,7 @@ echo "changed things"
 		!strings.Contains(got, ":round 3 :run 2 :step :gave-up") {
 		t.Errorf("runs = %s", got)
 	}
-	retry := `{:action [:pipeline/retry 2] :ask "A note for the developer, if any" :label "Retry with a note"}`
+	retry := `{:action [:pipeline/retry 2] :ask "A note for the developer, if any" :label "Retry with a note"} {:action [:pipeline/discard 2] :label "Discard"}`
 	if got := call("view", "[]"); !strings.Contains(got, `{:actions [{:action [:pipeline/show 2] :label "Show review and diff"} `+retry+`] :detail "gave-up, round 3, whiff/2" :label "2  another"}`) {
 		t.Errorf("view = %s", got)
 	}
@@ -650,6 +650,27 @@ echo "changed things"
 	}
 	if got := call("merge", "[1]"); !strings.Contains(got, ":kind :exit") {
 		t.Errorf("merge of a run main moved past = %s", got)
+	}
+	// A merged run's worktree and branch are gone; a discarded one's too.
+	gone := func(n string) {
+		t.Helper()
+		if _, err := os.Stat(filepath.Join(dir, ".whiff", "pipelines", "repo-"+n)); !os.IsNotExist(err) {
+			t.Errorf("run %s's worktree is still there: %v", n, err)
+		}
+		if got := git(repo, "branch", "--list", "whiff/"+n); got != "" {
+			t.Errorf("run %s's branch is still there: %q", n, got)
+		}
+	}
+	gone("2")
+	if got := call("discard", "[1]"); got != "(ok :discarded)" {
+		t.Errorf("discard = %s", got)
+	}
+	gone("1")
+	if got := call("runs", "[]"); !strings.Contains(got, ":run 1 :step :discarded") || !strings.Contains(got, ":run 2 :step :merged") {
+		t.Errorf("runs after merge and discard = %s", got)
+	}
+	if got := call("discard", "[2]"); !strings.Contains(got, ":no-run") {
+		t.Errorf("discard of a merged run = %s", got)
 	}
 
 	// Outside a repository nothing starts.
@@ -792,7 +813,7 @@ esac
 	if got := call("start", `["more files" ["true"]]`); got != "(ok 2)" {
 		t.Fatalf("plan/start = %s", got)
 	}
-	retry := `{:action [:plan/retry 2] :ask "A note for the developer, if any" :label "Retry with a note"}`
+	retry := `{:action [:plan/retry 2] :ask "A note for the developer, if any" :label "Retry with a note"} {:action [:plan/discard 2] :label "Discard"}`
 	inboxHas("the plan stopped", `"plan 2, more files: failed. Task 1 of 2 ended gave-up: `)
 	inboxHas("its actions", `[{:action [:pipeline/show 3] :label "Show review and diff"} `+retry+`]`)
 	if got := call("board", "[]"); !strings.Contains(got, `:actions [{:action [:pipeline/show 3] :label "Show review and diff"} `+retry+`] :detail "plan 2, task 1 of 2, round 3, whiff/3"`) {
@@ -819,6 +840,24 @@ esac
 	}
 	if got := call("merge", "[3]"); !strings.Contains(got, ":no-plan") {
 		t.Errorf("merge of no plan = %s", got)
+	}
+
+	// Merged, plan 1's runs are tidied away; discarded, plan 2's are too,
+	// and both leave the board.
+	if got := call("discard", "[2]"); got != "(ok :discarded)" {
+		t.Errorf("plan/discard = %s", got)
+	}
+	if got := git("branch", "--list", "whiff/*"); got != "" {
+		t.Errorf("branches left: %q", got)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(dir, ".whiff", "pipelines")); len(entries) != 0 {
+		t.Errorf("worktrees left: %v", entries)
+	}
+	if got := call("board", "[]"); strings.Contains(got, ":label") {
+		t.Errorf("board after merge and discard = %s", got)
+	}
+	if got := call("discard", "[2]"); !strings.Contains(got, ":no-plan") {
+		t.Errorf("discard of a discarded plan = %s", got)
 	}
 }
 

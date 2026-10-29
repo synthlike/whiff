@@ -12,7 +12,8 @@
 ;   whiff call pipeline/show 1      ; its last review and the diff it was of
 ;   whiff call pipeline/cancel 1
 ;   whiff call pipeline/retry 2 "keep the old flag too"   ; after it gave up
-;   whiff call pipeline/merge 1     ; once it is ready
+;   whiff call pipeline/merge 1     ; once it is ready; its worktree goes
+;   whiff call pipeline/discard 2   ; or throw it away, worktree and branch
 ;   whiff inbox                     ; how a run ended
 ;   whiff sub pipeline/done
 ;   whiff sub pipeline/step         ; {:run :step} as a run takes each step
@@ -141,21 +142,38 @@
              (if (passed? checked) "" (str "The check " (check-text checked) "\n\n"))
              "Fix what needs fixing."))])))
 
+  ; ended? is whether a run at step ended without being ready.
+  (def (ended? step) (vector/contains? [:gave-up :failed :cancelled] step))
+
   ; actions are what can be done about run n, on branch, once it ended as
-  ; status: show its last review and diff, and merge it if it is ready or
-  ; retry it if not.
+  ; status: show its last review and diff; merge it if it is ready, or
+  ; retry or discard it if it ended otherwise.
   (def (actions n status branch)
     (let [show {:label "Show review and diff" :action [:pipeline/show n]}]
-      (if (= status :ready)
-        [show {:label (str "Merge " branch) :action [:pipeline/merge n]}]
-        [show {:label "Retry with a note" :action [:pipeline/retry n] :ask "A note for the developer, if any"}])))
+      (cond
+        [(= status :ready) [show {:label (str "Merge " branch) :action [:pipeline/merge n]}]]
+        [(ended? status)
+         [show {:label "Retry with a note" :action [:pipeline/retry n] :ask "A note for the developer, if any"}
+          {:label "Discard" :action [:pipeline/discard n]}]]
+        [_ [show]])))
 
-  (test "a ready run can be merged, and one that didn't end ready retried"
-    (= [(actions 1 :ready "whiff/1") (actions 2 :gave-up "whiff/2")]
+  (test "a ready run can be merged, one that didn't end ready retried or discarded"
+    (= [(actions 1 :ready "whiff/1") (actions 2 :gave-up "whiff/2") (actions 3 :merged "whiff/3")]
       [[{:label "Show review and diff" :action [:pipeline/show 1]}
         {:label "Merge whiff/1" :action [:pipeline/merge 1]}]
        [{:label "Show review and diff" :action [:pipeline/show 2]}
-        {:label "Retry with a note" :action [:pipeline/retry 2] :ask "A note for the developer, if any"}]]))
+        {:label "Retry with a note" :action [:pipeline/retry 2] :ask "A note for the developer, if any"}
+        {:label "Discard" :action [:pipeline/discard 2]}]
+       [{:label "Show review and diff" :action [:pipeline/show 3]}]]))
+
+  ; tidy removes run n's worktree and branch, as what was in them is
+  ; merged or not wanted, and marks it step, :merged or :discarded.
+  (def (tidy state n step)
+    (let [{:repo repo :dir dir :branch b} (run-of state n)]
+      (do (or-else (git repo ["worktree" "remove" "--force" dir]) "")
+        (or-else (git repo ["branch" "-D" b]) "")
+        (publish :pipeline/step {:run n :step step})
+        (set-run state n {:step step}))))
 
   ; finish ends run n as status, telling you in your inbox unless it is
   ; quiet, with what you can do about it, and on :pipeline/done.
@@ -188,9 +206,6 @@
            [(err e) (finish state n :failed (str "The reviewer failed: " (value/to-string e)))])])))
 
   (def (active? step) (vector/contains? [:dev :check :review] step))
-
-  ; ended? is whether a run at step ended without being ready.
-  (def (ended? step) (vector/contains? [:gave-up :failed :cancelled] step))
 
   ; retry-input is what the dev gets when you retry run: your note, if
   ; any, and the last review, in the session it has; or the task, with
@@ -236,7 +251,7 @@
     (begin state repo base task check #t))
 
   (on (runs state) :read
-    "Every run, oldest first: {:run :task :step :round :branch :dir}, with :step one of :dev, :check, :review, :ready, :gave-up, :failed or :cancelled."
+    "Every run, oldest first: {:run :task :step :round :branch :dir}, with :step one of :dev, :check, :review, :ready, :gave-up, :failed, :cancelled, :merged or :discarded."
     (ok (vector/map (map/entries (map/get-or state :runs {}))
           (fn ([n {:task t :step s :round r :branch b :dir d}]) {:run n :task t :step s :round r :branch b :dir d}))))
 
@@ -284,13 +299,20 @@
          (ok [:retrying (try (dev state n (retry-input (run-of state n) note)))]))]
       [_ (err {:kind :no-run :message (str "run " n " hasn't ended without being ready: nothing to retry")})]))
 
-  (on (merge state n) :write
-    "Merges ready run n's branch into the branch checked out in its repository, only as a fast-forward: (ok branch); git's error if your branch moved on or your changes are in the way, and (err {:kind :no-run}) unless run n is ready."
+  (on (merge state n) :write :update
+    "Merges ready run n's branch into the branch checked out in its repository, only as a fast-forward, then removes the run's worktree and branch: (ok branch); git's error if your branch moved on or your changes are in the way, and (err {:kind :no-run}) unless run n is ready."
     (match (map/get-in state [:runs n])
       [(some {:step :ready :repo repo :branch b})
        (let [_ (try (git repo ["merge" "-q" "--ff-only" b]))]
-         (ok b))]
+         (ok [b (tidy state n :merged)]))]
       [_ (err {:kind :no-run :message (str "run " n " isn't ready: nothing to merge")})]))
+
+  (on (discard state n) :write :update
+    "Discards run n, ended and not merged: removes its worktree, uncommitted work and all, and its branch. (ok :discarded); (err {:kind :no-run}) unless run n ended so."
+    (match (map/get-in state [:runs n])
+      [(some {:step s}) when (or (= s :ready) (ended? s))
+       (ok [:discarded (tidy state n :discarded)])]
+      [_ (err {:kind :no-run :message (str "run " n " hasn't ended, or is gone: nothing to discard")})]))
 
   (on (whiff/done state id r) :update
     "A job a run waited for is done: the run takes its next step."

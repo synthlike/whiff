@@ -9,6 +9,7 @@
 ;   whiff call plan/start "a todo CLI: add, list and done, kept in todo.json" '["go" "test" "./..."]'
 ;   whiff call plan/retry 1 "store todos in a map"   ; after a task's run gave up
 ;   whiff call plan/merge 1        ; once done: its last branch, fast-forward only
+;   whiff call plan/discard 2      ; or throw its runs away, worktrees and branches
 ;   whiff call plan/plans          ; each plan, its tasks and where it is
 ;   whiff call plan/board          ; the same as a board: pick a ticket to cancel or show it
 ;   whiff sub plan/changed         ; {:plan n} when its tickets move
@@ -78,6 +79,8 @@
 
   (def (retry-action n) {:label "Retry with a note" :action [:plan/retry n] :ask "A note for the developer, if any"})
 
+  (def (discard-action n) {:label "Discard" :action [:plan/discard n]})
+
   ; moved is r, once :plan/changed says plan n's tickets moved, so a client
   ; showing the board fetches it again.
   (def (moved n r)
@@ -98,7 +101,7 @@
                         (map/set-in [:jobs id] n))]))))
 
   (on (plans state) :read
-    "Every plan, oldest first: {:plan :goal :step :tasks :task :run}, with :step one of :planning, :building, :done or :failed, and :task the index of the task :run builds; :built is each task's run so far."
+    "Every plan, oldest first: {:plan :goal :step :tasks :task :run}, with :step one of :planning, :building, :done, :failed, :merged or :discarded, and :task the index of the task :run builds; :built is each task's run so far."
     (ok (vector/map (map/entries (map/get-or state :plans {}))
           (fn ([n p]) (map/set p :plan n)))))
 
@@ -110,7 +113,8 @@
   ; tickets is plan n's, p, as {:step :item}s: one per task, at its run's
   ; step from runs, :pipeline/runs's answer, or :planned, or :skipped once
   ; the plan has ended; or one for the goal while it has no tasks. The
-  ; task a failed plan stopped at can be retried.
+  ; task a failed plan stopped at can be retried or discarded, and a done
+  ; plan's last task merged.
   (def (tickets n p runs)
     (let [{:goal goal :step step :tasks ts} p
           built (map/get-or p :built [])
@@ -132,7 +136,7 @@
                                             [(vector/contains? [:dev :check :review] s)
                                              [(show-action r) {:label "Cancel the run" :action [:pipeline/cancel r]}]]
                                             [(and (= i stopped) (vector/contains? [:gave-up :failed :cancelled] s))
-                                             [(show-action r) (retry-action n)]]
+                                             [(show-action r) (retry-action n) (discard-action n)]]
                                             [(and (= step :done) (= i (- total 1))) [(show-action r) (merge-action n b)]]
                                             [_ [(show-action r)]])}}]
                 [_ {:step (if (= step :building) :planned :skipped) :item {:label task :detail where}}])))))))
@@ -145,11 +149,12 @@
                                        {:label "Cancel the run" :action [:pipeline/cancel 7]}]}}
        {:step :planned :item {:label "b" :detail "plan 1, task 2 of 2"}}]))
 
-  (test "a failed plan's task can be retried"
+  (test "a failed plan's task can be retried or discarded"
     (= (tickets 4 {:goal "g" :step :failed :task 0 :tasks ["a"] :built [5]} [{:run 5 :step :gave-up :round 3 :branch "whiff/5"}])
       [{:step :gave-up :item {:label "a" :detail "plan 4, task 1 of 1, round 3, whiff/5"
                               :actions [{:label "Show review and diff" :action [:pipeline/show 5]}
-                                        {:label "Retry with a note" :action [:plan/retry 4] :ask "A note for the developer, if any"}]}}]))
+                                        {:label "Retry with a note" :action [:plan/retry 4] :ask "A note for the developer, if any"}
+                                        {:label "Discard" :action [:plan/discard 4]}]}}]))
 
   (test "a done plan's last task can be merged"
     (= (vector/map (tickets 5 {:goal "g" :step :done :task 1 :tasks ["a" "b"] :built [6 7]}
@@ -164,10 +169,13 @@
       [[{:step :planning :item {:label "g" :detail "plan 2, planning"}}] [:gave-up :skipped]]))
 
   (on (board state) :read
-    "Every plan's tasks as a board, a ticket each in a column by where it is: Planned, Dev, Check, Review, Done or Failed. A ticket with a run shows its last review and diff, and cancels it while it runs."
+    "Every plan's tasks as a board, a ticket each in a column by where it is: Planned, Dev, Check, Review, Done or Failed; a merged or discarded plan has left it. A ticket with a run shows its last review and diff, and cancels it while it runs."
     (let [runs (try (call :pipeline/runs))
           ts (vector/reduce (map/entries (map/get-or state :plans {})) []
-               (fn (acc [n p]) (vector/concat acc (tickets n p runs))))]
+               (fn (acc [n p])
+                 (if (vector/contains? [:merged :discarded] (map/get-or p :step :none))
+                   acc
+                   (vector/concat acc (tickets n p runs)))))]
       (ok (view/board (vector/map columns
                         (fn ([title steps])
                           {:title title
@@ -188,7 +196,7 @@
                                  [e e])]
                     [e e])]
          (moved n (catch step
-                    [e (ok (or-else (finish state n :failed (str "The planner failed: " (value/to-string e)) []) state))])))]))
+                    [e (ok (or-else (finish state n :failed (str "The planner failed: " (value/to-string e)) [(discard-action n)]) state))])))]))
 
   ; A run of a plan took a step: its ticket moved.
   (on :pipeline/step (state v) :update
@@ -213,19 +221,34 @@
               (cond
                 [(not (= status :ready))
                  (finish state n :failed (str "Task " (+ i 1) " of " (vector/length ts) " ended " (keyword/name status) ": " note)
-                   [(show-action run) (retry-action n)])]
+                   [(show-action run) (retry-action n) (discard-action n)])]
                 [last
                  (finish state n :done (str "All " (vector/length ts) " tasks built; " branch " has them all.")
                    [(show-action run) (merge-action n branch)])]
                 [_
                  (catch (next-run state n (+ i 1) branch)
-                   [e (finish state n :failed (str "Task " (+ i 2) " didn't start: " (value/to-string e)) [])])])))])]))
+                   [e (finish state n :failed (str "Task " (+ i 2) " didn't start: " (value/to-string e)) [(discard-action n)])])])))])]))
 
-  (on (merge state n) :write
-    "Merges done plan n's last branch, which holds every task, into the branch checked out in its repository, only as a fast-forward, as :pipeline/merge does: (ok branch); (err {:kind :no-plan}) unless plan n is done."
+  (on (merge state n) :write :update
+    "Merges done plan n's last branch, which holds every task, into the branch checked out in its repository, only as a fast-forward, as :pipeline/merge does, then removes every run's worktree and branch; it leaves the board. (ok branch); (err {:kind :no-plan}) unless plan n is done."
     (match (map/get-in state [:plans n])
-      [(some {:step :done :run run}) (call :pipeline/merge run)]
+      [(some {:step :done :run run :built built})
+       (let [b (try (call :pipeline/merge run))
+             ; The earlier runs' branches are in the last one: merging them
+             ; only tidies them away.
+             _ (vector/each (vector/filter built (fn (r) (not (= r run))))
+                 (fn (r) (ok (or-else (call :pipeline/merge r) ""))))]
+         (moved n (ok [b (set-plan state n {:step :merged})])))]
       [_ (err {:kind :no-plan :message (str "plan " n " isn't done: nothing to merge")})]))
+
+  (on (discard state n) :write :update
+    "Discards plan n, done or failed: every run it built, worktrees, uncommitted work and branches, as :pipeline/discard does; it leaves the board. (ok :discarded); (err {:kind :no-plan}) unless plan n is done or failed."
+    (match (map/get-in state [:plans n])
+      [(some p) when (vector/contains? [:done :failed] (map/get-or p :step :none))
+       (let [_ (vector/each (map/get-or p :built [])
+                 (fn (r) (ok (or-else (call :pipeline/discard r) ""))))]
+         (moved n (ok [:discarded (set-plan state n {:step :discarded})])))]
+      [_ (err {:kind :no-plan :message (str "plan " n " isn't done or failed: nothing to discard")})]))
 
   (on (retry state n note) :write :update
     "Takes plan n on after the run of the task it stopped at gave up, failed or was cancelled: its dev Claude gets note, your words for it (\"\" for none), and up to 3 more rounds, and the plan goes on from there. (ok :retrying); (err {:kind :no-plan}) unless plan n stopped so."
