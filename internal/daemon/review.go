@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -236,6 +237,8 @@ func (d *daemon) reviewService() *service {
 				doc: "Deliver the held message id as it was sent, or run the code it holds; its result, which its sender gets too."},
 			"reject": {params: []string{"id", "reason"}, optional: 1, mark: puff.MarkWrite, marked: true, native: d.rejectFn,
 				doc: "Answer the held message id (err {:kind :rejected :reason reason}) without delivering it; reason, a string, tells its sender why."},
+			"trust": {params: []string{"id"}, mark: puff.MarkWrite, marked: true, native: d.trustFn,
+				doc: "Accept the held message id, an agent session's to a service, and trust the session for that service from now on, as whiff trust does."},
 		},
 		subs: map[string]subscriber{}, code: map[string][]*puff.Form{},
 		mailbox: make(chan message, mailboxSize), quit: make(chan struct{}), done: make(chan struct{})}
@@ -263,8 +266,14 @@ func (d *daemon) pendingView(m message, _ []puff.Value) (puff.Value, error) {
 	return puff.Ok(puff.NewTag("items", puff.NewVector(items...), opts)), nil
 }
 
+// trustable says whether a is an agent session's message to a service,
+// which :review/trust can let through from now on.
+func (a *asked) trustable() bool {
+	return a.held != nil && a.held.topic == "" && strings.HasPrefix(a.from, "agent/")
+}
+
 // reviewItem is a, held, as an item of :review/pending: what it would do,
-// who sent it and where, and its actions.
+// who sent it and where, and its actions: Trust too, if it is trustable.
 func (a *asked) reviewItem() puff.Value {
 	label := a.what()
 	switch {
@@ -284,12 +293,47 @@ func (a *asked) reviewItem() puff.Value {
 		)
 		return m
 	}
+	reject, _ := action("Reject", "reject").(puff.Map).With(puff.Keyword("ask"), puff.String("Why? Its sender reads this."))
+	actions := []puff.Value{action("Accept", "accept"), reject}
+	if a.trustable() {
+		actions = append(actions, action(fmt.Sprintf("Trust :%s for :%s", a.from, a.to), "trust"))
+	}
 	m, _ := puff.NewMap(
 		puff.Entry{Key: puff.Keyword("label"), Val: puff.String(label)},
 		puff.Entry{Key: puff.Keyword("detail"), Val: puff.String(fmt.Sprintf("%d from %s in %s", a.id, from, a.dir))},
-		puff.Entry{Key: puff.Keyword("actions"), Val: puff.NewVector(action("Accept", "accept"), action("Reject", "reject"))},
+		puff.Entry{Key: puff.Keyword("actions"), Val: puff.NewVector(actions...)},
 	)
 	return m
+}
+
+// trustFn trusts the agent session that sent the held message id for its
+// service, and accepts it.
+func (d *daemon) trustFn(m message, args []puff.Value) (puff.Value, error) {
+	if !m.user {
+		return notYours(), nil
+	}
+	id, ok := args[0].(puff.Int)
+	if !ok {
+		return nil, fmt.Errorf("want a message id, got %s", puff.Print(args[0]))
+	}
+	var r puff.Value
+	d.do(func(st *state) {
+		i := slices.IndexFunc(st.inbox("review"), func(a *asked) bool { return a.id == int64(id) })
+		switch {
+		case i < 0:
+			r = puff.Errorf("no-id", "no message %d waits for review", id)
+		case !st.inbox("review")[i].trustable():
+			r = puff.Errorf("bad-call", "message %d isn't an agent session's message to a service", id)
+		default:
+			a := st.inbox("review")[i]
+			r = st.trust(a.from, a.to)
+		}
+	})
+	if !puff.Equal(r, puff.Done) {
+		return r, nil
+	}
+	r, _ = d.accept(m.ctx, []string{"review"}, int64(id))
+	return r, nil
 }
 
 func (d *daemon) acceptFn(m message, args []puff.Value) (puff.Value, error) {

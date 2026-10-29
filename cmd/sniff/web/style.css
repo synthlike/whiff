@@ -278,6 +278,19 @@ aside h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; co
 .view .reply:empty { display: none; }
 .view .reply.ok { color: var(--ok); }
 .view .reply.err { color: var(--err); }
+.view .ask { display: flex; gap: 4px; margin-top: 4px; }
+.view .ask input {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 6px;
+  font: 12px var(--sans);
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.view .ask input:focus { outline: none; border-color: var(--accent); }
+.view .ask .action { font: 12px var(--sans); }
 .view.board { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
 .view .column h4 { font-size: 12px; margin: 0 0 4px; }
 .view .column .item { gap: 2px 10px; }

@@ -176,6 +176,30 @@ func (d *daemon) clientMode(req rpc.Request) rpc.Response {
 	return rpc.Response{Value: puff.Print(res)}
 }
 
+// trust adds service to the services the agent session addr is trusted
+// for, making it trusted if it was gated, for as long as its mode lasts.
+// A free session stays free.
+func (st *state) trust(addr, service string) puff.Value {
+	if s := st.addrs[addr]; s == nil || !s.client || !strings.HasPrefix(addr, "agent/") {
+		return puff.Errorf("no-address", "no agent session :%s to trust: it has gone", addr)
+	}
+	if st.addrs[service] == nil {
+		return puff.Errorf("no-address", "no address :%s to trust", service)
+	}
+	old := st.modeOf(addr)
+	if old != nil && old.free {
+		return puff.Done
+	}
+	m := &mode{trust: map[string]bool{service: true}}
+	if old != nil {
+		maps.Copy(m.trust, old.trust)
+		m.until = old.until
+	}
+	st.modes[addr] = m
+	st.record(entry{at: time.Now(), note: fmt.Sprintf(":%s is %s", addr, m)})
+	return puff.Done
+}
+
 // trustSet is the services m trusts; none for a nil or free mode.
 func (m *mode) trustSet() map[string]bool {
 	if m == nil {

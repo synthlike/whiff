@@ -178,20 +178,59 @@ function showView(view, reply, acted) {
 // sends. One to a :read function is a link, which opens its answer as a
 // page; any other is a button, which sends it as you, as whiff act does,
 // and shows the reply under the item. A :write button shows its target too,
-// as its label can say anything.
+// as its label can say anything. One with :ask asks it under the item
+// first, and adds the answer, if you give one, as its last argument.
 function item(m, acted) {
   const r = el("div", "item");
   r.append(el("span", "", str(m, "label")));
   if (str(m, "detail")) r.append(el("span", "detail", str(m, "detail")));
   const actions = [];
-  if (field(m, "action")) actions.push({ label: "", action: field(m, "action") });
+  if (field(m, "action")) actions.push({ label: "", action: field(m, "action"), ask: "" });
   for (const a of field(m, "actions")?.v || []) {
-    if (a.t === "map" && field(a, "action")) actions.push({ label: str(a, "label"), action: field(a, "action") });
+    if (a.t === "map" && field(a, "action")) actions.push({ label: str(a, "label"), action: field(a, "action"), ask: str(a, "ask") });
   }
   if (!actions.length) return r;
   const buttons = el("span", "actions");
   const out = el("div", "reply");
-  for (const { label, action } of actions) {
+  const send = async (action) => {
+    buttons.querySelectorAll("button").forEach((x) => { x.disabled = true; });
+    out.className = "reply";
+    out.replaceChildren("…");
+    try {
+      const reply = await act(action);
+      out.className = "reply " + (reply.t === "tag" && reply.n === "ok" ? "ok" : "err");
+      out.replaceChildren(inline(reply));
+      if (acted) acted();
+    } catch (err) {
+      out.className = "reply err";
+      out.textContent = err.message;
+    }
+    buttons.querySelectorAll("button").forEach((x) => { x.disabled = false; });
+  };
+  // asking puts ask under the item, with a box for the answer; Enter sends
+  // action with it, Escape puts the item back as it was.
+  const asking = (ask, action, label) => {
+    const form = el("form", "ask");
+    const input = el("input");
+    input.placeholder = ask;
+    input.setAttribute("aria-label", ask);
+    const go = el("button", "action", label || "Send");
+    go.type = "submit";
+    const cancel = el("button", "action", "Cancel");
+    cancel.type = "button";
+    cancel.onclick = () => out.replaceChildren();
+    input.onkeydown = (ev) => { if (ev.key === "Escape") out.replaceChildren(); };
+    form.onsubmit = (ev) => {
+      ev.preventDefault();
+      const text = input.value.trim();
+      send(text ? { t: "vec", v: [...action.v, { t: "str", v: text }] } : action);
+    };
+    form.append(input, go, cancel);
+    out.className = "reply";
+    out.replaceChildren(form);
+    input.focus();
+  };
+  for (const { label, action, ask } of actions) {
     const target = action.v[0].v;
     const mark = marks.get(target);
     if (mark === "read") {
@@ -205,22 +244,8 @@ function item(m, acted) {
     }
     const b = el("button", label ? "action labelled" : "action", label || print(action));
     if (label && mark === "write") b.append(el("span", "to", " → :" + target));
-    b.title = "sends " + print(action) + " as you";
-    b.onclick = async () => {
-      buttons.querySelectorAll("button").forEach((x) => { x.disabled = true; });
-      out.className = "reply";
-      out.replaceChildren("…");
-      try {
-        const reply = await act(action);
-        out.className = "reply " + (reply.t === "tag" && reply.n === "ok" ? "ok" : "err");
-        out.replaceChildren(inline(reply));
-        if (acted) acted();
-      } catch (err) {
-        out.className = "reply err";
-        out.textContent = err.message;
-      }
-      buttons.querySelectorAll("button").forEach((x) => { x.disabled = false; });
-    };
+    b.title = "sends " + print(action) + " as you" + (ask ? ", asking first: " + ask : "");
+    b.onclick = () => ask ? asking(ask, action, label) : send(action);
     buttons.append(b);
   }
   r.append(buttons, out);

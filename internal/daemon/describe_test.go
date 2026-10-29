@@ -144,6 +144,7 @@ func TestLs(t *testing.T) {
   (accept id)           :write  Deliver the held message id as it was sent, or run the code it holds; its result, which its sender gets too.
   (pending)             :read   (ok view): what waits for your review, as items to accept or reject, oldest first.
   (reject id [reason])  :write  Answer the held message id (err {:kind :rejected :reason reason}) without delivering it; reason, a string, tells its sender why.
+  (trust id)            :write  Accept the held message id, an agent session's to a service, and trust the session for that service from now on, as whiff trust does.
 read-only commands (internal/puff/commands.go): ` + strings.Join(puff.ReadOnlyCommands(), ", ") + `
 override: ` + files + `:4:3: :files/status is marked :read, but reaches proc/run at 4:61
 warning: ` + greet + `:5:15: :nobody/x doesn't exist

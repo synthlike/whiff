@@ -413,7 +413,7 @@ func TestReviewService(t *testing.T) {
 
 	n := held(call(agent, "notes/add", `["a"]`))
 	m := held(call(agent, "notes/add", `["b"]`))
-	if r := call(c, "review/pending", `[]`); !strings.HasPrefix(r, `(ok (items [{:actions [{:action [:review/accept `+n+`] :label "Accept"} {:action [:review/reject `+n+`] :label "Reject"}] :detail "`+n+` from client in " :label ":notes/add \"a\""}`) ||
+	if r := call(c, "review/pending", `[]`); !strings.HasPrefix(r, `(ok (items [{:actions [{:action [:review/accept `+n+`] :label "Accept"} {:action [:review/reject `+n+`] :ask "Why? Its sender reads this." :label "Reject"}] :detail "`+n+` from client in " :label ":notes/add \"a\""}`) ||
 		!strings.HasSuffix(r, `] {:changed [:review/pending :review/done]}))`) {
 		t.Errorf("review/pending = %s", r)
 	}
@@ -451,6 +451,38 @@ func TestReviewService(t *testing.T) {
 	}
 	if r := call(c, "review/accept", "["+m+"]"); !strings.Contains(r, ":kind :no-id") {
 		t.Errorf("accept of a rejected one = %s", r)
+	}
+
+	// Trust accepts an agent session's message, and lets its next ones to
+	// that service through. A message that isn't a session's has no Trust.
+	sess := dial(t, dir)
+	sess.Agent = true
+	if resp, err := sess.Claim("agent", ""); err != nil || resp.Value != "(ok :agent/1)" {
+		t.Fatalf("claim = %+v %v", resp, err)
+	}
+	q := held(call(sess, "notes/add", `["c"]`))
+	o := held(call(agent, "notes/add", `["x"]`))
+	if r := call(c, "review/pending", `[]`); !strings.Contains(r, `{:action [:review/trust `+q+`] :label "Trust :agent/1 for :notes"}`) ||
+		strings.Contains(r, "[:review/trust "+o+"]") {
+		t.Errorf("review/pending with a session's = %s", r)
+	}
+	if r := call(sess, "review/trust", "["+q+"]"); !strings.Contains(r, ":kind :refused") {
+		t.Errorf("the session's own trust = %s", r)
+	}
+	if r := call(c, "review/trust", "["+o+"]"); !strings.Contains(r, ":kind :bad-call") {
+		t.Errorf("trust of a client's = %s", r)
+	}
+	if r := call(c, "review/trust", "["+q+"]"); r != "(ok :done)" {
+		t.Errorf("review/trust = %s", r)
+	}
+	if r := call(sess, "notes/add", `["d"]`); r != "(ok :done)" {
+		t.Errorf("the session's next add = %s", r)
+	}
+	if got := notes(); got != "acd" {
+		t.Errorf("notes after trust = %q", got)
+	}
+	if r := call(c, "review/reject", "["+o+"]"); r != "(ok :done)" {
+		t.Errorf("review/reject = %s", r)
 	}
 	if r := call(c, "review/pending", `[]`); r != `(ok (items [] {:changed [:review/pending :review/done]}))` {
 		t.Errorf("review/pending once empty = %s", r)
