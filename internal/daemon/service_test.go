@@ -10,7 +10,7 @@ import (
 )
 
 // writeServices writes name.puff files into dir/services.
-func writeServices(t *testing.T, dir string, files map[string]string) {
+func writeServices(t testing.TB, dir string, files map[string]string) {
 	services := filepath.Join(dir, "services")
 	if err := os.MkdirAll(services, 0o700); err != nil {
 		t.Fatal(err)

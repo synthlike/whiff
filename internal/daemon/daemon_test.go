@@ -14,7 +14,7 @@ import (
 
 // tempDir is a short directory under /tmp: a unix socket path must fit in
 // about 100 bytes, and t.TempDir's may not.
-func tempDir(t *testing.T) string {
+func tempDir(t testing.TB) string {
 	dir, err := os.MkdirTemp("/tmp", "whiff-test-")
 	if err != nil {
 		t.Fatal(err)
@@ -25,7 +25,7 @@ func tempDir(t *testing.T) string {
 
 // start runs a daemon on dir, with the services in dir/services, and
 // returns Run's result. The test's cleanup stops it and waits until it has.
-func start(t *testing.T, dir string) <-chan error {
+func start(t testing.TB, dir string) <-chan error {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	stopped := make(chan struct{})
@@ -49,7 +49,7 @@ func set[T any](t *testing.T, v *T, x T) {
 }
 
 // dial connects to the daemon on dir, waiting for it to listen.
-func dial(t *testing.T, dir string) *rpc.Client {
+func dial(t testing.TB, dir string) *rpc.Client {
 	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(10 * time.Millisecond) {
 		c, err := rpc.Dial(dir, nil)
 		if err == nil {
