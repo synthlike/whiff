@@ -216,6 +216,7 @@ aside h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; co
 .fns td { padding: 4px 6px 4px 0; vertical-align: top; border-top: 1px solid var(--line); }
 .fns td:first-child { font-family: var(--mono); white-space: nowrap; }
 .fns .doc { color: var(--muted); }
+.fns a { color: var(--accent); }
 
 .value { font: 12px/1.5 var(--mono); word-break: break-word; }
 .value details { margin-left: 0; }

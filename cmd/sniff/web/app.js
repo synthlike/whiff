@@ -274,7 +274,16 @@ async function showAddress(name) {
     const tr = el("tr");
     const sig = (f.form === "ask" ? "ask " : "") + "(" + [f.fn, ...f.params].join(" ") + ")";
     const mk = el("span", "badge " + f.mark, ":" + f.mark);
-    const c1 = el("td", "", sig), c2 = el("td"), c3 = el("td", "doc", f.doc);
+    const c1 = el("td"), c2 = el("td"), c3 = el("td", "doc", f.doc);
+    // A :read function of no arguments links to its answer's page.
+    if (f.mark === "read" && !f.params.length && f.form !== "ask") {
+      const link = el("a", "", sig);
+      link.href = pageOf(name + "/" + f.fn, { t: "vec", v: [] });
+      link.title = "open what :" + name + "/" + f.fn + " answers as a page";
+      c1.append(link);
+    } else {
+      c1.textContent = sig;
+    }
     c2.append(mk);
     tr.append(c1, c2, c3);
     table.append(tr);
