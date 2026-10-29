@@ -215,7 +215,7 @@ function section(title, ...kids) {
 }
 
 function showEntry(i) {
-  history.replaceState(null, "", location.pathname);
+  history.replaceState(null, "", location.pathname + location.search);
   const e = entries[i];
   selected = i;
   mark(i);
@@ -403,31 +403,100 @@ $("rows").addEventListener("click", (ev) => {
   if (r) showEntry(Number(r.dataset.i));
 });
 
-const events = new EventSource("events");
-events.addEventListener("snapshot", (ev) => {
-  const snap = JSON.parse(ev.data);
-  entries = [];
-  lanes = ["client"];
-  selected = null;
-  bulk = true;
-  faulted.clear();
-  for (const e of snap.entries) {
-    entries.push(e);
-    if (e.kind !== "note") { laneOf(from(e)); laneOf(to(e)); }
+// The filter: a query, as whiff history takes it, that sniff matches
+// history against, so only what it matches comes; kept in the URL, ?q=,
+// so a filter is a link. Its chips add or take out a term of it.
+let query = new URLSearchParams(location.search).get("q") || "";
+let events = null;
+
+// follow opens history's events for the query, again each time it changes.
+function follow() {
+  if (events) events.close();
+  events = new EventSource("events" + (query ? "?q=" + encodeURIComponent(query) : ""));
+  events.addEventListener("snapshot", (ev) => {
+    const snap = JSON.parse(ev.data);
+    entries = [];
+    lanes = ["client"];
+    selected = null;
+    bulk = true;
+    // Faults are known from all of history; a filter shows only some.
+    if (!query) faulted.clear();
+    for (const e of snap.entries) {
+      entries.push(e);
+      if (e.kind !== "note") { laneOf(from(e)); laneOf(to(e)); }
+    }
+    bulk = false;
+    entries.sort((a, b) => a.us - b.us);
+    entries.forEach(noteFault);
+    drawAddresses();
+    drawLanes();
+    redraw();
+    $("query-error").textContent = snap.error || "";
+    $("query").classList.toggle("bad", !!snap.error);
+    $("empty").textContent = snap.error ? "Fix the filter to see messages."
+      : query ? "Nothing matches this filter yet."
+      : "No messages yet. Call a service and it shows here.";
+    setStatus(snap.status);
+    const trace = $("trace");
+    trace.scrollTop = trace.scrollHeight;
+  });
+  events.addEventListener("entry", (ev) => append(JSON.parse(ev.data)));
+  events.addEventListener("status", (ev) => setStatus(JSON.parse(ev.data)));
+  events.onerror = () => setStatus({ connected: false, why: "sniff stopped" });
+}
+
+// setQuery filters history by q, if it changed.
+function setQuery(q) {
+  q = q.trim().split(/\s+/).filter(Boolean).join(" ");
+  const box = $("query");
+  if (box.value.trim() !== q) box.value = q;
+  drawChips(q);
+  if (q === query) return;
+  query = q;
+  history.replaceState(null, "", location.pathname + (q ? "?q=" + encodeURIComponent(q) : "") + location.hash);
+  follow();
+}
+
+function drawChips(q) {
+  const terms = q.split(" ");
+  for (const c of document.querySelectorAll(".filters .chip")) {
+    c.setAttribute("aria-pressed", String(terms.includes(c.dataset.term)));
   }
-  bulk = false;
-  entries.sort((a, b) => a.us - b.us);
-  entries.forEach(noteFault);
-  drawAddresses();
-  drawLanes();
-  redraw();
-  setStatus(snap.status);
-  const trace = $("trace");
-  trace.scrollTop = trace.scrollHeight;
+}
+
+for (const c of document.querySelectorAll(".filters .chip")) {
+  c.onclick = () => {
+    const terms = query.split(" ").filter(Boolean);
+    const i = terms.indexOf(c.dataset.term);
+    if (i >= 0) terms.splice(i, 1);
+    else terms.push(c.dataset.term);
+    setQuery(terms.join(" "));
+  };
+}
+let typed = 0;
+$("query").addEventListener("input", (ev) => {
+  clearTimeout(typed);
+  typed = setTimeout(() => setQuery(ev.target.value), 500);
 });
-events.addEventListener("entry", (ev) => append(JSON.parse(ev.data)));
-events.addEventListener("status", (ev) => setStatus(JSON.parse(ev.data)));
-events.onerror = () => setStatus({ connected: false, why: "sniff stopped" });
+$("filters").addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  clearTimeout(typed);
+  setQuery($("query").value);
+});
+$("query").addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape") ev.target.blur();
+});
+// / goes to the filter, from anywhere but a box you type in.
+document.addEventListener("keydown", (ev) => {
+  if (ev.key !== "/" || active || ev.metaKey || ev.ctrlKey || ev.altKey) return;
+  if (ev.target.closest?.("input, textarea, select, [contenteditable]")) return;
+  ev.preventDefault();
+  $("query").focus();
+  $("query").select();
+});
+$("query").value = query;
+drawChips(query);
+follow();
 
 // waiting is how many wait for you in each queue the sidebar links to: the
 // review queue and your inbox. The browser tab's title shows them all.
@@ -587,6 +656,7 @@ function activate(t) {
   store.set("active", t ? t.href : "");
   markSide();
   showBanner();
+  $("filters").hidden = !!t;
   if (!t) return;
   if (t.topics.length) watch(t); // it loads when the watch opens
   else load(t);

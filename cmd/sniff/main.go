@@ -101,7 +101,8 @@ func openBrowser(url string) {
 }
 
 // server is sniff: the page, what it asks for, and history as the daemon
-// traces it, which it pushes to every page open.
+// traces it, which it pushes to every page open, each only what its query
+// matches.
 type server struct {
 	dir   string // the daemon's socket directory
 	wd    string // the directory sniff calls from, as the CLI calls from its own
@@ -109,11 +110,26 @@ type server struct {
 	token string
 
 	mu       sync.Mutex
-	entries  []json.RawMessage // history, oldest first, as pages get it
+	entries  []stored // history, oldest first
 	status   status
-	watchers map[chan event]bool
+	watchers map[chan event]watcher
+	marks    map[string]string // every function's mark by target, for queries with mark:
+	marksAt  time.Time
 	said     map[int]said // what the last actions sent from a page answered, by number
 	saidN    int
+}
+
+// stored is an entry of history, and the entry as pages get it.
+type stored struct {
+	e    rpc.Entry
+	json json.RawMessage
+}
+
+// watcher is what a page open follows: the entries its query, ?q=,
+// matches; none if its query has an error, which its snapshot says.
+type watcher struct {
+	q   rpc.Query
+	err string
 }
 
 // said is what an action a page sent answered, for the page it goes back
@@ -141,7 +157,7 @@ func newServer(dir string, port int) *server {
 	rand.Read(b)
 	wd, _ := os.Getwd()
 	return &server{dir: dir, wd: wd, port: port, token: hex.EncodeToString(b),
-		status: status{Why: "connecting to whiff"}, watchers: map[chan event]bool{}, said: map[int]said{}}
+		status: status{Why: "connecting to whiff"}, watchers: map[chan event]watcher{}, said: map[int]said{}}
 }
 
 // follow traces the daemon's history until ctx ends, connecting again a
@@ -175,18 +191,23 @@ func (s *server) trace(ctx context.Context) error {
 	s.mu.Lock()
 	s.entries = s.entries[:0]
 	for _, e := range es {
-		s.entries = append(s.entries, entryJSON(e))
+		s.entries = append(s.entries, stored{e, entryJSON(e)})
 	}
 	s.status = status{Connected: true}
 	s.mu.Unlock()
-	s.broadcast(event{"snapshot", s.snapshot()})
+	ms := s.marksFor(nil, false)
+	s.mu.Lock()
+	for ch, w := range s.watchers {
+		s.push(ch, event{"snapshot", s.snapshot(w, ms)})
+	}
+	s.mu.Unlock()
 	for {
 		select {
 		case e, ok := <-c.Entries():
 			if !ok {
 				return errors.New("whiff stopped")
 			}
-			s.add(entryJSON(e))
+			s.add(e)
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -207,14 +228,54 @@ func (s *server) dial() (*rpc.Client, error) {
 	return c, nil
 }
 
-func (s *server) add(e json.RawMessage) {
+// add keeps e, and sends it to every page whose query it matches.
+func (s *server) add(e rpc.Entry) {
+	st := stored{e, entryJSON(e)}
+	ms := s.marksFor(&e, false)
 	s.mu.Lock()
-	s.entries = append(s.entries, e)
+	defer s.mu.Unlock()
+	s.entries = append(s.entries, st)
 	if n := len(s.entries) - historyKeep; n > 0 {
 		s.entries = slices.Delete(s.entries, 0, n)
 	}
+	for ch, w := range s.watchers {
+		if w.err == "" && w.q.Match(e, ms) {
+			s.push(ch, event{"entry", st.json})
+		}
+	}
+}
+
+// marksFor is every function's mark, if a page's query asks for it with
+// mark: (asked, for one about to open), else nil. They are fetched again
+// when e is to a function they don't know, at most every two seconds; e
+// is nil for a snapshot.
+func (s *server) marksFor(e *rpc.Entry, asked bool) map[string]string {
+	s.mu.Lock()
+	for _, w := range s.watchers {
+		asked = asked || w.q.Marks()
+	}
+	ms, at := s.marks, s.marksAt
 	s.mu.Unlock()
-	s.broadcast(event{"entry", e})
+	if !asked {
+		return nil
+	}
+	known := ms != nil && (e == nil || (e.Kind != "call" && e.Kind != "send") || ms[e.To] != "")
+	if known || time.Since(at) < 2*time.Second {
+		return ms
+	}
+	c, err := s.dial()
+	if err != nil {
+		return ms
+	}
+	defer c.Close()
+	fresh, err := marks(c)
+	if err != nil {
+		return ms
+	}
+	s.mu.Lock()
+	s.marks, s.marksAt = fresh, time.Now()
+	s.mu.Unlock()
+	return fresh
 }
 
 func (s *server) setStatus(st status) {
@@ -225,29 +286,44 @@ func (s *server) setStatus(st status) {
 	s.broadcast(event{"status", data})
 }
 
-// snapshot is what a page gets when it opens: {:status :entries}.
-func (s *server) snapshot() []byte {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	data, _ := json.Marshal(struct {
+// snapshot is what a page that follows w gets when it opens, and when
+// sniff follows the daemon again: {:status :entries}, the entries w's
+// query matches, with :error if it has one. Its caller holds s.mu.
+func (s *server) snapshot(w watcher, marks map[string]string) []byte {
+	out := struct {
 		Status  status            `json:"status"`
 		Entries []json.RawMessage `json:"entries"`
-	}{s.status, s.entries})
+		Error   string            `json:"error,omitempty"`
+	}{Status: s.status, Entries: []json.RawMessage{}, Error: w.err}
+	if w.err == "" {
+		for _, st := range s.entries {
+			if w.q.Match(st.e, marks) {
+				out.Entries = append(out.Entries, st.json)
+			}
+		}
+	}
+	data, _ := json.Marshal(out)
 	return data
 }
 
-// broadcast sends e to every page. One that doesn't keep up is closed: its
-// browser opens it again and gets a fresh snapshot.
+// broadcast sends e to every page.
 func (s *server) broadcast(e event) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for w := range s.watchers {
-		select {
-		case w <- e:
-		default:
-			delete(s.watchers, w)
-			close(w)
-		}
+	for ch := range s.watchers {
+		s.push(ch, e)
+	}
+}
+
+// push sends e to the page ch is for. One that doesn't keep up is closed:
+// its browser opens it again and gets a fresh snapshot. Its caller holds
+// s.mu.
+func (s *server) push(ch chan event, e event) {
+	select {
+	case ch <- e:
+	default:
+		delete(s.watchers, ch)
+		close(ch)
 	}
 }
 
@@ -305,17 +381,27 @@ func (s *server) valid(token string) bool {
 }
 
 // events streams server-sent events to a page: a snapshot, then entries
-// and statuses as they come.
+// and statuses as they come; only the entries its query, ?q=, matches, as
+// whiff history's (rpc.Query).
 func (s *server) events(w http.ResponseWriter, r *http.Request) {
+	q, err := rpc.ParseQuery(r.URL.Query().Get("q"))
+	wt := watcher{q: q}
+	if err != nil {
+		wt.err = err.Error()
+	}
+	ms := s.marksFor(nil, q.Marks())
 	w.Header().Set("Content-Type", "text/event-stream")
 	rc := http.NewResponseController(w)
 	ch := make(chan event, 256)
+	// Following from the snapshot on, under one lock, no entry is missed
+	// or sent twice.
 	s.mu.Lock()
-	s.watchers[ch] = true
+	s.watchers[ch] = wt
+	first := s.snapshot(wt, ms)
 	s.mu.Unlock()
 	defer func() {
 		s.mu.Lock()
-		if s.watchers[ch] {
+		if _, ok := s.watchers[ch]; ok {
 			delete(s.watchers, ch)
 			close(ch)
 		}
@@ -325,7 +411,7 @@ func (s *server) events(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", e.name, e.data)
 		return rc.Flush() == nil
 	}
-	if !send(event{"snapshot", s.snapshot()}) {
+	if !send(event{"snapshot", first}) {
 		return
 	}
 	ping := time.NewTicker(25 * time.Second)

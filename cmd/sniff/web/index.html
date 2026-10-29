@@ -38,6 +38,14 @@
       <span class="banner-title">Waits for your review</span>
       <div id="banner-body" class="banner-body"></div>
     </section>
+    <form id="filters" class="filters" role="search" aria-label="Filter messages">
+      <button type="button" class="chip" data-term="kind:err" aria-pressed="false" title="kind:err: what answered with an error or a fault">Errors</button>
+      <button type="button" class="chip" data-term="time:>500ms" aria-pressed="false" title="time:>500ms">Slow &gt; 500ms</button>
+      <button type="button" class="chip" data-term="mark:write" aria-pressed="false" title="mark:write: to :write functions">Writes</button>
+      <input id="query" type="search" aria-label="Filter" placeholder="to:plan from:agent kind:err time:>500ms -to:gh   ( / )" autocomplete="off" spellcheck="false"
+        title="Each term must match; -term must not. to:address[/fn] from:address origin:user|agent kind:call|send|pub|done|eval|note|ok|err|fault|pending time:>500ms|<1ms mark:read|write gate:held|refused|accepted|trusted|free|for, or a word">
+      <span id="query-error" class="query-error" role="status"></span>
+    </form>
     <main id="activity" role="tabpanel" aria-labelledby="tab-activity">
       <section id="trace" aria-label="Messages">
         <div id="lanes" class="lanes"></div>

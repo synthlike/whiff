@@ -214,6 +214,41 @@ func TestSniff(t *testing.T) {
 		break
 	}
 
+	// A page with a query gets only what it matches, as whiff history's;
+	// one with a bad query, why.
+	snapshotOf := func(q string) string {
+		t.Helper()
+		resp := get("/events?q=" + url.QueryEscape(q))
+		defer resp.Body.Close()
+		sc := bufio.NewScanner(resp.Body)
+		sc.Buffer(nil, 1<<20)
+		for sc.Scan() {
+			if l, ok := strings.CutPrefix(sc.Text(), "data: "); ok {
+				return l
+			}
+		}
+		t.Fatalf("%s: no snapshot", q)
+		return ""
+	}
+	var snap struct {
+		Entries []struct{ To string }
+		Error   string
+	}
+	json.Unmarshal([]byte(snapshotOf("to:greet -kind:err")), &snap)
+	if len(snap.Entries) == 0 || snap.Error != "" {
+		t.Errorf("to:greet: %+v", snap)
+	}
+	for _, e := range snap.Entries {
+		if !strings.HasPrefix(e.To, "greet/") {
+			t.Errorf("to:greet has %s", e.To)
+		}
+	}
+	snap.Entries, snap.Error = nil, ""
+	json.Unmarshal([]byte(snapshotOf("kind:big")), &snap)
+	if len(snap.Entries) != 0 || !strings.HasPrefix(snap.Error, "kind:big: want kind:") {
+		t.Errorf("kind:big: %+v", snap)
+	}
+
 	// Addresses, with their functions, and a service's state.
 	var addrs []struct {
 		Address       string
