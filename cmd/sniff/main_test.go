@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -282,7 +283,9 @@ func TestViews(t *testing.T) {
 	s, base, _ := sniffing(t, map[string]string{
 		"board": `(service board :state {:n 0}
   (on (show s) :read "A view."
-    (ok (view/items [{:label (str "n " (map/get-or s :n 0)) :action [:board/bump 2]}])))
+    (ok (view/items [{:label (str "n " (map/get-or s :n 0)) :action [:board/bump 2]}] {:changed :board/changed})))
+  (on (times s k) :read "n times k, as text."
+    (ok (view/text (str (* (map/get-or s :n 0) k)))))
   (on (bump s k) :write :update "Adds k."
     (do (publish :board/changed {})
       (ok [:done (map/update s :n (fn (n) (+ n k)))]))))`,
@@ -379,7 +382,18 @@ func TestViews(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("no change on the watch")
 	}
-	if got := view(); !strings.Contains(got, `{"t":"str","v":"n 2"}`) {
+	if got := view(); !strings.Contains(got, `{"t":"str","v":"n 2"}`) || !strings.Contains(got, `[{"t":"kw","v":"changed"},{"t":"kw","v":"board/changed"}]`) {
 		t.Errorf("view after acting = %s", got)
+	}
+
+	// A :read function's view with args, as a :read action links to it.
+	if r, b := do("GET", "/api/view?target=board/times&args="+url.QueryEscape("[3]"), "", ""); r.StatusCode != http.StatusOK ||
+		strings.TrimSpace(b) != `{"t":"tag","n":"ok","v":[{"t":"tag","n":"text","v":[{"t":"str","v":"6"}]}]}` {
+		t.Errorf("view with args: %s %s", r.Status, b)
+	}
+	for _, args := range []string{"3", "[3"} {
+		if r, b := do("GET", "/api/view?target=board/times&args="+url.QueryEscape(args), "", ""); r.StatusCode != http.StatusBadRequest {
+			t.Errorf("args %s: %s %s", args, r.Status, b)
+		}
 	}
 }

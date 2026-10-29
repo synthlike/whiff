@@ -180,10 +180,10 @@ function showEntry(i) {
   }
   const v = viewOf(e.reply);
   d.append(section("Reply", v ? showView(v, e.reply) : wrap(value(e.reply))));
-  // A view a function answers with no arguments can be a page of its own.
-  if (v && e.kind === "call" && e.args && !e.args.v.length) {
+  // A view a :read function answers can be a page of its own.
+  if (v && e.kind === "call" && e.args && marks.get(e.to) === "read") {
     const a = el("a", "pin", "Open :" + e.to + " as a page");
-    a.href = "view/" + encodeURI(e.to);
+    a.href = pageOf(e.to, e.args);
     d.append(a);
   }
 }
@@ -239,6 +239,7 @@ async function loadAddresses() {
   } catch {
     return;
   }
+  setMarks(addresses);
   if (location.hash.startsWith("#:")) showAddress(decodeURIComponent(location.hash.slice(2)));
   const nav = $("addresses");
   nav.replaceChildren();

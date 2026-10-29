@@ -142,6 +142,8 @@
       ; :me/tell answers pending, as it waits in your inbox.
       (do (if quiet :quiet (or-else (call :me/tell (str "pipeline " n ", " task ": " (keyword/name status) ". " note)) :told))
         (publish :pipeline/done {:run n :status status :branch branch :dir dir :note note})
+        ; After :pipeline/done, so a planner hears of the end first.
+        (publish :pipeline/step {:run n :step status})
         (ok (set-run state n {:step status})))))
 
   ; step-done takes run n on from the result r of the job it waited for at
@@ -204,7 +206,8 @@
                       (fn ([n {:task t :step s :round r :branch b}])
                         (let [show {:label "Show review and diff" :action [:pipeline/show n]}]
                           {:label (str n "  " t) :detail (str (keyword/name s) ", round " r ", " b)
-                           :actions (if (active? s) [show {:label "Cancel the run" :action [:pipeline/cancel n]}] [show])}))))))
+                           :actions (if (active? s) [show {:label "Cancel the run" :action [:pipeline/cancel n]}] [show])})))
+          {:changed :pipeline/step})))
 
   (on (show state n) :read
     "Run n, its last review and the diff that review was of, as a view of text; (err {:kind :no-run}) if there is no such run."
@@ -213,7 +216,8 @@
        (let [{:task t :step s :round r :branch b} run]
          (ok (view/text (str "Run " n ": " t "\n" (keyword/name s) ", round " r ", " b
                           "\n\nThe last review:\n\n" (map/get-or run :review "None yet.")
-                          "\n\nThe diff it reviewed:\n\n" (map/get-or run :diff "None yet.")))))]
+                          "\n\nThe diff it reviewed:\n\n" (map/get-or run :diff "None yet."))
+               {:changed :pipeline/step})))]
       [_ (err {:kind :no-run :message (str "no run " n)})]))
 
   (on (cancel state n) :write :update

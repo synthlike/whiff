@@ -167,12 +167,19 @@ action is an offer, not a permission: its handler checks again, so one from
 a stale view fails as any message would. The CLI prints a line per action,
 for fzf, and `whiff act` sends the one you pick.
 
-sniff draws them, and pins one as a page of its own, `/view/plan/board`:
-it calls the function as you, only if it is `:read`, and again each time
-`:plan/changed` fires (or the topic its `?on=` names). Clicking an action
-sends it as you, as `whiff act` does: sniff is one of your connections,
-and only its own page can send through it, as JSON from its origin with
-its cookie.
+A view names the topic published when it changes, `(view/board cols
+{:changed :plan/changed})`, so a client showing it knows when to fetch it
+again.
+
+sniff draws them, and pins one as a page of its own, `/view/plan/board`
+(`?args=[2]` for a function that takes some): it calls the function as
+you, only if it is `:read`, and again each time the view's topic fires.
+Marks make actions links or buttons, as GET and POST: an action to a
+`:read` function is a link to its answer's page, and any other a button,
+which shows its target beside its label, since a label can say anything.
+Clicking one sends it as you, as `whiff act` does: sniff is one of your
+connections, and only its own page can send through it, as JSON from its
+origin with its cookie.
 
 ## Origins and the review gate
 

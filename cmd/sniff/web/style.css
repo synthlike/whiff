@@ -269,6 +269,8 @@ aside h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; co
 }
 .view .action:hover { border-color: var(--accent); }
 .view .action.labelled { font: 12px var(--sans); }
+.view .action.link { text-decoration: none; border-style: dashed; }
+.view .action .to { font: 11px var(--mono); color: var(--muted); }
 .view .action:disabled { color: var(--muted); cursor: progress; }
 .view .reply { flex-basis: 100%; font: 11px var(--mono); color: var(--muted); word-break: break-word; }
 .view .reply:empty { display: none; }

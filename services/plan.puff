@@ -143,7 +143,8 @@
       (ok (view/board (vector/map columns
                         (fn ([title steps])
                           {:title title
-                           :items (vector/map (vector/filter ts (fn ({:step s}) (vector/contains? steps s))) (fn ({:item it}) it))}))))))
+                           :items (vector/map (vector/filter ts (fn ({:step s}) (vector/contains? steps s))) (fn ({:item it}) it))}))
+            {:changed :plan/changed}))))
 
   ; The planner's answer: the tasks, and the first one's run.
   (on (whiff/done state id r) :update

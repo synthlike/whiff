@@ -35,7 +35,7 @@ func TestRun(t *testing.T) {
   (on (places) "Locations."
     (ok (view/locations [{:file "a.go" :line 3 :col 2 :note "here"} {:file "b.go"}])))
   (on (say) "Text."
-    (ok (view/text "two\nlines")))
+    (ok (view/text "two\nlines" {:changed :greet/changed})))
   (on (board) "A board."
     (ok (view/board [{:title "Now" :items [{:label "a" :actions [{:label "Greet x" :action [:greet/hello "x"]} {:label "Greet y" :action [:greet/hello "y"]}]}]}
                      {:title "Later" :items [{:label "b"}]}]))))`

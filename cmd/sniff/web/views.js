@@ -84,12 +84,13 @@ function wrap(v) {
 }
 
 // Views, as a service answers with them, (ok view): (items [...]), (text
-// "..."), (locations [...]) or (board [...]). viewOf is the view in reply,
-// or null if it holds none, or one of a shape sniff doesn't know.
+// "..."), (locations [...]) or (board [...]), each with its opts after it
+// if it has any. viewOf is the view in reply, or null if it holds none, or
+// one of a shape sniff doesn't know.
 function viewOf(reply) {
   if (reply.t !== "tag" || reply.n !== "ok" || reply.v.length !== 1) return null;
   const v = reply.v[0];
-  if (v.t !== "tag" || v.v.length !== 1) return null;
+  if (v.t !== "tag" || v.v.length < 1 || v.v.length > 2) return null;
   const arg = v.v[0];
   // maps says whether t is a vector of maps, each with a string at need.
   const maps = (t, need) => t?.t === "vec" && t.v.every((m) => m.t === "map" && field(m, need)?.t === "str");
@@ -100,6 +101,34 @@ function viewOf(reply) {
     case "board": return maps(arg, "title") && arg.v.every((c) => maps(field(c, "items"), "label")) ? v : null;
   }
   return null;
+}
+
+// changedOf is the topic view names in its opts, {:changed :plan/changed},
+// published when it changes; or "".
+function changedOf(view) {
+  const opts = view.v[1];
+  const t = opts && opts.t === "map" && field(opts, "changed");
+  return t && t.t === "kw" ? t.v : "";
+}
+
+// marks is each function's mark, "read" or "write", by its target,
+// "plan/board", from sniff's addresses: whether an action to it is a link
+// or a button.
+let marks = new Map();
+
+function setMarks(addresses) {
+  marks = new Map();
+  for (const a of addresses) for (const f of a.fns) marks.set(a.address + "/" + f.fn, f.mark);
+}
+
+async function loadMarks() {
+  setMarks(await getJSON("/api/addresses"));
+}
+
+// pageOf is the page that shows what target answers to args, a tree of a
+// vector, as a view: /view/pipeline/show?args=[2].
+function pageOf(target, args) {
+  return "/view/" + encodeURI(target) + (args.v.length ? "?args=" + encodeURIComponent(print(args)) : "");
 }
 
 // field is map m's value at the keyword name, or undefined.
@@ -142,10 +171,12 @@ function showView(view, reply, acted) {
   return f;
 }
 
-// item is an item of a view, with a button for each thing that can be done
-// with it: its :actions, each saying what it does, and its :action, which
-// shows the message it sends. Clicking one sends it as you, as whiff act
-// does, and shows the reply under the item.
+// item is an item of a view, with what can be done with it: its :actions,
+// each saying what it does, and its :action, which shows the message it
+// sends. One to a :read function is a link, which opens its answer as a
+// page; any other is a button, which sends it as you, as whiff act does,
+// and shows the reply under the item. A :write button shows its target too,
+// as its label can say anything.
 function item(m, acted) {
   const r = el("div", "item");
   r.append(el("span", "", str(m, "label")));
@@ -159,7 +190,19 @@ function item(m, acted) {
   const buttons = el("span", "actions");
   const out = el("div", "reply");
   for (const { label, action } of actions) {
+    const target = action.v[0].v;
+    const mark = marks.get(target);
+    if (mark === "read") {
+      const a = el("a", label ? "action link labelled" : "action link", label || print(action));
+      a.href = pageOf(target, { t: "vec", v: action.v.slice(1) });
+      a.target = "_blank";
+      a.rel = "noopener";
+      a.title = "opens what " + print(action) + " answers";
+      buttons.append(a);
+      continue;
+    }
     const b = el("button", label ? "action labelled" : "action", label || print(action));
+    if (label && mark === "write") b.append(el("span", "to", " → :" + target));
     b.title = "sends " + print(action) + " as you";
     b.onclick = async () => {
       buttons.querySelectorAll("button").forEach((x) => { x.disabled = true; });

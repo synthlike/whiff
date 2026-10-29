@@ -10,33 +10,38 @@ import (
 // (items [...]), each item an action to pick; (text "..."); (locations
 // [...]), places in files; and (board [...]), columns of items. The view/
 // functions build them and check their shape, so every client can rely on
-// it.
+// it. Each takes opts too, {:changed topic}, the topic published when the
+// view would answer otherwise, so a client showing it fetches it again;
+// they follow the view as its second argument.
 
 // itemFields are an item's fields, in items and in a board's columns.
 var itemFields = map[string]check{"label": isString, "detail": isString, "action": isAction, "actions": isActions}
 
+// optsDoc is how each view/ function says what its opts are.
+const optsDoc = " opts, {:changed :address/topic}, names the topic published when it changes."
+
 func viewBuiltins() []*puff.Builtin {
 	return []*puff.Builtin{
-		{Name: "view/items", Args: "items", Mark: puff.MarkRead,
-			Doc: "(items items): a view of items to pick from, each {:label \"...\"} with an optional :detail string and :actions, what can be done with it, each {:label \"Move to Done\" :action [:address/fn args...]}, the message picking it sends; :action alone is one action without a label.",
+		{Name: "view/items", Args: "items [opts]", Mark: puff.MarkRead,
+			Doc: "(items items): a view of items to pick from, each {:label \"...\"} with an optional :detail string and :actions, what can be done with it, each {:label \"Move to Done\" :action [:address/fn args...]}, the message picking it sends; :action alone is one action without a label." + optsDoc,
 			Fn: func(_ *puff.Call, args []puff.Value) (puff.Value, error) {
-				return view("items", args[0], itemFields, "label")
+				return withOpts(view("items", args[0], itemFields, "label"))(args)
 			}},
-		{Name: "view/text", Args: "text", Mark: puff.MarkRead,
-			Doc: "(text text): a view of text, shown as it is.",
+		{Name: "view/text", Args: "text [opts]", Mark: puff.MarkRead,
+			Doc: "(text text): a view of text, shown as it is." + optsDoc,
 			Fn: func(_ *puff.Call, args []puff.Value) (puff.Value, error) {
 				if _, ok := args[0].(puff.String); !ok {
 					return nil, fmt.Errorf("want a string, got %s", puff.Print(args[0]))
 				}
-				return puff.NewTag("text", args[0]), nil
+				return withOpts(puff.NewTag("text", args[0]), nil)(args)
 			}},
-		{Name: "view/locations", Args: "locations", Mark: puff.MarkRead,
-			Doc: "(locations locations): a view of places in files, each {:file \"...\"} with an optional :line and :col, counting from 1, and :note string.",
+		{Name: "view/locations", Args: "locations [opts]", Mark: puff.MarkRead,
+			Doc: "(locations locations): a view of places in files, each {:file \"...\"} with an optional :line and :col, counting from 1, and :note string." + optsDoc,
 			Fn: func(_ *puff.Call, args []puff.Value) (puff.Value, error) {
-				return view("locations", args[0], map[string]check{"file": isString, "line": isPositive, "col": isPositive, "note": isString}, "file")
+				return withOpts(view("locations", args[0], map[string]check{"file": isString, "line": isPositive, "col": isPositive, "note": isString}, "file"))(args)
 			}},
-		{Name: "view/board", Args: "columns", Mark: puff.MarkRead,
-			Doc: "(board columns): a view of items in columns, each {:title \"...\" :items [...]}, its items as view/items has them.",
+		{Name: "view/board", Args: "columns [opts]", Mark: puff.MarkRead,
+			Doc: "(board columns): a view of items in columns, each {:title \"...\" :items [...]}, its items as view/items has them." + optsDoc,
 			Fn: func(_ *puff.Call, args []puff.Value) (puff.Value, error) {
 				b, err := view("board", args[0], map[string]check{"title": isString}, "title", "items")
 				if err != nil {
@@ -51,8 +56,33 @@ func viewBuiltins() []*puff.Builtin {
 						return nil, fmt.Errorf("column %s: %w", puff.Print(title), err)
 					}
 				}
-				return b, nil
+				return withOpts(b, nil)(args)
 			}},
+	}
+}
+
+// withOpts is a function of a view/ function's args that returns v with
+// their opts, if they have any, once they pass; or err, if v didn't build.
+func withOpts(v puff.Value, err error) func(args []puff.Value) (puff.Value, error) {
+	return func(args []puff.Value) (puff.Value, error) {
+		if err != nil || len(args) < 2 {
+			return v, err
+		}
+		opts, ok := args[1].(puff.Map)
+		if !ok {
+			return nil, fmt.Errorf("want opts as a map, {:changed :address/topic}, got %s", puff.Print(args[1]))
+		}
+		for i := range opts.Len() {
+			e := opts.Entry(i)
+			if !puff.Equal(e.Key, puff.Keyword("changed")) {
+				return nil, fmt.Errorf("opts have no %s: want {:changed :address/topic}", puff.Print(e.Key))
+			}
+			if _, ok := e.Val.(puff.Keyword); !ok {
+				return nil, fmt.Errorf("want :changed as a topic, like :plan/changed, got %s", puff.Print(e.Val))
+			}
+		}
+		t := v.(puff.Tag)
+		return puff.NewTag(t.Name(), t.At(0), opts), nil
 	}
 }
 

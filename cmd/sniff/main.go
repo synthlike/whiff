@@ -7,9 +7,11 @@
 //
 // It prints the page's address, with a token that only you have: the page
 // is yours, as the socket is, and what it sends is sent as you, as from the
-// CLI. A view can be a page of its own, /view/address/fn, fetched again
-// each time address/changed (or ?on=topic) fires; clicking an action of
-// its items sends it, as whiff act does.
+// CLI. A :read function's view can be a page of its own,
+// /view/address/fn?args=[...], fetched again each time the topic it names
+// fires ({:changed topic}, ?on=topic, or address/changed). An item's
+// action to a :read function is a link to its page; clicking any other
+// sends it, as whiff act does.
 package main
 
 import (
@@ -419,9 +421,10 @@ func (s *server) session(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
-// view answers what target, address/fn, answers called as you with no
-// arguments, as a tree: what a pinned page shows. Only a :read function's,
-// so fetching a page, again and again, changes nothing.
+// view answers what target, address/fn, answers called as you with args, a
+// printed vector (none by default), as a tree: what a pinned page shows.
+// Only a :read function's, so fetching a page, again and again, changes
+// nothing.
 func (s *server) view(w http.ResponseWriter, r *http.Request) {
 	target, ok := keyword(r.URL.Query().Get("target"))
 	i := strings.LastIndex(target, "/")
@@ -430,6 +433,17 @@ func (s *server) view(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	addr, fn := target[:i], target[i+1:]
+	args := r.URL.Query().Get("args")
+	if args == "" {
+		args = "[]"
+	}
+	if v, err := puff.ReadValue(args); err != nil {
+		http.Error(w, "want args as a vector, [2]: "+err.Error(), http.StatusBadRequest)
+		return
+	} else if _, ok := v.(puff.Vector); !ok {
+		http.Error(w, "want args as a vector, [2], got "+args, http.StatusBadRequest)
+		return
+	}
 	c, err := s.dial()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
@@ -457,7 +471,7 @@ func (s *server) view(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf(":%s is :%s: a page fetches only :read functions", target, mark), http.StatusForbidden)
 		return
 	}
-	resp, err := c.Message("call", target, "[]", s.wd)
+	resp, err := c.Message("call", target, args, s.wd)
 	if err == nil && resp.Error != "" {
 		err = errors.New(resp.Error)
 	}

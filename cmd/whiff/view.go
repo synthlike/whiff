@@ -19,8 +19,9 @@ import (
 //	locations  file:line:col: note, a line each, as compilers print them
 //	board      a column each, "# title" and its items' lines, a blank line apart
 func viewText(v puff.Value) (string, bool) {
+	// A view's opts, its second argument, are for clients that refetch it.
 	t, ok := v.(puff.Tag)
-	if !ok || t.Len() != 1 {
+	if !ok || t.Len() < 1 || t.Len() > 2 {
 		return "", false
 	}
 	str := func(m puff.Value, key string) string {
