@@ -640,6 +640,18 @@ echo "changed things"
 		t.Errorf("retry of a ready run = %s", got)
 	}
 
+	// Merging fast-forwards your branch to a ready run's; once it has
+	// moved on, another run's branch doesn't merge.
+	if got := call("merge", "[2]"); got != `(ok "whiff/2")` {
+		t.Errorf("merge = %s", got)
+	}
+	if got := git(repo, "log", "--format=%s", "main"); got != "another\nfirst\n" {
+		t.Errorf("main's log after the merge = %q", got)
+	}
+	if got := call("merge", "[1]"); !strings.Contains(got, ":kind :exit") {
+		t.Errorf("merge of a run main moved past = %s", got)
+	}
+
 	// Outside a repository nothing starts.
 	resp, err := c.Message("call", "pipeline/start", `["x" `+check+`]`, dir)
 	if err != nil || !strings.Contains(resp.Value, "not a git repository") {
@@ -711,8 +723,9 @@ esac
 		t.Fatalf("plan/start = %+v %v", resp, err)
 	}
 	// Only the plan tells you: its runs are quiet.
-	// Its report offers the last run's review and diff.
-	want := `:plan -> :me/tell "plan 1, two files: done. All 2 tasks built; whiff/2 has them all." {:actions [{:action [:pipeline/show 2] :label "Show review and diff"}]}` + "\n"
+	// Its report offers the last run's review and diff, and its merge.
+	actions := `[{:action [:pipeline/show 2] :label "Show review and diff"} {:action [:plan/merge 1] :label "Merge whiff/2"}]`
+	want := `:plan -> :me/tell "plan 1, two files: done. All 2 tasks built; whiff/2 has them all." {:actions ` + actions + `}` + "\n"
 	eventually(t, "the plan", func() string {
 		text, _ := c.Inbox("me")
 		if _, tell, ok := strings.Cut(text, "  "); ok && strings.Count(text, "\n") == 1 {
@@ -732,7 +745,7 @@ esac
 	}
 	resp, err = c.Message("call", "plan/board", "[]", repo)
 	done := `{:items [{:actions [{:action [:pipeline/show 1] :label "Show review and diff"}] :detail "plan 1, task 1 of 2, round 1, whiff/1" :label "one"} ` +
-		`{:actions [{:action [:pipeline/show 2] :label "Show review and diff"}] :detail "plan 1, task 2 of 2, round 1, whiff/2" :label "two"}] :title "Done"}`
+		`{:actions ` + actions + ` :detail "plan 1, task 2 of 2, round 1, whiff/2" :label "two"}] :title "Done"}`
 	if err != nil || !strings.Contains(resp.Value, `{:items [] :title "Planned"}`) || !strings.Contains(resp.Value, done) {
 		t.Errorf("board = %+v %v", resp, err)
 	}
@@ -792,6 +805,20 @@ esac
 	inboxHas("the retried plan", `"plan 2, more files: done. All 2 tasks built; whiff/4 has them all."`)
 	if got := call("retry", `[2 ""]`); !strings.Contains(got, ":no-plan") {
 		t.Errorf("retry of a done plan = %s", got)
+	}
+
+	// Merging a plan fast-forwards your branch to its last one.
+	if got := call("merge", "[1]"); got != `(ok "whiff/2")` {
+		t.Errorf("plan/merge = %s", got)
+	}
+	if got := git("log", "--format=%s", "main"); got != "two\none\nfirst\n" {
+		t.Errorf("main's log after the merge = %q", got)
+	}
+	if got := call("merge", "[2]"); !strings.Contains(got, ":kind :exit") {
+		t.Errorf("merge of a plan main moved past = %s", got)
+	}
+	if got := call("merge", "[3]"); !strings.Contains(got, ":no-plan") {
+		t.Errorf("merge of no plan = %s", got)
 	}
 }
 

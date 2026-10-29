@@ -8,6 +8,7 @@
 ; claude CLI and services/pipeline.puff.
 ;   whiff call plan/start "a todo CLI: add, list and done, kept in todo.json" '["go" "test" "./..."]'
 ;   whiff call plan/retry 1 "store todos in a map"   ; after a task's run gave up
+;   whiff call plan/merge 1        ; once done: its last branch, fast-forward only
 ;   whiff call plan/plans          ; each plan, its tasks and where it is
 ;   whiff call plan/board          ; the same as a board: pick a ticket to cancel or show it
 ;   whiff sub plan/changed         ; {:plan n} when its tickets move
@@ -73,6 +74,8 @@
 
   (def (show-action run) {:label "Show review and diff" :action [:pipeline/show run]})
 
+  (def (merge-action n branch) {:label (str "Merge " branch) :action [:plan/merge n]})
+
   (def (retry-action n) {:label "Retry with a note" :action [:plan/retry n] :ask "A note for the developer, if any"})
 
   ; moved is r, once :plan/changed says plan n's tickets moved, so a client
@@ -130,6 +133,7 @@
                                              [(show-action r) {:label "Cancel the run" :action [:pipeline/cancel r]}]]
                                             [(and (= i stopped) (vector/contains? [:gave-up :failed :cancelled] s))
                                              [(show-action r) (retry-action n)]]
+                                            [(and (= step :done) (= i (- total 1))) [(show-action r) (merge-action n b)]]
                                             [_ [(show-action r)]])}}]
                 [_ {:step (if (= step :building) :planned :skipped) :item {:label task :detail where}}])))))))
 
@@ -146,6 +150,12 @@
       [{:step :gave-up :item {:label "a" :detail "plan 4, task 1 of 1, round 3, whiff/5"
                               :actions [{:label "Show review and diff" :action [:pipeline/show 5]}
                                         {:label "Retry with a note" :action [:plan/retry 4] :ask "A note for the developer, if any"}]}}]))
+
+  (test "a done plan's last task can be merged"
+    (= (vector/map (tickets 5 {:goal "g" :step :done :task 1 :tasks ["a" "b"] :built [6 7]}
+                     [{:run 6 :step :ready :round 1 :branch "whiff/6"} {:run 7 :step :ready :round 1 :branch "whiff/7"}])
+         (fn ({:item {:actions as}}) (vector/length as)))
+      [1 2]))
 
   (test "the goal while it has no tasks, and the tasks a failed plan didn't start"
     (= [(tickets 2 {:goal "g" :step :planning :tasks []} [])
@@ -205,10 +215,17 @@
                  (finish state n :failed (str "Task " (+ i 1) " of " (vector/length ts) " ended " (keyword/name status) ": " note)
                    [(show-action run) (retry-action n)])]
                 [last
-                 (finish state n :done (str "All " (vector/length ts) " tasks built; " branch " has them all.") [(show-action run)])]
+                 (finish state n :done (str "All " (vector/length ts) " tasks built; " branch " has them all.")
+                   [(show-action run) (merge-action n branch)])]
                 [_
                  (catch (next-run state n (+ i 1) branch)
                    [e (finish state n :failed (str "Task " (+ i 2) " didn't start: " (value/to-string e)) [])])])))])]))
+
+  (on (merge state n) :write
+    "Merges done plan n's last branch, which holds every task, into the branch checked out in its repository, only as a fast-forward, as :pipeline/merge does: (ok branch); (err {:kind :no-plan}) unless plan n is done."
+    (match (map/get-in state [:plans n])
+      [(some {:step :done :run run}) (call :pipeline/merge run)]
+      [_ (err {:kind :no-plan :message (str "plan " n " isn't done: nothing to merge")})]))
 
   (on (retry state n note) :write :update
     "Takes plan n on after the run of the task it stopped at gave up, failed or was cancelled: its dev Claude gets note, your words for it (\"\" for none), and up to 3 more rounds, and the plan goes on from there. (ok :retrying); (err {:kind :no-plan}) unless plan n stopped so."

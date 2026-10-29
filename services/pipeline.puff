@@ -4,13 +4,15 @@
 ; approves and the check passes, the review goes back to the dev, in the
 ; same session, for up to 3 rounds. Then the work is committed on the
 ; run's branch and how it went lands in your inbox. Your working tree is
-; never touched: merge the branch yourself. Needs git and the claude CLI.
+; never touched until you merge the branch, yourself or with merge, which
+; only fast-forwards. Needs git and the claude CLI.
 ;   whiff call pipeline/start "add a --verbose flag" '["go" "test" "./..."]'
 ;   whiff call pipeline/runs        ; each run and where it is
 ;   whiff call pipeline/view        ; the same as items, to show or cancel
 ;   whiff call pipeline/show 1      ; its last review and the diff it was of
 ;   whiff call pipeline/cancel 1
 ;   whiff call pipeline/retry 2 "keep the old flag too"   ; after it gave up
+;   whiff call pipeline/merge 1     ; once it is ready
 ;   whiff inbox                     ; how a run ended
 ;   whiff sub pipeline/done
 ;   whiff sub pipeline/step         ; {:run :step} as a run takes each step
@@ -139,17 +141,19 @@
              (if (passed? checked) "" (str "The check " (check-text checked) "\n\n"))
              "Fix what needs fixing."))])))
 
-  ; actions are what can be done about run n once it ended as status: show
-  ; its last review and diff, and retry it unless it is ready.
-  (def (actions n status)
+  ; actions are what can be done about run n, on branch, once it ended as
+  ; status: show its last review and diff, and merge it if it is ready or
+  ; retry it if not.
+  (def (actions n status branch)
     (let [show {:label "Show review and diff" :action [:pipeline/show n]}]
       (if (= status :ready)
-        [show]
+        [show {:label (str "Merge " branch) :action [:pipeline/merge n]}]
         [show {:label "Retry with a note" :action [:pipeline/retry n] :ask "A note for the developer, if any"}])))
 
-  (test "a run that didn't end ready can be retried"
-    (= [(actions 1 :ready) (actions 2 :gave-up)]
-      [[{:label "Show review and diff" :action [:pipeline/show 1]}]
+  (test "a ready run can be merged, and one that didn't end ready retried"
+    (= [(actions 1 :ready "whiff/1") (actions 2 :gave-up "whiff/2")]
+      [[{:label "Show review and diff" :action [:pipeline/show 1]}
+        {:label "Merge whiff/1" :action [:pipeline/merge 1]}]
        [{:label "Show review and diff" :action [:pipeline/show 2]}
         {:label "Retry with a note" :action [:pipeline/retry 2] :ask "A note for the developer, if any"}]]))
 
@@ -158,7 +162,7 @@
   (def (finish state n status note)
     (let [{:task task :branch branch :dir dir :quiet quiet} (run-of state n)]
       ; :me/tell answers pending, as it waits in your inbox.
-      (do (if quiet :quiet (or-else (call :me/tell (str "pipeline " n ", " task ": " (keyword/name status) ". " note) {:actions (actions n status)}) :told))
+      (do (if quiet :quiet (or-else (call :me/tell (str "pipeline " n ", " task ": " (keyword/name status) ". " note) {:actions (actions n status branch)}) :told))
         (publish :pipeline/done {:run n :status status :branch branch :dir dir :note note})
         ; After :pipeline/done, so a planner hears of the end first.
         (publish :pipeline/step {:run n :step status})
@@ -237,7 +241,7 @@
           (fn ([n {:task t :step s :round r :branch b :dir d}]) {:run n :task t :step s :round r :branch b :dir d}))))
 
   (on (view state) :read
-    "The runs as a view: each shows its last review and diff, cancels it while it runs, and retries it once it ended without being ready, unless a planner runs it."
+    "The runs as a view: each shows its last review and diff, cancels it while it runs, and merges it once ready or retries it once it ended otherwise, unless a planner runs it."
     (ok (view/items (vector/map (map/entries (map/get-or state :runs {}))
                       (fn ([n run])
                         (let [{:task t :step s :round r :branch b} run
@@ -246,7 +250,7 @@
                            :actions (cond
                                       [(active? s) [show {:label "Cancel the run" :action [:pipeline/cancel n]}]]
                                       [(map/get-or run :quiet #f) [show]]
-                                      [_ (actions n s)])})))
+                                      [_ (actions n s b)])})))
           {:changed :pipeline/step})))
 
   (on (show state n) :read
@@ -279,6 +283,14 @@
              state (set-run state n (map/merge fresh {:round (+ round 1) :limit (+ round rounds)}))]
          (ok [:retrying (try (dev state n (retry-input (run-of state n) note)))]))]
       [_ (err {:kind :no-run :message (str "run " n " hasn't ended without being ready: nothing to retry")})]))
+
+  (on (merge state n) :write
+    "Merges ready run n's branch into the branch checked out in its repository, only as a fast-forward: (ok branch); git's error if your branch moved on or your changes are in the way, and (err {:kind :no-run}) unless run n is ready."
+    (match (map/get-in state [:runs n])
+      [(some {:step :ready :repo repo :branch b})
+       (let [_ (try (git repo ["merge" "-q" "--ff-only" b]))]
+         (ok b))]
+      [_ (err {:kind :no-run :message (str "run " n " isn't ready: nothing to merge")})]))
 
   (on (whiff/done state id r) :update
     "A job a run waited for is done: the run takes its next step."
