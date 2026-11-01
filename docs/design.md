@@ -268,9 +268,9 @@ stream.
 
 - History, inboxes, `:review`'s queue and timers are in memory: a restart
   loses them, and a job running when whiff stops never answers. Service
-  state is stored. (v0.5 stores the rest.)
+  state is stored. (v0.6 stores the rest.)
 - `whiff wait` finds an answer among the last 1000, like history: a busy
   daemon can push one out before a client that went away asks for it.
 - A call waits 5s; anything longer is a job or an ask.
 - No calendar maths in puff: `1d` is 24 hours.
-- One machine. Peers over SSH are an idea, not a plan yet.
+- One machine. Peers over SSH are planned for v0.8.

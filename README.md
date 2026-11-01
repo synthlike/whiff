@@ -65,8 +65,15 @@ Docs: [use cases](docs/use-cases.md) · [design](docs/design.md) ·
 
 ## Status
 
-v0.4. v0.5 will refine sniff's UI and make whiff durable: inboxes and timers
-survive a restart.
+v0.5. sniff brings views into one window, with a review banner, searchable
+activity, message chains and address details, and a ⌘K palette that goes to
+or calls any address, view or function, with keys to move through activity.
+The CLI shares its history filters and can show message chains with `whiff
+history -c`.
+
+v0.6 will focus on reliable work and recovery: durable inboxes, timers and
+task results, explicit interruption handling and safe retries. Service state
+already survives restarts; inboxes, timers and history are still in memory.
 
 ## Inspirations
 
