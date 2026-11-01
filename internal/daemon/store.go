@@ -216,7 +216,7 @@ func (st *state) load() {
 			return err
 		}
 		err = tx.Bucket(timersBucket).ForEach(func(k, v []byte) error {
-			t, err := storedTimer(k, string(v))
+			t, err := storedTimer(slices.Clone(k), string(v))
 			if err != nil {
 				st.note(fmt.Sprintf("a timer can't be read, and stays stored: %v", err))
 				return nil
