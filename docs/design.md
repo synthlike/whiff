@@ -268,7 +268,8 @@ stream.
 
 - History is in memory: a restart loses it. Service state, every inbox,
   `:review`'s queue too, timers and running jobs are stored. (v0.6 stores the
-  rest.) What a `whiff try` address holds isn't.
+  rest: [tasks.md](tasks.md) is its spec.) What a `whiff try` address holds
+  isn't.
 - A job isn't resumed, nor run again. When whiff stops it kills the job, and
   at the next start its sender gets `(err {:kind :interrupted :outcome
   :stopped})`, or the job's real answer if it finished just then. After a
