@@ -429,9 +429,13 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 				if err != nil {
 					return nil, err
 				}
-				// A service's timers to itself go with the version that set
-				// them, so a reload, whose :start sets its own, doesn't
-				// double a loop. A delivery that fails is in history.
+				// A timer's message begins a chain of its own in history, or
+				// a service that schedules itself would be one endless chain;
+				// it keeps its origin. A service's timers to itself go with
+				// the version that set them, so a reload, whose :start sets
+				// its own, doesn't double a loop. A delivery that fails is in
+				// history.
+				m.cause = 0
 				own, stop := addr == cur.addr, cur.stop
 				time.AfterFunc(time.Duration(after), func() {
 					select {

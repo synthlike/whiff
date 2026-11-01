@@ -144,3 +144,37 @@ func TestChains(t *testing.T) {
 		t.Errorf("the call and the publish share id %d", hello.ID)
 	}
 }
+
+// A service that schedules itself isn't one endless chain.
+func TestTimerBeginsChain(t *testing.T) {
+	dir := tempDir(t)
+	writeServices(t, dir, map[string]string{
+		"loop": `(service loop (on (tick) "Ticks again in a moment." (send-after 1ms :tick)))`,
+	})
+	start(t, dir)
+	c := dial(t, dir)
+	if r, err := c.Message("send", "loop/tick", "[]", ""); err != nil || r.Value != "(ok :done)" {
+		t.Fatalf("loop/tick: %+v %v", r, err)
+	}
+	var ticks []rpc.Entry
+	for deadline := time.Now().Add(2 * time.Second); len(ticks) < 3 && time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		es, err := c.History()
+		if err != nil {
+			t.Fatal(err)
+		}
+		ticks = nil
+		for _, e := range es {
+			if e.To == "loop/tick" {
+				ticks = append(ticks, e)
+			}
+		}
+	}
+	if len(ticks) < 3 {
+		t.Fatalf("%d ticks, want 3", len(ticks))
+	}
+	for _, e := range ticks {
+		if e.Cause != 0 || e.Origin != "user" {
+			t.Errorf("tick %d: cause %d, origin %q; want no cause, and the user's origin", e.ID, e.Cause, e.Origin)
+		}
+	}
+}

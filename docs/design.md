@@ -257,9 +257,12 @@ message; `wait` gives the result once you accept it.
 Every message is an entry: when, kind, origin, sender, target, arguments,
 reply, time taken, and for an agent's write how the gate treated it. Notes
 record whiff's own events: a service that failed to load or faulted, a mode
-set or run out. History is in memory, the last 1000 entries; `whiff history
--f` and sniff follow it live, with nothing missed between the snapshot and
-the stream.
+set or run out. An entry names the one that led to it, which `whiff history
+-c` and sniff show as chains; a timer's message begins a chain of its own,
+keeping its origin, or a service that schedules itself would be one endless
+chain. History is in memory, the last 1000 entries; `whiff history -f` and
+sniff follow it live, with nothing missed between the snapshot and the
+stream.
 
 ## Limits, for now
 
