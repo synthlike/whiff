@@ -112,6 +112,7 @@ type state struct {
 	history []entry  // oldest first
 	asked   []*asked // every service's inbox, oldest first
 	timers  []*timer // what load read, until resume takes it up
+	lost    []*job   // what load read, until resume takes it up
 	jobs    map[int64]*job
 	nextID  int64                       // the last id given to a message answered later, or a job
 	lastMsg int64                       // the last id given to a message or an eval in history: see msgID

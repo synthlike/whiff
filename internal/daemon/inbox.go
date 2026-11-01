@@ -196,21 +196,21 @@ func (d *daemon) handOn(by string, id int64, m message) error {
 	var stored error
 	d.do(func(st *state) {
 		var t *ticket
-		var a *asked
+		var keep func() error
 		if j := st.jobs[id]; j != nil {
 			t = &j.ticket
+			keep = func() error { return d.keepJob(j) }
 		} else if i := slices.IndexFunc(st.asked, func(a *asked) bool { return a.id == id }); i >= 0 {
-			a = st.asked[i]
+			a := st.asked[i]
 			t = &a.ticket
+			keep = func() error { return st.keep(a) }
 		}
 		if t != nil && t.from == by {
 			found = true
 			was := *t
 			t.msg, t.from, t.dir, t.user, t.session = m.id, m.from, m.dir, t.user && m.user, sameSession(t.session, m.session)
-			if a != nil {
-				if stored = st.keep(a); stored != nil {
-					*t = was
-				}
+			if stored = keep(); stored != nil {
+				*t = was
 			}
 			return
 		}

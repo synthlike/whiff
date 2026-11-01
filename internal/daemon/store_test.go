@@ -1,11 +1,15 @@
 package daemon
 
 import (
+	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -349,7 +353,7 @@ func makeDue(t *testing.T, dir, fn string) {
 					return err
 				}
 				if tm.m.fn == fn {
-					due[string(k)] = tm
+					due[string(tm.key)] = tm
 				}
 				return nil
 			})
@@ -484,5 +488,184 @@ func TestStoredTimer(t *testing.T) {
 		if got, err := storedTimer(nil, p); err == nil {
 			t.Errorf("storedTimer(%s) = %+v, want an error", p, got)
 		}
+	}
+}
+
+// A job doesn't outlive the daemon, but its sender hears how it ended, as
+// far as whiff knows, and it isn't run again.
+func TestJobsInterrupted(t *testing.T) {
+	dir := tempDir(t)
+	got := filepath.Join(dir, "got")
+	writeServices(t, dir, map[string]string{
+		"waiter": `(service waiter
+  (on (begin) "Starts a job." (call :jobs/run ["sleep" "30"]))
+  (on (quick) "Starts a job that ends at once." (call :jobs/run ["true"] {:as :text}))
+  (on (pass id) :read "Hands a job on." (hand-on (err {:kind :pending :id id})))
+  (on (whiff/done id r) "Notes the answer." (file/append "` + got + `" (string/concat (int/to-string id) " " (value/to-string r) "\n"))))`,
+	})
+	done := start(t, dir)
+	c := dial(t, dir)
+	agent := dial(t, dir)
+	agent.Agent = true
+	answers := func() string {
+		b, _ := os.ReadFile(got)
+		return string(b)
+	}
+	begin := func() string {
+		t.Helper()
+		r, err := c.Message("call", "waiter/begin", "[]", dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return pendingOf(t, r.Value)
+	}
+	// One that ended is told once, and is gone from the store.
+	r, err := c.Message("call", "waiter/quick", "[]", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quick := pendingOf(t, r.Value) + ` (ok "")` + "\n"
+	eventually(t, "the job that ended", answers, quick)
+	mine, passed := begin(), begin()
+	if r, err := agent.Message("call", "waiter/pass", "["+passed+"]", dir); err != nil || !strings.Contains(r.Value, ":pending") {
+		t.Fatalf("hand on: %+v %v", r, err)
+	}
+	stopDaemon(t, c, done)
+
+	stored := func(db *bbolt.DB, id string) (j *job) {
+		t.Helper()
+		n, _ := strconv.ParseInt(id, 10, 64)
+		err := db.View(func(tx *bbolt.Tx) (err error) {
+			j, err = storedJob(n, string(tx.Bucket(jobsBucket).Get(idKey(n))))
+			return err
+		})
+		if err != nil {
+			t.Fatalf("job %s: %v", id, err)
+		}
+		return j
+	}
+	withDB(t, dir, func(db *bbolt.DB) {
+		j := stored(db, mine)
+		if !strings.Contains(puff.Print(j.result), ":outcome :stopped") || !j.user {
+			t.Errorf("job %s is stored as %+v", mine, j)
+		}
+		if !errors.Is(syscall.Kill(-j.pid, 0), syscall.ESRCH) {
+			t.Errorf("job %s still runs", mine)
+		}
+		// The hand-on took your chain's origin down to the agent's.
+		if j := stored(db, passed); j.user || j.from != "" {
+			t.Errorf("job %s is stored as %+v, want the agent client's", passed, j)
+		}
+	})
+
+	done = start(t, dir)
+	c = dial(t, dir)
+	first := quick + mine + ` (err {:kind :interrupted :message "job ` + mine + ` was killed when whiff stopped: what it had done stays done" :outcome :stopped})` + "\n"
+	eventually(t, "the job whiff killed", answers, first)
+	if r, err := c.Message("wait", "", "["+passed+"]", dir); err != nil || !strings.Contains(r.Value, ":interrupted") {
+		t.Errorf("wait for a job handed on: %+v %v", r, err)
+	}
+
+	// What a crash leaves: no answer, and a process that may still run.
+	stopDaemon(t, c, done)
+	running := exec.Command("sleep", "30")
+	running.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := running.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		syscall.Kill(-running.Process.Pid, syscall.SIGKILL)
+		running.Wait()
+	})
+	gone := exec.Command("true")
+	if err := gone.Run(); err != nil {
+		t.Fatal(err)
+	}
+	cmd := puff.NewVector(puff.String("x"))
+	sender := ticket{from: "waiter", user: true}
+	jobs := []*job{
+		{ticket: sender, cmd: cmd, result: puff.Ok(puff.String("it finished"))},
+		{ticket: sender, cmd: cmd, pid: gone.Process.Pid},
+		{ticket: sender, cmd: cmd, pid: running.Process.Pid},
+		{ticket: sender, cmd: cmd},
+	}
+	withDB(t, dir, func(db *bbolt.DB) {
+		err := db.Update(func(tx *bbolt.Tx) error {
+			b := tx.Bucket(jobsBucket)
+			for i, j := range jobs {
+				j.id = int64(900 + i)
+				if err := b.Put(idKey(j.id), []byte(puff.Print(j.stored()))); err != nil {
+					return err
+				}
+			}
+			return b.Put(idKey(990), []byte("(not read"))
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+	done = start(t, dir)
+	c = dial(t, dir)
+	unknown := func(id int) string {
+		return fmt.Sprintf(`%d (err {:kind :interrupted :message "job %d was running when whiff died: how far it got is unknown" :outcome :unknown})`, id, id) + "\n"
+	}
+	want := first + `900 (ok "it finished")` + "\n" + unknown(901) +
+		fmt.Sprintf(`902 (err {:kind :interrupted :message "job 902 was running when whiff died: how far it got is unknown, and process group %d may still be running" :outcome :unknown :pid %d})`,
+			running.Process.Pid, running.Process.Pid) + "\n" + unknown(903)
+	eventually(t, "the jobs a crash left", answers, want)
+	historyHas(t, c, "job 990 can't be read, and stays stored")
+	if err := syscall.Kill(-running.Process.Pid, 0); err != nil {
+		t.Errorf("whiff killed what may not be its own: %v", err)
+	}
+	// Ids go on after the last job's, read or not.
+	if id := begin(); id != "991" {
+		t.Errorf("the next id is %s, want 991", id)
+	}
+
+	// Each sender hears once.
+	stopDaemon(t, c, done)
+	withDB(t, dir, func(db *bbolt.DB) {
+		for _, j := range jobs {
+			db.View(func(tx *bbolt.Tx) error {
+				if p := tx.Bucket(jobsBucket).Get(idKey(j.id)); p != nil {
+					t.Errorf("job %d, answered, is still stored: %s", j.id, p)
+				}
+				return nil
+			})
+		}
+	})
+	start(t, dir)
+	c = dial(t, dir)
+	eventually(t, "job 991, killed by the stop", func() string {
+		return strconv.FormatBool(strings.Contains(answers(), "991 (err {:kind :interrupted"))
+	}, "true")
+	if a := answers(); strings.Count(a, "\n") != 7 {
+		t.Errorf("answers:\n%s", a)
+	}
+}
+
+func TestStoredJob(t *testing.T) {
+	j := &job{ticket: ticket{id: 7, from: "plan", dir: "/x", user: true, session: "agent/2"}, cmd: puff.NewVector(puff.String("go")), pid: 42, result: puff.Ok(puff.Int(1))}
+	got, err := storedJob(7, puff.Print(j.stored()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.id != 7 || got.from != "plan" || got.dir != "/x" || !got.user || got.session != "agent/2" || got.pid != 42 ||
+		puff.Print(got.cmd) != `["go"]` || puff.Print(got.result) != "(ok 1)" {
+		t.Errorf("storedJob = %+v", got)
+	}
+	// Only a stored :user is yours; no :result is no answer.
+	got, err = storedJob(7, `{:cmd ["go"]}`)
+	if err != nil || got.user || got.result != nil {
+		t.Errorf("storedJob = %+v %v", got, err)
+	}
+	for _, p := range []string{`[1]`, `{:cwd "/x"}`, `(not read`} {
+		if got, err := storedJob(7, p); err == nil {
+			t.Errorf("storedJob(%s) = %+v, want an error", p, got)
+		}
+	}
+	// A record with no pid doesn't signal whiff's own group.
+	if r := puff.Print(lost(&job{ticket: ticket{id: 1}})); strings.Contains(r, ":pid") {
+		t.Errorf("lost = %s", r)
 	}
 }

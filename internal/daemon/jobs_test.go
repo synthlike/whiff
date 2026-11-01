@@ -94,8 +94,10 @@ func TestJobs(t *testing.T) {
 		t.Errorf("handing on twice = %s %v", resp.Value, err)
 	}
 	inHistory(` (ok {:exit 0 :stderr "" :stdout "late\n"})`)
+	// hander's copy is history only once hander has handled it.
+	inHistory(`:jobs -> :hander/whiff/done `)
 	h, _ := historyOf(c)
-	if !strings.Contains(h, `  done  user   :jobs -> client `) || !strings.Contains(h, `:jobs -> :hander/whiff/done `) {
+	if !strings.Contains(h, `  done  user   :jobs -> client `) {
 		t.Errorf("want the late answer to go to both the client and hander:\n%s", h)
 	}
 	id = run(`(call :hander/pass 5)`)

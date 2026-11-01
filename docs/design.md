@@ -266,10 +266,16 @@ stream.
 
 ## Limits, for now
 
-- History is in memory: a restart loses it, and a job running when whiff
-  stops never answers. Service state, every inbox, `:review`'s queue too, and
-  timers are stored. (v0.6 stores the rest.) What a `whiff try` address holds
-  isn't.
+- History is in memory: a restart loses it. Service state, every inbox,
+  `:review`'s queue too, timers and running jobs are stored. (v0.6 stores the
+  rest.) What a `whiff try` address holds isn't.
+- A job isn't resumed, nor run again. When whiff stops it kills the job, and
+  at the next start its sender gets `(err {:kind :interrupted :outcome
+  :stopped})`, or the job's real answer if it finished just then. After a
+  crash whiff can't know how far a job got: `:outcome :unknown`, with its
+  `:pid` if that process group may still run. whiff leaves it, as a pid can
+  be reused, so you may have one to kill. Neither outcome undoes what the
+  job did.
 - A `send-after` survives a restart with its origin, so an agent's still meets
   the review gate, and one that came due while whiff was down fires once when
   the services are back. A service's timers to itself go with the version

@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -924,4 +925,87 @@ func TestServiceFileTests(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestPipelineRecovers stops whiff while services/pipeline.puff's dev runs:
+// the run fails with a report that offers Retry, and retrying finishes it.
+func TestPipelineRecovers(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	src, err := os.ReadFile(filepath.Join("..", "..", "services", "pipeline.puff"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := tempDir(t)
+	bin := filepath.Join(dir, "bin")
+	hang := filepath.Join(dir, "hang")
+	os.Mkdir(bin, 0o700)
+	// The dev hangs while hang is there; the reviewer approves.
+	claude := `#!/bin/sh
+if [ "$1 $2 $3 $4" = "-p --strict-mcp-config --tools " ]; then
+  cat > /dev/null
+  echo "looks good"; echo "VERDICT: approve"
+  exit 0
+fi
+cat > /dev/null
+if [ -f "` + hang + `" ]; then exec sleep 30; fi
+echo f > feature.txt
+echo "changed things"
+`
+	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(claude), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hang, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("HOME", dir)
+	t.Setenv("GIT_AUTHOR_NAME", "t")
+	t.Setenv("GIT_AUTHOR_EMAIL", "t@example.com")
+	t.Setenv("GIT_COMMITTER_NAME", "t")
+	t.Setenv("GIT_COMMITTER_EMAIL", "t@example.com")
+	writeServices(t, dir, map[string]string{"pipeline": string(src)})
+	done := start(t, dir)
+	c := dial(t, dir)
+
+	repo := filepath.Join(dir, "repo")
+	os.Mkdir(repo, 0o700)
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"commit", "-q", "--allow-empty", "-m", "first"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	call := func(fn, args string) string {
+		t.Helper()
+		resp, err := c.Message("call", "pipeline/"+fn, args, repo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.Value
+	}
+	if got := call("start", `["add a feature" ["true"]]`); got != "(ok 1)" {
+		t.Fatalf("start = %s", got)
+	}
+	eventually(t, "the dev running", func() string { return strconv.FormatBool(strings.Contains(call("runs", "[]"), ":step :dev")) }, "true")
+	stopDaemon(t, c, done)
+
+	if err := os.Remove(hang); err != nil {
+		t.Fatal(err)
+	}
+	start(t, dir)
+	c = dial(t, dir)
+	eventually(t, "the run failing", func() string { return strconv.FormatBool(strings.Contains(call("runs", "[]"), ":step :failed")) }, "true")
+	inbox, err := c.Message("call", "me/inbox", "[]", repo)
+	if err != nil || !strings.Contains(inbox.Value, "pipeline 1, add a feature: failed.") || !strings.Contains(inbox.Value, ":interrupted") ||
+		!strings.Contains(inbox.Value, "[:pipeline/retry 1]") || !strings.Contains(inbox.Value, "[:pipeline/discard 1]") {
+		t.Fatalf("your inbox = %+v %v", inbox, err)
+	}
+
+	if got := call("retry", `[1 "go on"]`); !strings.HasPrefix(got, "(ok") {
+		t.Fatalf("retry = %s", got)
+	}
+	eventually(t, "the run finishing", func() string { return strconv.FormatBool(strings.Contains(call("runs", "[]"), ":step :ready")) }, "true")
 }

@@ -41,6 +41,10 @@ var inboxBucket = []byte("inbox")
 // it is due.
 var timersBucket = []byte("timers")
 
+// jobsBucket holds each job until its sender has its answer, printed, by id.
+// One found at start was running when whiff went: see resume.
+var jobsBucket = []byte("jobs")
+
 // openStore opens whiff.db, next to the services directory (so
 // ~/.whiff/whiff.db), with its buckets. Only the daemon opens it.
 func openStore(services string) (*bbolt.DB, error) {
@@ -53,7 +57,7 @@ func openStore(services string) (*bbolt.DB, error) {
 		return nil, err
 	}
 	err = db.Update(func(tx *bbolt.Tx) error {
-		for _, b := range [][]byte{stateBucket, metaBucket, inboxBucket, timersBucket} {
+		for _, b := range [][]byte{stateBucket, metaBucket, inboxBucket, timersBucket, jobsBucket} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err
 			}
@@ -197,8 +201,9 @@ func (st *state) forget(a *asked) {
 }
 
 // load reads what was stored into a new state: the inboxes, the timers, and
-// the last id, which is at least the last id in the inboxes. What it can't
-// read stays stored, and noted, rather than being lost.
+// the jobs whiff lost, and the last id, which is at least the last id in the
+// inboxes and jobs. What it can't read stays stored, and noted, rather than
+// being lost.
 func (st *state) load() {
 	err := st.db.View(func(tx *bbolt.Tx) error {
 		err := tx.Bucket(inboxBucket).ForEach(func(k, v []byte) error {
@@ -216,12 +221,27 @@ func (st *state) load() {
 			return err
 		}
 		err = tx.Bucket(timersBucket).ForEach(func(k, v []byte) error {
+			// k lasts only as long as the transaction.
 			t, err := storedTimer(slices.Clone(k), string(v))
 			if err != nil {
 				st.note(fmt.Sprintf("a timer can't be read, and stays stored: %v", err))
 				return nil
 			}
 			st.timers = append(st.timers, t)
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		err = tx.Bucket(jobsBucket).ForEach(func(k, v []byte) error {
+			id := int64(binary.BigEndian.Uint64(k))
+			st.nextID = max(st.nextID, id)
+			j, err := storedJob(id, string(v))
+			if err != nil {
+				st.note(fmt.Sprintf("job %d can't be read, and stays stored: %v", id, err))
+				return nil
+			}
+			st.lost = append(st.lost, j)
 			return nil
 		})
 		if err != nil {
@@ -242,9 +262,20 @@ func (st *state) load() {
 // for an address that isn't loaded stays, for a client to claim it or a file
 // to be fixed; :jobs, :me and :review are always there. A service with a
 // :start drops the timers it set itself, as a reload does: its :start has
-// just set its own, so its loops don't double.
+// just set its own, so its loops don't double. The sender of each job that
+// was running hears how it ended, as far as whiff knows; no job runs again.
 func (d *daemon) resume() {
 	d.do(func(st *state) {
+		for _, j := range st.lost {
+			r := j.result
+			if r == nil {
+				r = lost(j)
+			}
+			d.answer(st, j.ticket, "jobs", r)
+			d.forgetJob(j)
+			st.publish(jobDone(j, r))
+		}
+		st.lost = nil
 		away := map[string]int{}
 		for _, a := range st.asked {
 			if a.expires > 0 {
@@ -288,6 +319,69 @@ type timer struct {
 
 // own says whether t is a service's timer to itself.
 func (t *timer) own() bool { return t.addr == t.m.from }
+
+// keepJob stores j as it is now.
+func (d *daemon) keepJob(j *job) error {
+	return d.db.Update(func(tx *bbolt.Tx) error {
+		return tx.Bucket(jobsBucket).Put(idKey(j.id), []byte(puff.Print(j.stored())))
+	})
+}
+
+// forgetJob deletes j, whose sender has its answer. One that can't be
+// deleted is reported as interrupted after a restart, so it is noted; a
+// sender that isn't waiting for its id ignores that.
+func (d *daemon) forgetJob(j *job) {
+	err := d.db.Update(func(tx *bbolt.Tx) error { return tx.Bucket(jobsBucket).Delete(idKey(j.id)) })
+	if err != nil {
+		fmt.Fprintf(d.log, "whiff: job %d stays stored: %v\n", j.id, err)
+	}
+}
+
+// stored is j as it is stored: as :jobs/list shows it, with what a restart
+// needs too. As for a message, its cause isn't there.
+func (j *job) stored() puff.Value {
+	v := j.value().(puff.Map)
+	with := func(key string, val puff.Value) {
+		v, _ = v.With(puff.Keyword(key), val)
+	}
+	with("pid", puff.Int(j.pid))
+	with("origin", origin(j.user))
+	if j.session != "" {
+		with("session", puff.Keyword(j.session))
+	}
+	if j.result != nil {
+		with("result", j.result)
+	}
+	return v
+}
+
+// storedJob is the job id from p, as stored printed it. Only a stored :user
+// is the user's.
+func storedJob(id int64, p string) (*job, error) {
+	v, err := puff.ReadValue(p)
+	if err != nil {
+		return nil, err
+	}
+	m, ok := v.(puff.Map)
+	if !ok {
+		return nil, fmt.Errorf("want a map, got %s", p)
+	}
+	get := func(k string) puff.Value {
+		v, _ := m.Get(puff.Keyword(k))
+		return v
+	}
+	cmd, ok := get("cmd").(puff.Vector)
+	if !ok {
+		return nil, fmt.Errorf("want :cmd as a vector, got %s", p)
+	}
+	from, _ := get("from").(puff.Keyword)
+	org, _ := get("origin").(puff.Keyword)
+	session, _ := get("session").(puff.Keyword)
+	dir, _ := get("cwd").(puff.String)
+	pid, _ := get("pid").(puff.Int)
+	return &job{ticket: ticket{id: id, from: string(from), dir: string(dir), user: org == origin(true), session: string(session)},
+		cmd: cmd, pid: int(pid), result: get("result")}, nil
+}
 
 // durable says whether t survives a restart: not one to or from whiff try's
 // scratch addresses, which go when it does.
