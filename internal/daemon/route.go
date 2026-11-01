@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"slices"
 	"strings"
 	"time"
+
+	"go.etcd.io/bbolt"
 
 	"github.com/synthlike/whiff/internal/puff"
 	"github.com/synthlike/whiff/internal/rpc"
@@ -103,6 +106,8 @@ type caller struct {
 
 // state is what the route goroutine owns.
 type state struct {
+	db      *bbolt.DB // whiff.db: see store.go
+	log     io.Writer
 	addrs   map[string]*service
 	history []entry  // oldest first
 	asked   []*asked // every service's inbox, oldest first
@@ -126,8 +131,9 @@ type watcher struct {
 
 // route owns the state until the daemon stops; others reach it through do.
 func (d *daemon) route() {
-	st := &state{addrs: map[string]*service{}, jobs: map[int64]*job{}, waiters: map[int64][]chan puff.Value{},
+	st := &state{db: d.db, log: d.log, addrs: map[string]*service{}, jobs: map[int64]*job{}, waiters: map[int64][]chan puff.Value{},
 		subs: map[*watcher]bool{}, tracers: map[*tracer]bool{}, modes: map[string]*mode{}}
+	st.load()
 	for {
 		select {
 		case op := <-d.ops:

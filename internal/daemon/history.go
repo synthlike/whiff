@@ -68,6 +68,12 @@ func (d *daemon) note(format string, args ...any) {
 	d.do(func(st *state) { st.record(entry{at: time.Now(), note: msg}) })
 }
 
+// note is d.note on the route goroutine, which can't wait for itself.
+func (st *state) note(msg string) {
+	fmt.Fprintf(st.log, "whiff: %s\n", msg)
+	st.record(entry{at: time.Now(), note: msg})
+}
+
 // entries is history so far, oldest first.
 func (st *state) entries() []rpc.Entry {
 	es := make([]rpc.Entry, len(st.history))

@@ -90,8 +90,13 @@ func (d *daemon) ask(st *state, s *service, m message) puff.Value {
 			return puff.Errorf("bad-call", ":%s: %v", m.to(s.name), err)
 		}
 	}
-	st.nextID++
-	a := &asked{ticket: ticket{id: st.nextID, msg: m.id, from: m.from, dir: m.dir, user: m.user, session: m.session}, addr: s.name, fn: m.fn, args: args, at: time.Now()}
+	a := &asked{ticket: ticket{id: st.newID(), msg: m.id, from: m.from, dir: m.dir, user: m.user, session: m.session}, addr: s.name, fn: m.fn, args: args, at: time.Now()}
+	// :me's inbox survives a restart, so its sender hears only once it will.
+	if s.name == "me" {
+		if err := st.keep(a); err != nil {
+			return puff.Errorf("store", ":%s wasn't stored: %v", m.to(s.name), err)
+		}
+	}
 	st.asked = append(st.asked, a)
 	if s.name == "me" {
 		st.meChanged(m.user, m.id)
@@ -133,6 +138,7 @@ func (st *state) take(addr string, id int64) *asked {
 	a := st.asked[i]
 	st.asked = slices.Delete(st.asked, i, i+1)
 	if a.addr == "me" {
+		st.forget(a)
 		st.meChanged(a.user, a.msg)
 	}
 	return a
@@ -177,19 +183,29 @@ func (d *daemon) answer(st *state, t ticket, by string, result puff.Value) {
 // (hand-on r) does: so a handler can hand its caller a job it started, as
 // if the caller had started it. The answer stays :user's only if both
 // chains are. An answer that came before the hand-on goes to both. The
-// error is for an id that isn't by's.
+// error is for an id that isn't by's, or a change that can't be stored: a
+// stored origin must not outlast a narrower one.
 func (d *daemon) handOn(by string, id int64, m message) error {
 	found := false
+	var stored error
 	d.do(func(st *state) {
 		var t *ticket
+		var a *asked
 		if j := st.jobs[id]; j != nil {
 			t = &j.ticket
 		} else if i := slices.IndexFunc(st.asked, func(a *asked) bool { return a.id == id }); i >= 0 {
-			t = &st.asked[i].ticket
+			a = st.asked[i]
+			t = &a.ticket
 		}
 		if t != nil && t.from == by {
 			found = true
+			was := *t
 			t.msg, t.from, t.dir, t.user, t.session = m.id, m.from, m.dir, t.user && m.user, sameSession(t.session, m.session)
+			if a != nil && a.addr == "me" {
+				if stored = st.keep(a); stored != nil {
+					*t = was
+				}
+			}
 			return
 		}
 		for i, a := range slices.Backward(st.answers) {
@@ -205,7 +221,7 @@ func (d *daemon) handOn(by string, id int64, m message) error {
 	if !found {
 		return fmt.Errorf("no job or ask %d of :%s's to hand on", id, by)
 	}
-	return nil
+	return stored
 }
 
 // sameSession is a and b's agent session if they share it, else "".

@@ -3,9 +3,12 @@ package daemon
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"go.etcd.io/bbolt"
 
 	"github.com/synthlike/whiff/internal/puff"
 	"github.com/synthlike/whiff/internal/rpc"
@@ -252,6 +255,172 @@ func TestMeActedOn(t *testing.T) {
 		call(tt[0], tt[1])
 		if got := left(); got != tt[2] {
 			t.Errorf("after %s %s, your inbox has %q, want %q", tt[0], tt[1], got, tt[2])
+		}
+	}
+}
+
+// What waits for you outlives the daemon, as who sent it: an agent's chain
+// stays an agent's, and ids aren't given out twice.
+func TestMeInboxSurvivesRestart(t *testing.T) {
+	dir := tempDir(t)
+	got := filepath.Join(dir, "got")
+	writeServices(t, dir, map[string]string{
+		"planner": `(service planner
+  (on (ask) "Asks you whether to go ahead." (call :me/ask "go ahead?" {:choices ["yes" "no"]}))
+  (on (report) "Reports, offering a merge." (call :me/tell "built" {:actions [{:label "Merge" :action [:planner/merge 3]}]}))
+  (on (merge n) "Merges." (ok n))
+  (on (pass id) "Hands on an ask." (hand-on (err {:kind :pending :id id})))
+  (on (whiff/done id r) "Writes your answer." (file/write "` + got + `" (value/to-string r))))`,
+	})
+	done := start(t, dir)
+	c := dial(t, dir)
+	agent := dial(t, dir)
+	agent.Agent = true
+	id := func(cl *rpc.Client, src string) string {
+		t.Helper()
+		resp, err := cl.Eval(`(match `+src+` [(err {:kind :pending :id id}) id])`, dir)
+		if err != nil || resp.Error != "" {
+			t.Fatalf("%s: %v %s", src, err, resp.Error)
+		}
+		return resp.Value
+	}
+	restart := func(change func(db *bbolt.DB)) {
+		t.Helper()
+		if err := c.Stop(); err != nil {
+			t.Fatal(err)
+		}
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+		db, err := bbolt.Open(filepath.Join(dir, "whiff.db"), 0o600, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		change(db)
+		db.Close()
+		done = start(t, dir)
+		c = dial(t, dir)
+	}
+	stored := func(db *bbolt.DB, id string) string {
+		t.Helper()
+		n, _ := strconv.ParseInt(id, 10, 64)
+		var p string
+		db.View(func(tx *bbolt.Tx) error {
+			p = string(tx.Bucket(meBucket).Get(idKey(n)))
+			return nil
+		})
+		return p
+	}
+
+	asked := id(c, `(call :planner/ask)`)
+	told := id(agent, `(call :planner/report)`)
+	passed := id(c, `(call :planner/ask)`)
+	if r, err := agent.Eval(`(call :planner/pass `+passed+`)`, dir); err != nil || !strings.Contains(r.Value, ":pending") {
+		t.Fatalf("hand on: %+v %v", r, err)
+	}
+	inbox, err := c.Inbox("me")
+	if err != nil || strings.Count(inbox, "\n") != 3 {
+		t.Fatalf("inbox = %q %v", inbox, err)
+	}
+
+	restart(func(db *bbolt.DB) {
+		// The hand-on took your chain's origin down to the agent's.
+		for id, origin := range map[string]string{asked: ":origin :user", told: ":origin :agent", passed: ":origin :agent"} {
+			if p := stored(db, id); !strings.Contains(p, origin) {
+				t.Errorf("message %s is stored as %s, want %s", id, p, origin)
+			}
+		}
+	})
+	if text, err := c.Inbox("me"); err != nil || text != inbox {
+		t.Errorf("inbox after a restart = %q %v, want %q", text, err, inbox)
+	}
+	// An agent's report still shows the message its action sends, not its label.
+	r, err := c.Message("call", "me/inbox", "[]", "")
+	if err != nil || !strings.Contains(r.Value, `:label "[:planner/merge 3]"`) || strings.Contains(r.Value, `"Merge"`) {
+		t.Errorf("me/inbox = %+v %v", r, err)
+	}
+
+	// An answer reaches the sender, as a chain of its own.
+	if _, err := c.Message("reply", "", "["+asked+` (ok "yes")]`, ""); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "your answer", func() string { b, _ := os.ReadFile(got); return string(b) }, `(ok "yes")`)
+	historyHas(t, c, `  done  user   client -> :planner/whiff/done `+asked+` (ok "yes")`)
+	if text, _ := c.Inbox("me"); strings.Contains(text, asked+"  ") {
+		t.Errorf("answered, it is still in the inbox: %q", text)
+	}
+	for _, id := range []string{told, passed} {
+		if _, err := c.Message("reply", "", "["+id+" (ok :done)]", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// With the inbox empty, the next id still comes after the last, and an
+	// answered message doesn't come back.
+	last, _ := strconv.Atoi(passed)
+	restart(func(db *bbolt.DB) {
+		if p := stored(db, asked); p != "" {
+			t.Errorf("answered, it is still stored: %s", p)
+		}
+	})
+	if text, _ := c.Inbox("me"); text != "" {
+		t.Errorf("inbox = %q, want it empty", text)
+	}
+	waits := id(c, `(call :planner/ask)`)
+	if n, _ := strconv.Atoi(waits); n != last+1 {
+		t.Errorf("the next id is %d, want %d", n, last+1)
+	}
+
+	// One that can't be read is noted and kept, and what comes after it
+	// still loads.
+	restart(func(db *bbolt.DB) {
+		db.Update(func(tx *bbolt.Tx) error {
+			return tx.Bucket(meBucket).Put(idKey(0), []byte("(not read"))
+		})
+	})
+	historyHas(t, c, "message 0 in :me's inbox can't be read, and stays stored")
+	if text, _ := c.Inbox("me"); !strings.HasPrefix(text, waits+"  :planner -> :me/ask") {
+		t.Errorf("inbox = %q, want %s in it", text, waits)
+	}
+	restart(func(db *bbolt.DB) {
+		if p := stored(db, "0"); p != "(not read" {
+			t.Errorf("the unreadable message is stored as %q", p)
+		}
+	})
+}
+
+func TestStoredMe(t *testing.T) {
+	const fine = `{:id 1 :fn :ask :args ["q"] :origin :user :cwd "/x" :at 2026-10-27T10:00:00Z :from :plan}`
+	a, err := storedMe(1, fine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.id != 1 || a.addr != "me" || a.fn != "ask" || a.from != "plan" || a.dir != "/x" || !a.user || a.at.Year() != 2026 {
+		t.Errorf("storedMe = %+v", a)
+	}
+	if a.msg != 0 || a.session != "" {
+		t.Errorf("message ids and sessions begin again with a daemon: %+v", a)
+	}
+	// Only a stored :user is yours.
+	for _, p := range []string{
+		`{:id 1 :fn :ask :args ["q"] :cwd "/x" :at 2026-10-27T10:00:00Z}`,
+		`{:id 1 :fn :ask :args ["q"] :origin "user" :cwd "/x" :at 2026-10-27T10:00:00Z}`,
+	} {
+		if a, err := storedMe(1, p); err != nil || a.user {
+			t.Errorf("storedMe(%s) = %+v %v, want an agent's", p, a, err)
+		}
+	}
+	// meItem counts on what it reads being what :me/ask and :me/tell check.
+	for _, p := range []string{
+		`[1]`,
+		`{:fn :answer :args ["q"]}`,
+		`{:fn :ask :args []}`,
+		`{:fn :ask :args ["q" 1 2]}`,
+		`{:fn :ask :args ["q" 1]}`,
+		`{:fn :tell :args ["q" {:actions 1}]}`,
+	} {
+		if a, err := storedMe(1, p); err == nil {
+			t.Errorf("storedMe(%s) = %+v, want an error", p, a)
 		}
 	}
 }

@@ -114,8 +114,7 @@ func (st *state) queue(a *asked, what string) puff.Value {
 	if len(st.inbox("review")) >= inboxSize {
 		return puff.Errorf("full", ":review's inbox is full")
 	}
-	st.nextID++
-	a.id, a.addr, a.at = st.nextID, "review", time.Now()
+	a.id, a.addr, a.at = st.newID(), "review", time.Now()
 	st.asked = append(st.asked, a)
 	st.publish(message{cause: a.msg, from: "review", topic: "review/pending", args: puff.Print(puff.NewVector(a.value())), user: a.user})
 	return pending(a.id, "%s waits for your review", what)
