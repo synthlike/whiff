@@ -111,6 +111,7 @@ type state struct {
 	addrs   map[string]*service
 	history []entry  // oldest first
 	asked   []*asked // every service's inbox, oldest first
+	timers  []*timer // what load read, until resume takes it up
 	jobs    map[int64]*job
 	nextID  int64                       // the last id given to a message answered later, or a job
 	lastMsg int64                       // the last id given to a message or an eval in history: see msgID
@@ -439,22 +440,18 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 				// a service that schedules itself would be one endless chain;
 				// it keeps its origin. A service's timers to itself go with
 				// the version that set them, so a reload, whose :start sets
-				// its own, doesn't double a loop. A delivery that fails is in
-				// history.
+				// its own, doesn't double a loop. It is set only once it is
+				// stored.
 				m.cause = 0
-				own, stop := addr == cur.addr, cur.stop
-				time.AfterFunc(time.Duration(after), func() {
-					select {
-					case <-stop:
-						if own {
-							return
-						}
-					default:
-					}
-					if d.ctx.Err() == nil {
-						d.deliver(addr, m)
-					}
-				})
+				t := &timer{due: time.Now().Add(time.Duration(after)), addr: addr, m: m}
+				if err := d.keepTimer(t); err != nil {
+					return puff.Errorf("store", "the timer for :%s wasn't stored: %v", m.to(addr), err), nil
+				}
+				var stop <-chan struct{}
+				if t.own() {
+					stop = cur.stop
+				}
+				d.arm(t, stop)
 				return puff.Done, nil
 			}},
 	}, viewBuiltins()...)

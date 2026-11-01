@@ -43,6 +43,7 @@ type daemon struct {
 	base        *puff.Env    // only looked up in, for builtins' marks
 	tries       atomic.Int64 // the last whiff try's number, for its scratch address
 	agents      atomic.Int64 // the last agent's number, for its :agent/<n>
+	timers      atomic.Int64 // the last timer's number: see keepTimer
 	wg          sync.WaitGroup
 }
 
@@ -97,6 +98,7 @@ func Run(ctx context.Context, dir, services string) error {
 	d := &daemon{ctx: ctx, ops: make(chan func(*state)), restarts: make(chan *service, 16),
 		resets: make(chan reset), db: db, log: os.Stderr, callTimeout: defaultCallTimeout}
 	d.base = d.newEnv(io.Discard, &caller{})
+	d.timers.Store(time.Now().UnixNano())
 	err = db.View(func(tx *bbolt.Tx) error {
 		n, err := storedInt(tx, agentsKey)
 		d.agents.Store(n)

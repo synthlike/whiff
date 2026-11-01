@@ -3,6 +3,7 @@ package daemon
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -303,5 +304,185 @@ func TestTrialsAreNotStored(t *testing.T) {
 	}
 	if !(&asked{addr: "box"}).durable() {
 		t.Error("a service's inbox isn't durable")
+	}
+}
+
+// storedTimers is the timers stored for addr, in the whiff.db in dir.
+func storedTimers(t *testing.T, dir, addr string) int {
+	t.Helper()
+	n := 0
+	withDB(t, dir, func(db *bbolt.DB) {
+		db.View(func(tx *bbolt.Tx) error {
+			return tx.Bucket(timersBucket).ForEach(func(k, v []byte) error {
+				if tm, err := storedTimer(k, string(v)); err == nil && tm.addr == addr {
+					n++
+				}
+				return nil
+			})
+		})
+	})
+	return n
+}
+
+// withDB gives f the whiff.db in dir, whose daemon has stopped.
+func withDB(t *testing.T, dir string, f func(db *bbolt.DB)) {
+	t.Helper()
+	db, err := bbolt.Open(filepath.Join(dir, "whiff.db"), 0o600, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	f(db)
+}
+
+// makeDue makes the timers stored for fn due now, as if they came due while
+// whiff was down.
+func makeDue(t *testing.T, dir, fn string) {
+	t.Helper()
+	withDB(t, dir, func(db *bbolt.DB) {
+		err := db.Update(func(tx *bbolt.Tx) error {
+			b := tx.Bucket(timersBucket)
+			due := map[string]*timer{}
+			err := b.ForEach(func(k, v []byte) error {
+				tm, err := storedTimer(slices.Clone(k), string(v))
+				if err != nil {
+					return err
+				}
+				if tm.m.fn == fn {
+					due[string(k)] = tm
+				}
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+			for k, tm := range due {
+				if err := b.Delete([]byte(k)); err != nil {
+					return err
+				}
+				tm.due = time.Now().Add(-time.Hour)
+				if err := b.Put(tm.key, []byte(puff.Print(tm.stored()))); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+// A send-after outlives the daemon: one that came due while whiff was down
+// fires once, and one that didn't waits. It keeps its origin, so an agent's
+// still meets the review gate. A :start sets its own, so a loop isn't doubled.
+func TestTimersSurviveRestart(t *testing.T) {
+	dir := tempDir(t)
+	file := filepath.Join(dir, "notes")
+	writeServices(t, dir, map[string]string{
+		"notes": `(service notes
+  (on (add text) "Appends text." (file/append "` + file + `" text)))`,
+		"relay": `(service relay
+  (on (later text) :read "Adds text, later." (send-after 1h :notes/add text)))`,
+		"remind": `(service remind
+  (on (me text) "Sets a reminder to itself." (send-after 1h :ring text))
+  (on (ring text) "Rings." (call :notes/add text)))`,
+		"ticker": `(service ticker :start (fn () (send-after 1h :tick))
+  (on (tick) "Ticks, and ticks again." (send-after 1h :tick)))`,
+	})
+	done := start(t, dir)
+	c := dial(t, dir)
+	agent := dial(t, dir)
+	agent.Agent = true
+	notes := func() string {
+		b, _ := os.ReadFile(file)
+		return string(b)
+	}
+	eval := func(cl *rpc.Client, src string) {
+		t.Helper()
+		if r, err := cl.Eval(src, dir); err != nil || r.Error != "" || r.Value != "(ok :done)" {
+			t.Fatalf("%s: %+v %v", src, r, err)
+		}
+	}
+	eval(c, `(call :remind/me "rung ")`)
+	eval(c, `(send-after 1h :notes/add "due ")`)
+	eval(agent, `(call :relay/later "an agent's ")`)
+	// A trial's timers go with it: nothing of this is left to come back.
+	if r, err := c.Try("trial.puff", `(service trial (on (go) "Sets a timer." (send-after 1h :go)))`, "go", "[]", dir); err != nil || r.Error != "" {
+		t.Fatalf("try: %+v %v", r, err)
+	}
+	stopDaemon(t, c, done)
+	if n := storedTimers(t, dir, "ticker"); n != 1 {
+		t.Fatalf("%d timers stored for :ticker, want 1", n)
+	}
+	withDB(t, dir, func(db *bbolt.DB) {
+		db.View(func(tx *bbolt.Tx) error {
+			if n := tx.Bucket(timersBucket).Stats().KeyN; n != 4 {
+				t.Errorf("%d timers stored, want 4, none of them the trial's", n)
+			}
+			return nil
+		})
+	})
+	makeDue(t, dir, "add")
+	makeDue(t, dir, "ring")
+
+	done = start(t, dir)
+	c = dial(t, dir)
+	historyHas(t, c, ":ticker's :start set its timers again, so whiff dropped 1 stored")
+	// Whichever comes first: the agent's isn't among them.
+	eventually(t, "the timers that came due", func() string {
+		n := notes()
+		if strings.Contains(n, "rung ") && strings.Contains(n, "due ") {
+			return "both"
+		}
+		return n
+	}, "both")
+	historyHas(t, c, `notes/add "an agent's "`)
+	if n := notes(); strings.Contains(n, "an agent's") {
+		t.Errorf("an agent's timer passed the review gate: %q", n)
+	}
+	stopDaemon(t, c, done)
+	if n := storedTimers(t, dir, "ticker"); n != 1 {
+		t.Errorf("%d timers stored for :ticker, want 1: the loop doubled", n)
+	}
+	if n := storedTimers(t, dir, "notes") + storedTimers(t, dir, "remind"); n != 0 {
+		t.Errorf("%d timers that fired are still stored", n)
+	}
+
+	// None of them fires again.
+	before := notes()
+	start(t, dir)
+	c = dial(t, dir)
+	time.Sleep(50 * time.Millisecond)
+	if n := notes(); n != before {
+		t.Errorf("notes = %q, want %q", n, before)
+	}
+}
+
+func TestStoredTimer(t *testing.T) {
+	tm := &timer{key: []byte("k"), due: time.Unix(100, 0), addr: "notes", m: message{from: "agent/1", fn: "add", args: `["x" 1]`, dir: "/x", reviewed: true, session: "agent/1"}}
+	got, err := storedTimer(tm.key, puff.Print(tm.stored()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.due.Equal(tm.due) || got.addr != "notes" || got.m.from != "agent/1" || got.m.fn != "add" || got.m.args != `["x" 1]` ||
+		got.m.dir != "/x" || got.m.user || !got.m.reviewed || got.m.session != "agent/1" {
+		t.Errorf("storedTimer = %+v", got)
+	}
+	// Only what was stored as yours, or as reviewed, is.
+	got, err = storedTimer(nil, `{:due 2026-10-27T10:00:00Z :to :notes :fn :add :args []}`)
+	if err != nil || got.m.user || got.m.reviewed {
+		t.Errorf("storedTimer = %+v %v, want an agent's, unreviewed", got, err)
+	}
+	for _, p := range []string{
+		`[1]`,
+		`{:to :notes :fn :add :args []}`,
+		`{:due 2026-10-27T10:00:00Z :fn :add :args []}`,
+		`{:due 2026-10-27T10:00:00Z :to :notes :args []}`,
+		`{:due 2026-10-27T10:00:00Z :to :notes :fn :add}`,
+	} {
+		if got, err := storedTimer(nil, p); err == nil {
+			t.Errorf("storedTimer(%s) = %+v, want an error", p, got)
+		}
 	}
 }

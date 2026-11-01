@@ -37,6 +37,10 @@ var (
 // it reads back oldest first.
 var inboxBucket = []byte("inbox")
 
+// timersBucket holds each send-after waiting for its time, printed, by when
+// it is due.
+var timersBucket = []byte("timers")
+
 // openStore opens whiff.db, next to the services directory (so
 // ~/.whiff/whiff.db), with its buckets. Only the daemon opens it.
 func openStore(services string) (*bbolt.DB, error) {
@@ -49,7 +53,7 @@ func openStore(services string) (*bbolt.DB, error) {
 		return nil, err
 	}
 	err = db.Update(func(tx *bbolt.Tx) error {
-		for _, b := range [][]byte{stateBucket, metaBucket, inboxBucket} {
+		for _, b := range [][]byte{stateBucket, metaBucket, inboxBucket, timersBucket} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err
 			}
@@ -192,9 +196,9 @@ func (st *state) forget(a *asked) {
 	}
 }
 
-// load reads what was stored into a new state: the inboxes and the last id,
-// which is at least the last id in them. A message it can't read stays
-// stored, and noted, rather than being lost.
+// load reads what was stored into a new state: the inboxes, the timers, and
+// the last id, which is at least the last id in the inboxes. What it can't
+// read stays stored, and noted, rather than being lost.
 func (st *state) load() {
 	err := st.db.View(func(tx *bbolt.Tx) error {
 		err := tx.Bucket(inboxBucket).ForEach(func(k, v []byte) error {
@@ -211,6 +215,18 @@ func (st *state) load() {
 		if err != nil {
 			return err
 		}
+		err = tx.Bucket(timersBucket).ForEach(func(k, v []byte) error {
+			t, err := storedTimer(k, string(v))
+			if err != nil {
+				st.note(fmt.Sprintf("a timer can't be read, and stays stored: %v", err))
+				return nil
+			}
+			st.timers = append(st.timers, t)
+			return nil
+		})
+		if err != nil {
+			return err
+		}
 		n, err := storedInt(tx, nextIDKey)
 		st.nextID = max(st.nextID, n)
 		return err
@@ -222,9 +238,11 @@ func (st *state) load() {
 
 // resume takes up what load read, once the services are loaded so that an
 // answer finds its sender: asks with :expires wait out what is left of it,
-// or end now if it passed while whiff was down. What waits for an address
-// that isn't loaded stays, for a client to claim it or a file to be fixed;
-// :jobs, :me and :review are always there.
+// or end now if it passed while whiff was down, and so do timers. What waits
+// for an address that isn't loaded stays, for a client to claim it or a file
+// to be fixed; :jobs, :me and :review are always there. A service with a
+// :start drops the timers it set itself, as a reload does: its :start has
+// just set its own, so its loops don't double.
 func (d *daemon) resume() {
 	d.do(func(st *state) {
 		away := map[string]int{}
@@ -239,7 +257,143 @@ func (d *daemon) resume() {
 		for _, addr := range slices.Sorted(maps.Keys(away)) {
 			st.note(fmt.Sprintf("%d waiting for :%s, which isn't loaded", away[addr], addr))
 		}
+		dropped := map[string]int{}
+		for _, t := range st.timers {
+			var stop <-chan struct{}
+			if s := st.addrs[t.addr]; t.own() && s != nil {
+				if s.starts {
+					dropped[t.addr]++
+					d.forgetTimer(t)
+					continue
+				}
+				stop = s.quit
+			}
+			d.arm(t, stop)
+		}
+		for _, addr := range slices.Sorted(maps.Keys(dropped)) {
+			st.note(fmt.Sprintf(":%s's :start set its timers again, so whiff dropped %d stored", addr, dropped[addr]))
+		}
+		st.timers = nil
 	})
+}
+
+// timer is a send-after waiting for its time: m, for addr, built when it was
+// set, so it keeps that origin.
+type timer struct {
+	key  []byte // where it is stored; nil for one that isn't
+	due  time.Time
+	addr string
+	m    message
+}
+
+// own says whether t is a service's timer to itself.
+func (t *timer) own() bool { return t.addr == t.m.from }
+
+// durable says whether t survives a restart: not one to or from whiff try's
+// scratch addresses, which go when it does.
+func (t *timer) durable() bool {
+	return !strings.HasPrefix(t.addr, "try/") && !strings.HasPrefix(t.m.from, "try/")
+}
+
+// keepTimer stores t. Its key is when it is due, then a number that makes it
+// its own: timers can share a due time.
+func (d *daemon) keepTimer(t *timer) error {
+	if !t.durable() {
+		return nil
+	}
+	key := append(idKey(t.due.UnixNano()), idKey(d.timers.Add(1))...)
+	err := d.db.Update(func(tx *bbolt.Tx) error {
+		return tx.Bucket(timersBucket).Put(key, []byte(puff.Print(t.stored())))
+	})
+	if err == nil {
+		t.key = key
+	}
+	return err
+}
+
+// forgetTimer deletes t once it is done with. One that can't be deleted
+// fires again after a restart, so it is noted.
+func (d *daemon) forgetTimer(t *timer) {
+	if t.key == nil {
+		return
+	}
+	err := d.db.Update(func(tx *bbolt.Tx) error { return tx.Bucket(timersBucket).Delete(t.key) })
+	if err != nil {
+		fmt.Fprintf(d.log, "whiff: a timer for :%s stays stored: %v\n", t.m.to(t.addr), err)
+	}
+}
+
+// arm delivers t when it is due, once: it leaves the store first, so a
+// restart can't send it twice. It goes unsent if stop closes first, the
+// version of the service that set it having gone, and stays stored if whiff
+// is stopping. A delivery that fails is in history.
+func (d *daemon) arm(t *timer, stop <-chan struct{}) {
+	time.AfterFunc(time.Until(t.due), func() {
+		if d.ctx.Err() != nil {
+			return
+		}
+		d.forgetTimer(t)
+		select {
+		case <-stop:
+			return
+		default:
+		}
+		d.deliver(t.addr, t.m)
+	})
+}
+
+// stored is t as it is stored.
+func (t *timer) stored() puff.Value {
+	args, _ := puff.ReadValue(t.m.args)
+	es := []puff.Entry{
+		{Key: puff.Keyword("due"), Val: puff.NewTime(t.due)},
+		{Key: puff.Keyword("to"), Val: puff.Keyword(t.addr)},
+		{Key: puff.Keyword("fn"), Val: puff.Keyword(t.m.fn)},
+		{Key: puff.Keyword("args"), Val: args},
+		{Key: puff.Keyword("origin"), Val: origin(t.m.user)},
+		{Key: puff.Keyword("reviewed"), Val: puff.Bool(t.m.reviewed)},
+		{Key: puff.Keyword("cwd"), Val: puff.String(t.m.dir)},
+	}
+	if t.m.from != "" {
+		es = append(es, puff.Entry{Key: puff.Keyword("from"), Val: puff.Keyword(t.m.from)})
+	}
+	if t.m.session != "" {
+		es = append(es, puff.Entry{Key: puff.Keyword("session"), Val: puff.Keyword(t.m.session)})
+	}
+	m, _ := puff.NewMap(es...)
+	return m
+}
+
+// storedTimer is the timer stored under key, from p, as stored printed it.
+// As for a message, only a stored :user is the user's, and only a stored
+// #t has been reviewed.
+func storedTimer(key []byte, p string) (*timer, error) {
+	v, err := puff.ReadValue(p)
+	if err != nil {
+		return nil, err
+	}
+	m, ok := v.(puff.Map)
+	if !ok {
+		return nil, fmt.Errorf("want a map, got %s", p)
+	}
+	get := func(k string) puff.Value {
+		v, _ := m.Get(puff.Keyword(k))
+		return v
+	}
+	name := func(k string) string {
+		s, _ := get(k).(puff.Keyword)
+		return string(s)
+	}
+	to, fn := name("to"), name("fn")
+	args, ok := get("args").(puff.Vector)
+	due, isTime := get("due").(puff.Time)
+	if to == "" || fn == "" || !ok || !isTime {
+		return nil, fmt.Errorf("want :to, :fn, :args and :due, got %s", p)
+	}
+	dir, _ := get("cwd").(puff.String)
+	reviewed, _ := get("reviewed").(puff.Bool)
+	return &timer{key: key, due: due.Go(), addr: to, m: message{from: name("from"), fn: fn, args: puff.Print(args), dir: string(dir),
+		user: name("origin") == string(origin(true)), reviewed: bool(reviewed), session: name("session")}}, nil
 }
 
 // stored is a as it is stored: as (inbox) shows it, with what a restart

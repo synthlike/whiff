@@ -266,18 +266,26 @@ stream.
 
 ## Limits, for now
 
-- History and timers are in memory: a restart loses them, and a job running
-  when whiff stops never answers. Service state and every inbox, `:review`'s
-  queue too, are stored. (v0.6 stores the rest.) A `whiff try` address's
-  inbox isn't.
+- History is in memory: a restart loses it, and a job running when whiff
+  stops never answers. Service state, every inbox, `:review`'s queue too, and
+  timers are stored. (v0.6 stores the rest.) What a `whiff try` address holds
+  isn't.
+- A `send-after` survives a restart with its origin, so an agent's still meets
+  the review gate, and one that came due while whiff was down fires once when
+  the services are back. A service's timers to itself go with the version
+  that set them: a reload drops them, and so does a restart if the service
+  has a `:start`, which sets the ones it needs, so a loop doesn't double. A
+  one-off timer a service with a `:start` set for itself goes too, and
+  history says how many.
 - A message that waited through a restart keeps its origin, sender and
   session, as ids and agent numbers are never given out twice, but begins a
   new chain, as message ids in history begin again with each daemon. Its
   `:expires` counts from when it arrived. What waits for an address that
   isn't loaded stays until it is, or until you reply, and history says so.
-- Replying and accepting aren't one transaction yet: a message leaves the
-  store before it is acted on. If whiff dies between the two, your answer is
-  lost, and an accepted write doesn't happen rather than happening twice.
+- Replying, accepting and firing a timer aren't one transaction yet: a
+  message leaves the store before it is acted on. If whiff dies between the
+  two, your answer is lost, and an accepted write or a due timer doesn't
+  happen rather than happening twice.
 - `whiff wait` finds an answer among the last 1000, like history: a busy
   daemon can push one out before a client that went away asks for it.
 - A call waits 5s; anything longer is a job or an ask.

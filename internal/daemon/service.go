@@ -38,6 +38,7 @@ type service struct {
 	stateful bool
 	state    puff.Value
 	keep     bool          // commit its state; not for whiff try's scratch addresses
+	starts   bool          // it has a :start, which sets the timers it needs each time it loads
 	quit     chan struct{} // closed to stop it after the message it is handling
 	done     chan struct{} // closed when it has stopped
 }
@@ -218,6 +219,7 @@ func (d *daemon) loadSource(file, src, addr string, start bool) (*service, error
 			return nil, err
 		}
 	}
+	s.starts = startFn != nil
 	if start && startFn != nil {
 		if err := s.start(ctx, startFn); err != nil {
 			return nil, err
