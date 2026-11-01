@@ -76,7 +76,7 @@ func (d *daemon) claim(l *link, req rpc.Request) (*service, rpc.Response) {
 	}
 	done := puff.Done
 	if name == "agent" && req.Agent {
-		name = fmt.Sprintf("agent/%d", d.agents.Add(1))
+		name = fmt.Sprintf("agent/%d", d.newAgent())
 		done = puff.Ok(puff.Keyword(name))
 	} else if name == "jobs" || name == "me" || name == "review" || name == "agent" || strings.HasPrefix(name, "agent/") ||
 		name == "try" || strings.HasPrefix(name, "try/") {

@@ -38,6 +38,8 @@ type asked struct {
 	fn   string
 	args puff.Vector
 	at   time.Time // when it arrived
+	// expires is how long it waits for a reply, from at; 0 for ever.
+	expires time.Duration
 	// held is the message :review holds, for to's fn, as it was sent; or
 	// src is the code it holds, an agent's eval.
 	held *message
@@ -90,30 +92,34 @@ func (d *daemon) ask(st *state, s *service, m message) puff.Value {
 			return puff.Errorf("bad-call", ":%s: %v", m.to(s.name), err)
 		}
 	}
-	a := &asked{ticket: ticket{id: st.newID(), msg: m.id, from: m.from, dir: m.dir, user: m.user, session: m.session}, addr: s.name, fn: m.fn, args: args, at: time.Now()}
-	// :me's inbox survives a restart, so its sender hears only once it will.
-	if s.name == "me" {
-		if err := st.keep(a); err != nil {
-			return puff.Errorf("store", ":%s wasn't stored: %v", m.to(s.name), err)
-		}
+	a := &asked{ticket: ticket{id: st.newID(), msg: m.id, from: m.from, dir: m.dir, user: m.user, session: m.session}, addr: s.name, fn: m.fn, args: args, at: time.Now(), expires: h.expires}
+	// An inbox survives a restart, so its sender hears only once this will.
+	if err := st.keep(a); err != nil {
+		return puff.Errorf("store", ":%s wasn't stored: %v", m.to(s.name), err)
 	}
 	st.asked = append(st.asked, a)
 	if s.name == "me" {
 		st.meChanged(m.user, m.id)
 	}
-	if h.expires > 0 {
-		time.AfterFunc(h.expires, func() {
-			if d.ctx.Err() != nil {
-				return
-			}
-			d.do(func(st *state) {
-				if st.take(a.addr, a.id) != nil {
-					d.answer(st, a.ticket, a.addr, puff.Errorf("expired", ":%s waited longer than %v", m.to(a.addr), h.expires))
-				}
-			})
-		})
+	if a.expires > 0 {
+		d.expireAfter(a, a.expires)
 	}
 	return pending(a.id, ":%s waits in :%s's inbox for a reply", m.to(s.name), s.name)
+}
+
+// expireAfter answers a (err {:kind :expired}) once after has passed, if it
+// is still waiting.
+func (d *daemon) expireAfter(a *asked, after time.Duration) {
+	time.AfterFunc(after, func() {
+		if d.ctx.Err() != nil {
+			return
+		}
+		d.do(func(st *state) {
+			if st.take(a.addr, a.id) != nil {
+				d.answer(st, a.ticket, a.addr, puff.Errorf("expired", ":%s/%s waited longer than %v", a.addr, a.fn, a.expires))
+			}
+		})
+	})
 }
 
 // inbox is what waits in addr's inbox, oldest first.
@@ -137,8 +143,8 @@ func (st *state) take(addr string, id int64) *asked {
 	}
 	a := st.asked[i]
 	st.asked = slices.Delete(st.asked, i, i+1)
+	st.forget(a)
 	if a.addr == "me" {
-		st.forget(a)
 		st.meChanged(a.user, a.msg)
 	}
 	return a
@@ -201,7 +207,7 @@ func (d *daemon) handOn(by string, id int64, m message) error {
 			found = true
 			was := *t
 			t.msg, t.from, t.dir, t.user, t.session = m.id, m.from, m.dir, t.user && m.user, sameSession(t.session, m.session)
-			if a != nil && a.addr == "me" {
+			if a != nil {
 				if stored = st.keep(a); stored != nil {
 					*t = was
 				}

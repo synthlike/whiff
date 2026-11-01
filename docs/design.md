@@ -266,14 +266,18 @@ stream.
 
 ## Limits, for now
 
-- History, services' inboxes, `:review`'s queue and timers are in memory: a
-  restart loses them, and a job running when whiff stops never answers.
-  Service state and `:me`'s inbox are stored. (v0.6 stores the rest.)
-- A message in `:me`'s inbox comes back after a restart with its origin and
-  sender, but begins a new chain: message ids and agent numbers begin again
-  with each daemon, so it keeps neither its cause nor its session. Replying
-  isn't one transaction yet: if whiff dies between taking a message from the
-  store and delivering your answer, the answer is lost.
+- History and timers are in memory: a restart loses them, and a job running
+  when whiff stops never answers. Service state and every inbox, `:review`'s
+  queue too, are stored. (v0.6 stores the rest.) A `whiff try` address's
+  inbox isn't.
+- A message that waited through a restart keeps its origin, sender and
+  session, as ids and agent numbers are never given out twice, but begins a
+  new chain, as message ids in history begin again with each daemon. Its
+  `:expires` counts from when it arrived. What waits for an address that
+  isn't loaded stays until it is, or until you reply, and history says so.
+- Replying and accepting aren't one transaction yet: a message leaves the
+  store before it is acted on. If whiff dies between the two, your answer is
+  lost, and an accepted write doesn't happen rather than happening twice.
 - `whiff wait` finds an answer among the last 1000, like history: a busy
   daemon can push one out before a client that went away asks for it.
 - A call waits 5s; anything longer is a job or an ask.

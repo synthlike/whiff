@@ -105,8 +105,8 @@ func (d *daemon) holdEval(st *state, from string, req rpc.Request) puff.Value {
 
 // queue puts a, which what names, in :review's inbox and publishes it on
 // :review/pending, and returns the pending for its sender; or says why it
-// can't wait there: nobody follows :review/pending to review it, or the
-// inbox is full.
+// can't wait there: nobody follows :review/pending to review it, the inbox
+// is full, or it can't be stored.
 func (st *state) queue(a *asked, what string) puff.Value {
 	if !st.reviewing() {
 		return puff.Errorf("no-reviewer", "%s is :write, and nobody reviews agents' messages: a reviewer follows :review/pending (whiff sub review/pending)", what)
@@ -115,6 +115,9 @@ func (st *state) queue(a *asked, what string) puff.Value {
 		return puff.Errorf("full", ":review's inbox is full")
 	}
 	a.id, a.addr, a.at = st.newID(), "review", time.Now()
+	if err := st.keep(a); err != nil {
+		return puff.Errorf("store", "%s wasn't stored: %v", what, err)
+	}
 	st.asked = append(st.asked, a)
 	st.publish(message{cause: a.msg, from: "review", topic: "review/pending", args: puff.Print(puff.NewVector(a.value())), user: a.user})
 	return pending(a.id, "%s waits for your review", what)
@@ -253,7 +256,7 @@ func (d *daemon) pendingView(message, []puff.Value) (puff.Value, error) {
 	var items []puff.Value
 	d.do(func(st *state) {
 		for _, a := range st.inbox("review") {
-			items = append(items, a.reviewItem())
+			items = append(items, a.reviewItem(st.addrs[a.from] != nil))
 		}
 	})
 	opts, _ := puff.NewMap(puff.Entry{Key: puff.Keyword("changed"),
@@ -268,8 +271,9 @@ func (a *asked) trustable() bool {
 }
 
 // reviewItem is a, held, as an item of :review/pending: what it would do,
-// who sent it and where, and its actions: Trust too, if it is trustable.
-func (a *asked) reviewItem() puff.Value {
+// who sent it and where, and its actions: Trust too, if it is trustable and
+// its session, live, is still here to trust.
+func (a *asked) reviewItem(live bool) puff.Value {
 	label := a.what()
 	switch {
 	case a.held == nil:
@@ -290,7 +294,7 @@ func (a *asked) reviewItem() puff.Value {
 	}
 	reject, _ := action("Reject", "reject").(puff.Map).With(puff.Keyword("ask"), puff.String("Why? Its sender reads this."))
 	actions := []puff.Value{action("Accept", "accept"), reject}
-	if a.trustable() {
+	if a.trustable() && live {
 		actions = append(actions, action(fmt.Sprintf("Trust :%s for :%s", a.from, a.to), "trust"))
 	}
 	m, _ := puff.NewMap(

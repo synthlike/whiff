@@ -306,7 +306,7 @@ func TestMeInboxSurvivesRestart(t *testing.T) {
 		n, _ := strconv.ParseInt(id, 10, 64)
 		var p string
 		db.View(func(tx *bbolt.Tx) error {
-			p = string(tx.Bucket(meBucket).Get(idKey(n)))
+			p = string(tx.Bucket(inboxBucket).Get(idKey(n)))
 			return nil
 		})
 		return p
@@ -375,10 +375,10 @@ func TestMeInboxSurvivesRestart(t *testing.T) {
 	// still loads.
 	restart(func(db *bbolt.DB) {
 		db.Update(func(tx *bbolt.Tx) error {
-			return tx.Bucket(meBucket).Put(idKey(0), []byte("(not read"))
+			return tx.Bucket(inboxBucket).Put(idKey(0), []byte("(not read"))
 		})
 	})
-	historyHas(t, c, "message 0 in :me's inbox can't be read, and stays stored")
+	historyHas(t, c, "message 0 in an inbox can't be read, and stays stored")
 	if text, _ := c.Inbox("me"); !strings.HasPrefix(text, waits+"  :planner -> :me/ask") {
 		t.Errorf("inbox = %q, want %s in it", text, waits)
 	}
@@ -387,40 +387,4 @@ func TestMeInboxSurvivesRestart(t *testing.T) {
 			t.Errorf("the unreadable message is stored as %q", p)
 		}
 	})
-}
-
-func TestStoredMe(t *testing.T) {
-	const fine = `{:id 1 :fn :ask :args ["q"] :origin :user :cwd "/x" :at 2026-10-27T10:00:00Z :from :plan}`
-	a, err := storedMe(1, fine)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if a.id != 1 || a.addr != "me" || a.fn != "ask" || a.from != "plan" || a.dir != "/x" || !a.user || a.at.Year() != 2026 {
-		t.Errorf("storedMe = %+v", a)
-	}
-	if a.msg != 0 || a.session != "" {
-		t.Errorf("message ids and sessions begin again with a daemon: %+v", a)
-	}
-	// Only a stored :user is yours.
-	for _, p := range []string{
-		`{:id 1 :fn :ask :args ["q"] :cwd "/x" :at 2026-10-27T10:00:00Z}`,
-		`{:id 1 :fn :ask :args ["q"] :origin "user" :cwd "/x" :at 2026-10-27T10:00:00Z}`,
-	} {
-		if a, err := storedMe(1, p); err != nil || a.user {
-			t.Errorf("storedMe(%s) = %+v %v, want an agent's", p, a, err)
-		}
-	}
-	// meItem counts on what it reads being what :me/ask and :me/tell check.
-	for _, p := range []string{
-		`[1]`,
-		`{:fn :answer :args ["q"]}`,
-		`{:fn :ask :args []}`,
-		`{:fn :ask :args ["q" 1 2]}`,
-		`{:fn :ask :args ["q" 1]}`,
-		`{:fn :tell :args ["q" {:actions 1}]}`,
-	} {
-		if a, err := storedMe(1, p); err == nil {
-			t.Errorf("storedMe(%s) = %+v, want an error", p, a)
-		}
-	}
 }

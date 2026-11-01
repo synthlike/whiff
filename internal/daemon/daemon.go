@@ -97,6 +97,15 @@ func Run(ctx context.Context, dir, services string) error {
 	d := &daemon{ctx: ctx, ops: make(chan func(*state)), restarts: make(chan *service, 16),
 		resets: make(chan reset), db: db, log: os.Stderr, callTimeout: defaultCallTimeout}
 	d.base = d.newEnv(io.Discard, &caller{})
+	err = db.View(func(tx *bbolt.Tx) error {
+		n, err := storedInt(tx, agentsKey)
+		d.agents.Store(n)
+		return err
+	})
+	if err != nil {
+		lock.Close()
+		return err
+	}
 	d.wg.Go(d.route)
 	for _, s := range []*service{d.jobsService(), d.meService(), d.reviewService()} {
 		d.do(func(st *state) { st.addrs[s.name] = s })
@@ -105,6 +114,7 @@ func Run(ctx context.Context, dir, services string) error {
 	// Clients wait in the listen queue until the services are loaded.
 	sv := d.newSupervisor(services)
 	sv.scan()
+	d.resume()
 	d.wg.Go(sv.run)
 	for {
 		nc, err := ln.Accept()

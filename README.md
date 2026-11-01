@@ -73,7 +73,7 @@ history -c`.
 
 v0.6 will focus on reliable work and recovery: durable inboxes, timers and
 task results, explicit interruption handling and safe retries. Service state
-and your inbox already survive restarts; services' inboxes, timers and history
+and inboxes, the review queue too, already survive restarts; timers and history
 are still in memory.
 
 ## Inspirations
