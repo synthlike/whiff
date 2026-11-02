@@ -21,7 +21,12 @@ func TestUnwrapLib(t *testing.T) {
 
 		{`(unwrap (none))`, "1:1: unwrap: got (none)"},
 		{`(unwrap (err {:kind :x}))`, "1:1: unwrap: got (err {:kind :x})"},
-		{`(unwrap 5)`, "1:1: unwrap: want a Result or an Option, got 5"},
+		{`(unwrap 5)`, "1:1: unwrap: got 5, not a Result or an Option"},
+		// unwrap names what it was given, and the short locals in it.
+		{`(let [m {:runs {1 :a}} n 2] (unwrap (map/get-in m [:runs n])))`, "1:29: unwrap: (map/get-in m [:runs n]) is (none), where m is {:runs {1 :a}}, n is 2"},
+		{`(let [m {:big "` + strings.Repeat("x", 60) + `"} n 2] (unwrap (map/get m n)))`, "1:84: unwrap: (map/get m n) is (none), where n is 2"},
+		{`(let [r (none)] (unwrap r))`, "1:17: unwrap: r is (none)"},
+		{`(let [r 3] (unwrap r))`, "1:12: unwrap: r is 3, not a Result or an Option"},
 		{`(or-else "x" 0)`, `1:1: or-else: want a Result or an Option, got "x"`},
 	})
 }
@@ -105,7 +110,7 @@ func TestVectorLib(t *testing.T) {
 		{`(vector/each [1 2 3] (fn (x) (if (= x 2) (err :two) (ok x))))`, `(err :two)`},
 
 		{`(vector/filter [1] (fn (x) x))`, "1:1: vector/filter: want a bool, got 1"},
-		{`(vector/map [1] (fn (x) (+ x 1.0)))`, "1:25: +: can't add int and float"},
+		{`(vector/map [1] (fn (x) (+ x 1.0)))`, "1:25: +: can't add int and float (called at 1:1)"},
 		{`(vector/map [1] 2)`, "1:1: not a function: 2"},
 		{`(vector/range 0 100000000)`, "1:1: vector/range: more than 16777216 ints"},
 	})

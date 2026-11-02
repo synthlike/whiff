@@ -103,7 +103,11 @@ only ever handling one message.
 - **Faults are bugs.** Bad arguments, a non-exhaustive `match`, `(fail e)`:
   the handler stops, its caller gets `(err {:kind :fault})`, and the service
   restarts from its file. A file that doesn't load keeps the old version
-  running and says why.
+  running and says why. A fault says where it was called from, `(called
+  at f.puff:5:62, ...)`; a pattern that doesn't fit says what it wanted,
+  `path: {} doesn't match {:dir d}: no :dir`; and an `unwrap` names what it
+  was given, with the short locals in it, `(map/get-in state [:runs n]) is
+  (none), where n is 2`, so a required lookup needs no helper of its own.
 - **Every function has a mark,** `:read` or `:write`. A builtin's is in its
   table (`file/write` is `:write`); a handler's is inferred from what it
   reaches: a `:write` builtin, a def that does, or the function a literal

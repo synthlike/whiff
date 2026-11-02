@@ -31,7 +31,7 @@ func TestTests(t *testing.T) {
 		{"wrong", "t.puff:3:1", "got 9, want 10"},
 		{"a bool", "t.puff:4:1", ""},
 		{"not #t", "t.puff:5:1", "got 4, want #t"},
-		{"a fault", "t.puff:6:1", "t.puff:1:13: *: can't multiply string and string"},
+		{"a fault", "t.puff:6:1", "t.puff:1:13: *: can't multiply string and string (called at t.puff:6:20)"},
 		{"try", "t.puff:8:1", `got (err {:kind :nan :trace ["t.puff:8:16"]})`},
 		{"lets and dos", "t.puff:9:1", ""},
 		{"a later def", "t.puff:10:1", ""},
