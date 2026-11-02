@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -29,9 +30,10 @@ type job struct {
 	opts jobOpts
 	// ctx ends when the job is cancelled, or whiff stops, and each
 	// attempt's with it. Only the goroutine running an attempt, or the
-	// route goroutine, touches pid and attempts.
+	// route goroutine, touches p, pid and attempts.
 	ctx      context.Context
 	cancel   context.CancelFunc
+	p        *proc     // the last attempt, whose output :jobs/output reads
 	pid      int       // the last attempt's process group, as it is the group's leader
 	attempts []attempt // oldest first
 }
@@ -74,6 +76,8 @@ func (d *daemon) jobsService() *service {
 				doc: "The running jobs, each {:id :cmd :cwd :from}."},
 			"cancel": {params: []string{"id"}, mark: puff.MarkWrite, marked: true, native: d.cancelJob,
 				doc: "Kill job id and everything it started."},
+			"output": {params: []string{"id"}, mark: puff.MarkRead, marked: true, native: d.jobOutput,
+				doc: "(ok {:stdout :stderr}), what running job id has written so far: the last 64KiB of each. (err {:kind :no-id}) once it isn't running: its result is in whiff wait."},
 			"process": {params: []string{"id"}, mark: puff.MarkRead, marked: true, native: d.jobProcess,
 				doc: "(some pid), the process group job id may still run in: while it runs, and after whiff died while it ran, while its result's :pid is there; else (none). Retry its write only once it's (none)."},
 		},
@@ -197,7 +201,7 @@ func (d *daemon) spawn(j *job) (*proc, error) {
 
 // began records p as j's new attempt.
 func (j *job) began(p *proc) {
-	j.pid = p.cmd.Process.Pid
+	j.p, j.pid = p, p.cmd.Process.Pid
 	j.attempts = append(j.attempts, attempt{started: time.Now(), pid: j.pid})
 }
 
@@ -425,6 +429,27 @@ func (d *daemon) jobProcess(_ message, args []puff.Value) (puff.Value, error) {
 	return puff.Ok(puff.None()), nil
 }
 
+func (d *daemon) jobOutput(_ message, args []puff.Value) (puff.Value, error) {
+	id, ok := args[0].(puff.Int)
+	if !ok {
+		return nil, fmt.Errorf("want a job id, got %s", puff.Print(args[0]))
+	}
+	var p *proc
+	d.do(func(st *state) {
+		if j := st.jobs[int64(id)]; j != nil {
+			p = j.p
+		}
+	})
+	if p == nil {
+		return puff.Errorf("no-id", "no job %d is running: once it ends, whiff wait %d has its result", id, id), nil
+	}
+	out, _ := puff.NewMap(
+		puff.Entry{Key: puff.Keyword("stdout"), Val: puff.String(p.stdout.String())},
+		puff.Entry{Key: puff.Keyword("stderr"), Val: puff.String(p.stderr.String())},
+	)
+	return puff.Ok(out), nil
+}
+
 func (d *daemon) listJobs(message, []puff.Value) (puff.Value, error) {
 	var jobs []puff.Value
 	d.do(func(st *state) {
@@ -464,10 +489,16 @@ func (j *job) value() puff.Value {
 	return m
 }
 
-// tail keeps the last tailSize bytes written to it.
-type tail struct{ b []byte }
+// tail keeps the last tailSize bytes written to it. The process's
+// goroutine writes it while :jobs/output reads it, so mu guards b.
+type tail struct {
+	mu sync.Mutex
+	b  []byte
+}
 
 func (t *tail) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.b = append(t.b, p...)
 	if len(t.b) > 2*tailSize {
 		t.b = append([]byte(nil), t.b[len(t.b)-tailSize:]...)
@@ -477,6 +508,8 @@ func (t *tail) Write(p []byte) (int, error) {
 
 // String is the tail, without a character the cut split.
 func (t *tail) String() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	b := t.b
 	if len(b) > tailSize {
 		b = b[len(b)-tailSize:]

@@ -128,6 +128,22 @@ func TestJobs(t *testing.T) {
 	}
 	inHistory(`done  user   :jobs -> client ` + id + ` (err {:kind :cancelled :message "job ` + id + ` was cancelled" :outcome :stopped})`)
 
+	// :jobs/output is a running job's output so far; once it ends, its result.
+	id = run(`(call :jobs/run ["sh" "-c" "echo up; echo warn >&2; sleep 10"])`)
+	output := func() string {
+		resp, err := c.Eval(`(call :jobs/output `+id+`)`, dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.Value
+	}
+	eventually(t, "output so far", output, `(ok {:stderr "warn\n" :stdout "up\n"})`)
+	c.Eval(`(call :jobs/cancel `+id+`)`, dir)
+	inHistory(`done  user   :jobs -> client ` + id + ` (err {:kind :cancelled`)
+	if got, want := output(), `(err {:kind :no-id :message "no job `+id+` is running: once it ends, whiff wait `+id+` has its result"})`; got != want {
+		t.Errorf("output after the end = %s, want %s", got, want)
+	}
+
 	id = run(`(call :jobs/run ["sleep" "10"] {:timeout 50ms})`)
 	inHistory(`done  user   :jobs -> client ` + id + ` (err {:kind :timeout :message "job ` + id + ` took longer than 50ms" :outcome :stopped})`)
 
