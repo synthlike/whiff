@@ -641,7 +641,7 @@ func TestJobsInterrupted(t *testing.T) {
 
 	done = start(t, dir)
 	c = dial(t, dir)
-	first := quick + mine + ` (err {:kind :interrupted :message "job ` + mine + ` was killed when whiff stopped: what it had done stays done" :outcome :stopped})` + "\n"
+	first := quick + mine + ` (err {:kind :interrupted :message "job ` + mine + ` was killed when whiff stopped: what it had done stays done" :outcome :stopped :stderr "" :stdout ""})` + "\n"
 	eventually(t, "the job whiff killed", answers, first)
 	if r, err := c.Message("wait", "", "["+passed+"]", dir); err != nil || !strings.Contains(r.Value, ":interrupted") {
 		t.Errorf("wait for a job handed on: %+v %v", r, err)

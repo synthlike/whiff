@@ -232,7 +232,9 @@ func (j *job) ended(outcome string) {
 	}
 }
 
-// result waits for p, an attempt at j, and is how it ended.
+// result waits for p, an attempt at j, and is how it ended. One that was
+// stopped, by a timeout, a cancel or whiff stopping, keeps the end of
+// what it printed, as one that ended on its own does.
 func (d *daemon) result(j *job, p *proc) puff.Value {
 	err := p.cmd.Wait()
 	defer p.cancel()
@@ -240,11 +242,11 @@ func (d *daemon) result(j *job, p *proc) puff.Value {
 	var exitErr *exec.ExitError
 	switch {
 	case errors.Is(p.ctx.Err(), context.DeadlineExceeded):
-		return failed("timeout", "stopped", "job %d took longer than %v", j.id, j.opts.timeout)
+		return p.withOutput(failed("timeout", "stopped", "job %d took longer than %v", j.id, j.opts.timeout))
 	case p.ctx.Err() != nil && d.ctx.Err() != nil:
-		return failed("interrupted", "stopped", "job %d was killed when whiff stopped: what it had done stays done", j.id)
+		return p.withOutput(failed("interrupted", "stopped", "job %d was killed when whiff stopped: what it had done stays done", j.id))
 	case p.ctx.Err() != nil:
-		return failed("cancelled", "stopped", "job %d was cancelled", j.id)
+		return p.withOutput(failed("cancelled", "stopped", "job %d was cancelled", j.id))
 	case err == nil, errors.As(err, &exitErr):
 	default:
 		return puff.Errorf("fault", "job %d: %v", j.id, err)
@@ -265,6 +267,14 @@ func (d *daemon) result(j *job, p *proc) puff.Value {
 		puff.Entry{Key: puff.Keyword("stderr"), Val: puff.String(p.stderr.String())},
 	)
 	return puff.Ok(out)
+}
+
+// withOutput is r, an (err e), with p's :stdout and :stderr in e.
+func (p *proc) withOutput(r puff.Value) puff.Value {
+	e := r.(puff.Tag).At(0).(puff.Map)
+	e, _ = e.With(puff.Keyword("stdout"), puff.String(p.stdout.String()))
+	e, _ = e.With(puff.Keyword("stderr"), puff.String(p.stderr.String()))
+	return puff.NewTag("err", e)
 }
 
 // stop kills what's left of p's group stopGrace after its SIGTERM, if it
