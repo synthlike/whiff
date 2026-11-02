@@ -38,3 +38,9 @@ Or try one without installing it: `whiff try services/git.puff status`.
   the same session, with no tools; its answer lands in your inbox (`whiff
   inbox`), and replying to it is your next message. Its home is
   `~/.whiff/agents/assistant`. Needs the claude CLI.
+- `procs`: your dev servers and containers, named per project in the file
+  (copy it and fill in `procs`): `up :shop` starts them in order, `down`,
+  `restart`, `runs`, `logs :shop/api`, and `view` with Start, Stop, Restart
+  and Logs. Starting whiff brings back the ones you wanted up; with
+  `:restart #t` one that exits is started again, until its third exit in a
+  minute, which lands in your inbox.

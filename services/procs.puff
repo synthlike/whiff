@@ -1,0 +1,345 @@
+; procs: the terminals you'd keep open, go run servers and docker run
+; containers, as jobs whiff runs and you start and stop by name. Name them
+; per project in procs below, in the order they start:
+;   whiff call procs/up :shop        ; every process of a project, in order
+;   whiff call procs/up :shop/api    ; or one
+;   whiff call procs/down :shop
+;   whiff call procs/restart :shop/api
+;   whiff call procs/runs            ; each one and how it is
+;   whiff call procs/view            ; the same as items: Start, Stop, Restart, Logs
+;   whiff call procs/logs :shop/api  ; its output so far
+;
+; Each runs as a job without a timeout, in its :dir (your home unless
+; given; ~/ works), until you stop it or whiff stops. Stopping sends its
+; process group SIGTERM, then SIGKILL after 3s; then its :stop, if it has
+; one, runs. A container runs in the foreground (docker run --rm --name x,
+; or docker compose up); one with --name is stopped with docker stop x if
+; it has no :stop. With :restart #t one that exits is started again after
+; 2s; after 3 exits in a minute it isn't, and you hear in your inbox.
+;
+; Its state is which ones you want up, so whiff starting brings them back,
+; and each one's job. It doesn't start one whose process group may still
+; run, after whiff died, or a container that is still running: the first
+; would fight it for its port, so it tells you; the second it stops with
+; :stop first. No health checks, port waits or dependencies: they start in
+; the order listed, and a process binds its own port.
+
+(service procs :state {:wanted [] :procs {} :jobs {}}
+  :start (fn (state) (ok (resume state)))
+
+  ; procs is each process, :project/name then how it runs: :cmd, a
+  ; command; :dir, where; :stop, a command that runs after it stops; and
+  ; :restart #t, to start it again when it exits. For example:
+  ;   [:shop/db {:cmd ["docker" "run" "--rm" "--name" "shop-db" "-p" "5432:5432" "-e" "POSTGRES_PASSWORD=dev" "postgres:17"]}
+  ;    :shop/api {:cmd ["go" "run" "./cmd/api"] :dir "~/src/shop" :restart #t}
+  ;    :shop/web {:cmd ["go" "run" "./cmd/web"] :dir "~/src/shop"}]
+  (def procs [])
+
+  (def delay 2s)  ; before starting one that exited again
+  (def window 1m) ; three exits within it, and it stays down
+  (def most 3)
+
+  ; pairs is v, [k1 v1 k2 v2 ...], as [[k1 v1] [k2 v2] ...]: a map that
+  ; keeps its order.
+  (def (pairs v)
+    (loop [v v out []]
+      (match v
+        [[k x & rest] (recur rest (vector/append out [k x]))]
+        [_ out])))
+
+  (def table (pairs procs))
+
+  (def (project name)
+    (match (string/cut (keyword/name name) "/") [(some [p _]) p] [(none) (keyword/name name)]))
+
+  ; named is the processes in table that which names, in order: itself,
+  ; or every one of the project it names.
+  (def (named table which)
+    (let [names (vector/map table (fn ([k _]) k))]
+      (if (vector/contains? names which)
+        [which]
+        (vector/filter names (fn (k) (= (project k) (keyword/name which)))))))
+
+  (test "a process, or every one of a project, in the order listed"
+    (let [t (pairs [:shop/web {} :shop/api {} :blog/db {}])]
+      (= [(named t :shop) (named t :shop/api) (named t :nope)] [[:shop/web :shop/api] [:shop/api] []])))
+
+  (def (spec-of name)
+    (match (vector/find table (fn ([k _]) (= k name))) [(some [_ s]) s] [(none) {}]))
+
+  ; dir-of is where spec runs: your home unless it says, ~/ in it too.
+  (def (dir-of spec)
+    (let [d (map/get-or spec :dir "~")]
+      (cond
+        [(= d "~") (os/home)]
+        [(string/starts-with? d "~/") (path/join (os/home) (string/slice d 2))]
+        [_ d])))
+
+  ; container is (some x), the name a docker run command gives its container.
+  (def (container cmd)
+    (if (= (vector/first cmd) (some "docker"))
+      (loop [v cmd]
+        (match v
+          [["--name" n & _] (some n)]
+          [[a & rest] (if (string/starts-with? a "--name=") (some (string/trim-prefix a "--name=")) (recur rest))]
+          [_ (none)]))
+      (none)))
+
+  (test "a docker run's container name, either way it's given"
+    (= [(container ["docker" "run" "--rm" "--name" "db" "postgres"]) (container ["docker" "run" "--name=db" "x"])
+        (container ["docker" "compose" "up"]) (container ["go" "run" "--name" "x"])]
+      [(some "db") (some "db") (none) (none)]))
+
+  ; stop-cmd is (some cmd), what runs after spec's process stops: its
+  ; :stop, or docker stop for a named container.
+  (def (stop-cmd spec)
+    (match [(map/get spec :stop) (container (map/get-or spec :cmd []))]
+      [[(some cmd) _] (some cmd)]
+      [[_ (some x)] (some ["docker" "stop" x])]
+      [_ (none)]))
+
+  (test "a process's :stop, or docker stop for a named container"
+    (= [(stop-cmd {:cmd ["docker" "compose" "up"] :stop ["docker" "compose" "down"]})
+        (stop-cmd {:cmd ["docker" "run" "--name" "db" "x"]}) (stop-cmd {:cmd ["go" "run" "."]})]
+      [(some ["docker" "compose" "down"]) (some ["docker" "stop" "db"]) (none)]))
+
+  (def (container-up? x)
+    (match (proc/run ["docker" "ps" "-q" "--filter" (str "name=^" x "$")] {:timeout 5s})
+      [(ok {:exit 0 :stdout out}) (not (= (string/trim out) ""))]
+      [_ #f]))
+
+  (def (proc state name) (map/get-or (map/get-or state :procs {}) name {:status :down}))
+  (def (status-of state name) (map/get-or (proc state name) :status :down))
+
+  ; set-proc sets name's fields to m's, and says so on :procs/changed if
+  ; its status changes.
+  (def (set-proc state name m)
+    (do (match (map/get m :status)
+          [(some s) (publish :procs/changed {:proc name :status s})]
+          [(none) :same])
+      (map/set-in state [:procs name] (map/merge (proc state name) m))))
+
+  (def (wanted? state name) (vector/contains? (map/get-or state :wanted []) name))
+  (def (want state name)
+    (if (wanted? state name) state (map/update state :wanted (fn (w) (vector/append w name)))))
+  (def (unwant state name)
+    (map/update state :wanted (fn (w) (vector/filter w (fn (n) (not (= n name)))))))
+
+  ; started is (ok id), the id of the job r says has started, or r.
+  (def (started r) (catch r [{:kind :pending :id id} (ok id)]))
+
+  ; tail is the last 4000 characters of s.
+  (def (tail s) (string/slice s (max 0 (- (string/length s) 4000))))
+
+  (def (output-text {:stdout o :stderr e})
+    (cond [(= e "") o] [(= o "") e] [_ (str o "\n--- stderr ---\n" e)]))
+
+  (test "output is stdout, stderr, or both, marked"
+    (= [(output-text {:stdout "a\n" :stderr ""}) (output-text {:stdout "" :stderr "b\n"}) (output-text {:stdout "a\n" :stderr "b\n"})]
+      ["a\n" "b\n" "a\n\n--- stderr ---\nb\n"]))
+
+  ; tell tells you text about name in your inbox, offering to start it and
+  ; show its output.
+  (def (tell name text)
+    (or-else (call :me/tell (str "procs: " (keyword/name name) " " text)
+               {:actions [{:label "Start" :action [:procs/up name]} {:label "Logs" :action [:procs/logs name]}]})
+      :told))
+
+  ; launch runs name's command as a job: name is :running, or :failed if
+  ; it can't start.
+  (def (launch state name)
+    (let [spec (spec-of name)]
+      (match (started (call :jobs/run (map/get-or spec :cmd []) {:dir (dir-of spec) :timeout :none}))
+        [(ok id) (-> state (map/set-in [:jobs id] [name :run]) (set-proc name {:status :running :job id}))]
+        [(err e) (-> state (unwant name) (set-proc name {:status :failed :last (str "It didn't start: " (value/to-string e))}))])))
+
+  ; run-stop runs name's :stop as a job, then name is status till it ends.
+  (def (run-stop state name cmd status)
+    (match (started (call :jobs/run cmd {:dir (dir-of (spec-of name)) :timeout 1m}))
+      [(ok id) (-> state (map/set-in [:jobs id] [name :stop]) (set-proc name {:status status}))]
+      [(err e) (after-stop state name)]))
+
+  ; bring starts name unless its process group from before may still run,
+  ; which would fight it for its port; a container still running is
+  ; stopped first.
+  (def (bring state name)
+    (let [p (proc state name)
+          stray (match p
+                  [{:status :stray :job id} (or-else (call :jobs/process id) (none))]
+                  [_ (none)])
+          cmd (map/get-or (spec-of name) :cmd [])]
+      (match [stray (container cmd)]
+        [[(some pid) _] (set-proc state name {:status :stray :pid pid})]
+        [[_ (some x)] when (container-up? x)
+         (run-stop state name (unwrap (stop-cmd (spec-of name))) :clearing)]
+        [_ (launch state name)])))
+
+  ; after-stop is name once it and its :stop ended: started again if you
+  ; still want it, else down.
+  (def (after-stop state name)
+    (if (wanted? state name) (launch state name) (set-proc state name {:status :down})))
+
+  ; stopped is name once its job ended as you stopped it: its :stop runs.
+  (def (stopped state name)
+    (match (stop-cmd (spec-of name))
+      [(some cmd) (run-stop state name cmd :stopping)]
+      [(none) (after-stop state name)]))
+
+  (def (recent crashes) (vector/filter crashes (fn (t) (< (time/since t) window))))
+
+  (test "only exits within the last minute count"
+    (let [t (- (time/now) 1s)]
+      (= (recent [(- (time/now) 2m) t]) [t])))
+
+  ; exited is name once it exited, r, on its own: started again after
+  ; delay if it asks to, unless that's its third exit in a minute.
+  (def (exited state name r)
+    (let [last (match r [(ok out) (tail (output-text out))] [(err e) (value/to-string e)])
+          code (match r [(ok {:exit n}) n] [_ -1])
+          crashes (vector/append (recent (map/get-or (proc state name) :crashes [])) (time/now))
+          state (set-proc state name {:last last :exit code :crashes crashes})]
+      (cond
+        [(not (and (wanted? state name) (map/get-or (spec-of name) :restart #f)))
+         (-> state (unwant name) (set-proc name {:status :exited}))]
+        [(>= (vector/length crashes) most)
+         (do (tell name (str "exited " most " times in a minute, so it isn't started again. Its last output:\n\n" last))
+           (-> state (unwant name) (set-proc name {:status :failed})))]
+        [_ (do (send-after delay :procs/again name)
+             (set-proc state name {:status :waiting}))])))
+
+  ; lost is state once job id, name's, was found gone at start: whiff
+  ; stopped or died while it ran. If its group may still run, name is
+  ; :stray and you hear of it.
+  (def (lost state id name kind)
+    (let [state (map/update state :jobs (fn (js) (map/delete js id)))]
+      (match [kind (or-else (call :jobs/process id) (none))]
+        [[:run (some pid)]
+         (do (tell name (str "may still be running from before whiff died, as process group " pid
+                          ", so it wasn't started again: it would fight it for its port. Stop it (kill -- -" pid "), then Start it."))
+           (set-proc state name {:status :stray :job id :pid pid}))]
+        [_ (set-proc state name {:status :down})])))
+
+  ; resume is state at start: jobs that ended while whiff was down are
+  ; gone, and those you want up come back, in the order listed. On a
+  ; reload the jobs still run, and stay.
+  (def (resume state)
+    (let [live (vector/map (or-else (call :jobs/list) []) (fn ({:id id}) id))
+          state (vector/reduce (map/entries (map/get-or state :jobs {})) state
+                  (fn (s [id [name kind]]) (if (vector/contains? live id) s (lost s id name kind))))]
+      (vector/reduce (vector/map table (fn ([k _]) k)) state
+        (fn (s name)
+          (if (and (wanted? s name) (not (vector/contains? [:running :stopping :clearing] (status-of s name))))
+            (bring s name)
+            s)))))
+
+  ; stop-job stops name's job, keeping the end of its output first.
+  (def (stop-job state name id)
+    (let [last (match (call :jobs/output id) [(ok out) (tail (output-text out))] [_ (map/get-or (proc state name) :last "")])]
+      (do (or-else (call :jobs/cancel id) :gone)
+        (set-proc state name {:status :stopping :last last}))))
+
+  ; each is (ok [reply state]) for f, (fn (state name) state), done to each
+  ; process which names, the reply each one's status.
+  (def (each state which f)
+    (match (named table which)
+      [[] (err {:kind :no-proc :message (str "no process or project " (value/to-string which) " in procs.puff")})]
+      [names
+       (let [state (vector/reduce names state f)]
+         (ok [(map/from-entries (vector/map names (fn (n) [n (status-of state n)]))) state]))]))
+
+  (def (active? s) (vector/contains? [:running :stopping :clearing :waiting] s))
+
+  (def (detail p)
+    (match p
+      [{:status :running :job id} (str "running, job " id)]
+      [{:status :stopping} "stopping"]
+      [{:status :clearing} "stopping its container from before, to start it again"]
+      [{:status :waiting :exit n} (str "exited " n ", starting again in " delay)]
+      [{:status :failed :exit n} (str "exited " n ", " most " times in a minute: not started again")]
+      [{:status :failed} "didn't start"]
+      [{:status :exited :exit n} (str "exited " n)]
+      [{:status :stray :pid pid} (str "may still run from before whiff died: kill -- -" pid)]
+      [_ "down"]))
+
+  (def (actions name status)
+    (let [logs {:label "Logs" :action [:procs/logs name]}]
+      (if (active? status)
+        [{:label "Stop" :action [:procs/down name]} {:label "Restart" :action [:procs/restart name]} logs]
+        [{:label "Start" :action [:procs/up name]} logs])))
+
+  (test "a running process stops or restarts, one that isn't starts; each shows its logs"
+    (= [(vector/map (actions :a/b :running) (fn ({:label l}) l)) (vector/map (actions :a/b :failed) (fn ({:label l}) l))
+        (detail {:status :waiting :exit 1}) (detail {:status :stray :pid 7})]
+      [["Stop" "Restart" "Logs"] ["Start" "Logs"] "exited 1, starting again in 2s" "may still run from before whiff died: kill -- -7"]))
+
+  (on (up state which) :write :update
+    "Starts which, a process (:shop/api) or every one of a project (:shop), in the order listed, unless it runs: (ok {name status}). One whose process group from before whiff died may still run stays :stray; a container still running is stopped first (:clearing)."
+    (each state which
+      (fn (s name)
+        (let [s (-> s (want name) (set-proc name {:crashes []}))]
+          (if (vector/contains? [:running :stopping :clearing] (status-of s name)) s (bring s name))))))
+
+  (on (down state which) :write :update
+    "Stops which, a process or a project: SIGTERM, SIGKILL after 3s, then its :stop. (ok {name status}); it stays down when whiff starts again."
+    (each state which
+      (fn (s name)
+        (let [s (unwant s name)
+              p (proc s name)]
+          (match p
+            [{:status :running :job id} (stop-job s name id)]
+            [{:status :waiting} (set-proc s name {:status :down})]
+            [_ s])))))
+
+  (on (restart state which) :write :update
+    "Stops which, a process or a project, as down does, and starts it again once it has stopped; starts one that isn't running. (ok {name status})."
+    (each state which
+      (fn (s name)
+        (let [s (-> s (want name) (set-proc name {:crashes []}))]
+          (match (proc s name)
+            [{:status :running :job id} (stop-job s name id)]
+            [{:status st} when (vector/contains? [:stopping :clearing] st) s]
+            [_ (bring s name)])))))
+
+  (on (runs state) :read
+    "Every process in procs.puff, in order: {:proc :status :job :pid :exit}, with :status one of :running, :stopping, :clearing, :waiting (to start again), :exited, :failed, :stray (may still run from before whiff died) or :down."
+    (ok (vector/map table
+          (fn ([name _])
+            (map/merge {:proc name :status :down}
+              (map/from-entries (vector/filter (map/entries (proc state name))
+                                  (fn ([k _]) (vector/contains? [:status :job :pid :exit] k)))))))))
+
+  (on (view state) :read
+    "The processes as a view: Stop, Restart and Logs for one that runs; Start and Logs for one that doesn't."
+    (ok (view/items (vector/map table
+                      (fn ([name spec])
+                        (let [p (proc state name)]
+                          {:label (keyword/name name)
+                           :detail (str (detail p) "  " (string/join (map/get-or spec :cmd []) " "))
+                           :actions (actions name (map/get-or p :status :down))})))
+          {:changed :procs/changed})))
+
+  (on (logs state name) :read
+    "name's output so far as a view of text, while it runs; the end of it once it has stopped."
+    (let [p (proc state name)
+          out (match p
+                [{:status :running :job id} (or-else (match (call :jobs/output id) [(ok o) (ok (output-text o))] [e e]) (map/get-or p :last ""))]
+                [_ (map/get-or p :last "")])]
+      (ok (view/text (str (keyword/name name) ", " (detail p) "\n\n" (if (= out "") "No output yet." out))))))
+
+  (on (again state name) :update
+    "Starts name again after it exited, if you still want it: whiff's own loop."
+    (if (and (= (status-of state name) :waiting) (wanted? state name))
+      (let [s (launch state name)] (ok [(status-of s name) s]))
+      (ok [(status-of state name) state])))
+
+  (on (whiff/done state id r) :update
+    "A job a process ran ended: as you stopped it, then its :stop runs; or on its own, then it may start again."
+    (match (map/get-in state [:jobs id])
+      [(none) (ok state)]
+      [(some [name kind])
+       (let [state (map/update state :jobs (fn (js) (map/delete js id)))]
+         (ok (cond
+               [(= kind :stop) (after-stop state name)]
+               [(not (= (map/get (proc state name) :job) (some id))) state]
+               [(= (status-of state name) :stopping) (stopped state name)]
+               [_ (exited state name r)])))])))
