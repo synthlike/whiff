@@ -147,7 +147,8 @@ func (st *state) inbox(addr string) []*asked {
 
 // take removes the message id from addr's inbox, or from any inbox if addr
 // is "", and returns it; nil if it isn't there. Taken from :me's, it
-// publishes :me/changed.
+// publishes :me/changed. It stays stored until its answer is: if whiff
+// dies before that, it is back in the inbox at start.
 func (st *state) take(addr string, id int64) *asked {
 	i := slices.IndexFunc(st.asked, func(a *asked) bool { return a.id == id && (addr == "" || a.addr == addr) })
 	if i < 0 {
@@ -155,7 +156,6 @@ func (st *state) take(addr string, id int64) *asked {
 	}
 	a := st.asked[i]
 	st.asked = slices.Delete(st.asked, i, i+1)
-	st.forget(a)
 	if a.addr == "me" {
 		st.meChanged(a.user, a.msg)
 	}
@@ -186,7 +186,7 @@ func (d *daemon) answer(st *state, t ticket, by string, result puff.Value) {
 func (d *daemon) settle(st *state, t ticket, by string, result puff.Value) {
 	owed := d.owes(st, t.from)
 	if err := endTask(st.db, t, by, result, !owed); err != nil {
-		st.note(fmt.Sprintf("task %d's result isn't stored, so a later whiff wait won't find it: %v", t.id, err))
+		st.note(fmt.Sprintf("task %d's result isn't stored, so a later whiff wait won't find it, and a message it answers comes back at a restart: %v", t.id, err))
 	}
 	for _, w := range st.waiters[t.id] {
 		w <- result

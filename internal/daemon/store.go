@@ -229,20 +229,6 @@ func (st *state) keep(a *asked) error {
 	})
 }
 
-// forget deletes a, taken from its inbox. One that can't be deleted comes
-// back after a restart, so it is only noted.
-func (st *state) forget(a *asked) {
-	if !a.durable() {
-		return
-	}
-	err := st.db.Update(func(tx *bbolt.Tx) error {
-		return tx.Bucket(inboxBucket).Delete(idKey(a.id))
-	})
-	if err != nil {
-		st.note(fmt.Sprintf("message %d stays stored in :%s's inbox: %v", a.id, a.addr, err))
-	}
-}
-
 // acceptHeld takes the message id out of :review's inbox and stores it as
 // an accepted task, in one transaction: so if whiff dies before it ends,
 // its sender hears :interrupted :unknown, rather than nothing, and it isn't
@@ -464,9 +450,14 @@ var endKeys = []string{"id", "from", "origin", "cwd", "session", "reviewed", "st
 // stored of it as it ran, such as a job's :cmd. handled is whether t's
 // owner is done with it once told: not a service that handles whiff/done,
 // which marks it as it does, nor anyone if whiff is stopping. The owner is
-// t's, so a task handed on is stored as the new owner's.
+// t's, so a task handed on is stored as the new owner's. An ask or held
+// message leaves its stored inbox in the same transaction, so whiff can't
+// die between the two and lose the answer.
 func endTask(db *bbolt.DB, t ticket, by string, r puff.Value, handled bool) error {
 	return db.Update(func(tx *bbolt.Tx) error {
+		if err := tx.Bucket(inboxBucket).Delete(idKey(t.id)); err != nil {
+			return err
+		}
 		b := tx.Bucket(tasksBucket)
 		var es []puff.Entry
 		if p := b.Get(idKey(t.id)); p != nil {
