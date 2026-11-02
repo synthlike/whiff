@@ -21,7 +21,8 @@
 ; A run's worktree is ~/.whiff/pipelines/<repo>-<n>, on branch whiff/<n>.
 ; Its state is the runs and the jobs they wait for; a run whose job was
 ; running when whiff stopped fails, as jobs aren't resumed, and offers
-; retry or discard.
+; retry or discard. If whiff dies as a run starts, before its state is
+; stored, the run's worktree and branch stay, and the next run skips them.
 
 (service pipeline :state {:next 1 :runs {} :jobs {}}
   (def rounds 3)
@@ -222,11 +223,21 @@
     (= [(retry-input {:resumable #t :review "no tests"} "add them") (retry-input {:task "t"} "")]
       ["A note from the user:\n\nadd them\n\nThe last review:\n\nno tests\n\nFix what needs fixing." "Task: t\n\n"]))
 
+  ; free is the first run number from n whose worktree and branch in repo
+  ; aren't there: whiff dying as a run started leaves them without the run,
+  ; as it had no state yet. They stay for you to look at.
+  (def (free repo n)
+    (loop [n n]
+      (if (or (file/exists? (path/join home (str (path/base repo) "-" n)))
+            (match (git repo ["rev-parse" "--verify" "-q" (str "refs/heads/whiff/" n)]) [(ok _) #t] [_ #f]))
+        (recur (+ n 1))
+        n)))
+
   ; begin starts a run on task in repo, from base, a commit or branch: [n
   ; state], or the err it couldn't start for.
   (def (begin state repo base task check quiet)
     (let [base (string/trim (try (git repo ["rev-parse" base])))
-          n (map/get-or state :next 1)
+          n (free repo (map/get-or state :next 1))
           dir (path/join home (str (path/base repo) "-" n))
           branch (str "whiff/" n)
           session (uuid/new)
