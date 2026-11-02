@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -21,6 +22,12 @@ const tailSize = 64 << 10
 
 // defaultJobTimeout is how long a job runs without a :timeout.
 const defaultJobTimeout = time.Hour
+
+// stopGrace is how long a stopped job's process group has to end after
+// SIGTERM, before SIGKILL: time for a server to shut down cleanly and for
+// docker run to stop its container. whiff stop waits it out, well within
+// storeTimeout, which the next daemon waits for whiff.db.
+var stopGrace = 3 * time.Second
 
 // job is a process :jobs runs, an attempt at a time: it runs again, under
 // the same id, only if it asked to and it's safe: see again.
@@ -62,6 +69,7 @@ type proc struct {
 	ctx            context.Context // ends at the attempt's timeout, or with its job's
 	cancel         context.CancelFunc
 	stdout, stderr tail
+	termed         atomic.Int64 // when its group got SIGTERM, in Unix nanoseconds; 0 until then
 }
 
 // jobsService is :jobs, whiff's own service for work longer than a call:
@@ -75,7 +83,7 @@ func (d *daemon) jobsService() *service {
 			"list": {mark: puff.MarkRead, marked: true, native: d.listJobs,
 				doc: "The running jobs, each {:id :cmd :cwd :from}."},
 			"cancel": {params: []string{"id"}, mark: puff.MarkWrite, marked: true, native: d.cancelJob,
-				doc: "Kill job id and everything it started."},
+				doc: "Stop job id and everything it started: SIGTERM, then SIGKILL for what's left after 3s."},
 			"output": {params: []string{"id"}, mark: puff.MarkRead, marked: true, native: d.jobOutput,
 				doc: "(ok {:stdout :stderr}), what running job id has written so far: the last 64KiB of each. (err {:kind :no-id}) once it isn't running: its result is in whiff wait."},
 			"process": {params: []string{"id"}, mark: puff.MarkRead, marked: true, native: d.jobProcess,
@@ -177,7 +185,8 @@ func (j *job) argv() []string {
 }
 
 // spawn starts an attempt at j, in its own process group, so a cancel or
-// timeout kills what it started too.
+// timeout stops what it started too: SIGTERM, then SIGKILL for what's left
+// after stopGrace (see stop).
 func (d *daemon) spawn(j *job) (*proc, error) {
 	p := &proc{}
 	p.ctx, p.cancel = context.WithTimeout(j.ctx, j.opts.timeout)
@@ -189,8 +198,13 @@ func (d *daemon) spawn(j *job) (*proc, error) {
 		cmd.Stdin = strings.NewReader(*j.opts.stdin)
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
-	cmd.WaitDelay = time.Second
+	cmd.Cancel = func() error {
+		p.termed.Store(time.Now().UnixNano())
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+	}
+	// Past it, Wait kills the leader, if it's still there, and stops reading
+	// pipes a child it left still holds.
+	cmd.WaitDelay = stopGrace
 	if err := cmd.Start(); err != nil {
 		p.cancel()
 		return nil, err
@@ -216,6 +230,7 @@ func (j *job) ended(outcome string) {
 func (d *daemon) result(j *job, p *proc) puff.Value {
 	err := p.cmd.Wait()
 	defer p.cancel()
+	p.stop()
 	var exitErr *exec.ExitError
 	switch {
 	case errors.Is(p.ctx.Err(), context.DeadlineExceeded):
@@ -244,6 +259,24 @@ func (d *daemon) result(j *job, p *proc) puff.Value {
 		puff.Entry{Key: puff.Keyword("stderr"), Val: puff.String(p.stderr.String())},
 	)
 	return puff.Ok(out)
+}
+
+// stop kills what's left of p's group stopGrace after its SIGTERM, if it
+// got one: the leader may have ended and left children that ignore it. It
+// waits for the group on the attempt's goroutine, so whiff stop waits too.
+func (p *proc) stop() {
+	t := p.termed.Load()
+	if t == 0 {
+		return
+	}
+	pid := p.cmd.Process.Pid
+	for deadline := time.Unix(0, t).Add(stopGrace); groupThere(pid) && time.Now().Before(deadline); {
+		time.Sleep(20 * time.Millisecond)
+	}
+	// While the group is there, its id can't be another's.
+	if groupThere(pid) {
+		syscall.Kill(-pid, syscall.SIGKILL)
+	}
 }
 
 // again says whether j runs again after an attempt that ended r: only if
