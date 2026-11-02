@@ -617,7 +617,11 @@ func (j *job) stored() puff.Value {
 	with("attempts", puff.NewVector(as...))
 	if o := j.opts; o.retry > 0 {
 		with("retry", puff.Int(o.retry))
-		with("timeout", puff.Duration(o.timeout))
+		if o.timeout > 0 {
+			with("timeout", puff.Duration(o.timeout))
+		} else {
+			with("timeout", puff.Keyword("none"))
+		}
 		with("dir", puff.String(o.dir))
 		if o.stdin != nil {
 			with("stdin", puff.String(*o.stdin))
@@ -647,6 +651,8 @@ func storedJob(id int64, p string) (*job, error) {
 	j.opts.dir = j.dir
 	if t, ok := get("timeout").(puff.Duration); ok && t > 0 {
 		j.opts.timeout = time.Duration(t)
+	} else if puff.Equal(get("timeout"), puff.Keyword("none")) {
+		j.opts.timeout = 0
 	}
 	if s, ok := get("dir").(puff.String); ok {
 		j.opts.dir = string(s)
