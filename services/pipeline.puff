@@ -12,6 +12,7 @@
 ;   whiff call pipeline/show 1      ; its last review and the diff it was of
 ;   whiff call pipeline/cancel 1
 ;   whiff call pipeline/retry 2 "keep the old flag too"   ; after it gave up
+;   whiff call pipeline/review-again 3   ; after its reviewer failed
 ;   whiff call pipeline/merge 1     ; once it is ready; its worktree goes
 ;   whiff call pipeline/discard 2   ; or throw it away, worktree and branch
 ;   whiff inbox                     ; how a run ended
@@ -104,7 +105,7 @@
         (finish state n :failed "The developer changed nothing.")
         (let [input (str review-prompt "\n\nTask: " task "\n\nThe check " (check-text checked) "\n\nThe diff:\n" diff)
               id (try (submitted (call :jobs/run ["claude" "-p" "--strict-mcp-config" "--tools" "" "--no-session-persistence"]
-                                   {:stdin input :dir dir :as :text :timeout 10m})))]
+                                   {:stdin input :dir dir :as :text :timeout 5m})))]
           (ok (waiting (set-run state n {:checked checked :diff diff}) n :review id))))))
 
   ; subject is task's first sentence, as a commit's subject: at most 72
@@ -145,25 +146,34 @@
   (def (ended? step) (vector/contains? [:gave-up :failed :cancelled] step))
 
   ; actions are what can be done about run n, on branch, once it ended as
-  ; status: show its last review and diff; merge it if it is ready, or
-  ; retry or discard it if it ended otherwise.
-  (def (actions n status branch)
-    (let [show {:label "Show review and diff" :action [:pipeline/show n]}]
+  ; status at step from: show its last review and diff; merge it if it is
+  ; ready, or retry or discard it if it ended otherwise. One whose reviewer
+  ; failed can be reviewed again first: Retry would rerun the dev.
+  (def (actions n status branch from)
+    (let [show {:label "Show review and diff" :action [:pipeline/show n]}
+          again (if (and (= status :failed) (= from :review)) [{:label "Review again" :action [:pipeline/review-again n]}] [])]
       (cond
         [(= status :ready) [show {:label (str "Merge " branch) :action [:pipeline/merge n]}]]
         [(ended? status)
-         [show {:label "Retry with a note" :action [:pipeline/retry n] :ask "A note for the developer, if any"}
-          {:label "Discard" :action [:pipeline/discard n]}]]
+         (vector/concat [show] again
+           [{:label "Retry with a note" :action [:pipeline/retry n] :ask "A note for the developer, if any"}
+            {:label "Discard" :action [:pipeline/discard n]}])]
         [_ [show]])))
 
   (test "a ready run can be merged, one that didn't end ready retried or discarded"
-    (= [(actions 1 :ready "whiff/1") (actions 2 :gave-up "whiff/2") (actions 3 :merged "whiff/3")]
+    (= [(actions 1 :ready "whiff/1" :review) (actions 2 :gave-up "whiff/2" :review) (actions 3 :merged "whiff/3" :none)]
       [[{:label "Show review and diff" :action [:pipeline/show 1]}
         {:label "Merge whiff/1" :action [:pipeline/merge 1]}]
        [{:label "Show review and diff" :action [:pipeline/show 2]}
         {:label "Retry with a note" :action [:pipeline/retry 2] :ask "A note for the developer, if any"}
         {:label "Discard" :action [:pipeline/discard 2]}]
        [{:label "Show review and diff" :action [:pipeline/show 3]}]]))
+
+  (test "a run whose reviewer failed can be reviewed again; one whose dev failed can't"
+    (= [(vector/map (actions 4 :failed "whiff/4" :review) (fn ({:label l}) l))
+        (vector/map (actions 5 :failed "whiff/5" :dev) (fn ({:label l}) l))]
+      [["Show review and diff" "Review again" "Retry with a note" "Discard"]
+       ["Show review and diff" "Retry with a note" "Discard"]]))
 
   ; tidy removes run n's worktree and branch, as what was in them is
   ; merged or not wanted, and marks it step, :merged or :discarded.
@@ -175,15 +185,17 @@
         (set-run state n {:step step}))))
 
   ; finish ends run n as status, telling you in your inbox unless it is
-  ; quiet, with what you can do about it, and on :pipeline/done.
+  ; quiet, with what you can do about it, and on :pipeline/done. :from is
+  ; the step it ended at.
   (def (finish state n status note)
-    (let [{:task task :branch branch :dir dir :quiet quiet} (run-of state n)]
+    (let [{:task task :branch branch :dir dir :quiet quiet} (run-of state n)
+          from (map/get-or (run-of state n) :step :none)]
       ; :me/tell answers pending, as it waits in your inbox.
-      (do (if quiet :quiet (or-else (call :me/tell (str "pipeline " n ", " task ": " (keyword/name status) ". " note) {:actions (actions n status branch)}) :told))
+      (do (if quiet :quiet (or-else (call :me/tell (str "pipeline " n ", " task ": " (keyword/name status) ". " note) {:actions (actions n status branch from)}) :told))
         (publish :pipeline/done {:run n :status status :branch branch :dir dir :note note})
         ; After :pipeline/done, so a planner hears of the end first.
         (publish :pipeline/step {:run n :step status})
-        (ok (set-run state n {:step status})))))
+        (ok (set-run state n {:step status :from from})))))
 
   ; failure is a run's note when a step failed with e, what saying which;
   ; and, if the step may still be running after whiff died, how to stop it.
@@ -293,7 +305,7 @@
                            :actions (cond
                                       [(active? s) [show {:label "Cancel the run" :action [:pipeline/cancel n]}]]
                                       [(map/get-or run :quiet #f) [show]]
-                                      [_ (actions n s b)])})))
+                                      [_ (actions n s b (map/get-or run :from :none))])})))
           {:changed :pipeline/step})))
 
   (on (show state n) :read
@@ -332,6 +344,15 @@
                 state (set-run state n (map/merge fresh {:round (+ round 1) :limit (+ round rounds)}))]
             (ok [:retrying (try (dev state n (retry-input (run-of state n) note)))]))])]
       [_ (err {:kind :no-run :message (str "run " n " hasn't ended without being ready: nothing to retry")})]))
+
+  ; A reviewer has no tools, so one that may still run after whiff died
+  ; can't fight a new one: no stray check, unlike retry.
+  (on (review-again state n) :write :update
+    "Runs run n's reviewer again on its worktree, in the same round, after the reviewer failed, as by a timeout: the dev isn't rerun. (ok :reviewing); (err {:kind :no-run}) unless run n failed at its review."
+    (match (map/get-in state [:runs n])
+      [(some {:step :failed :from :review :checked checked})
+       (ok [:reviewing (try (review state n checked))])]
+      [_ (err {:kind :no-run :message (str "run " n " didn't fail at its review: nothing to review again")})]))
 
   (on (merge state n) :write :update
     "Merges ready run n's branch into the branch checked out in its repository, only as a fast-forward, then removes the run's worktree and branch: (ok branch); git's error if your branch moved on or your changes are in the way, and (err {:kind :no-run}) unless run n is ready."
