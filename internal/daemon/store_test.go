@@ -743,6 +743,63 @@ func TestResultsUntilHandled(t *testing.T) {
 	}
 }
 
+// A job the review gate held keeps the id its sender got, from held to
+// ended: one answer, which whiff wait finds after a restart. One accepted
+// as whiff died is :interrupted :unknown.
+func TestHeldJobKeepsItsID(t *testing.T) {
+	dir := tempDir(t)
+	file := filepath.Join(dir, "touched")
+	writeServices(t, dir, nil)
+	done := start(t, dir)
+	c := dial(t, dir)
+	agent := dial(t, dir)
+	agent.Agent = true
+	reviewer := dial(t, dir)
+	if _, err := reviewer.Sub("review/pending"); err != nil {
+		t.Fatal(err)
+	}
+	r, err := agent.Message("call", "jobs/run", `[["touch" "`+file+`"]]`, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held := pendingOf(t, r.Value)
+	if r, err := c.Message("accept", "", "["+held+"]", dir); err != nil || pendingOf(t, r.Value) != held {
+		t.Fatalf("accept = %+v %v, want job %s's pending", r, err, held)
+	}
+	want := `(ok {:exit 0 :stderr "" :stdout ""})`
+	if r, err := agent.Message("wait", "", "["+held+"]", dir); err != nil || r.Value != want {
+		t.Errorf("wait %s = %+v %v, want %s", held, r, err, want)
+	}
+	if _, err := os.Stat(file); err != nil {
+		t.Errorf("the job didn't run: %v", err)
+	}
+	h, err := historyOf(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(h, "client "+held+" "); n != 1 {
+		t.Errorf("%d answers to %s, want 1:\n%s", n, held, h)
+	}
+	stopDaemon(t, c, done)
+
+	withDB(t, dir, func(db *bbolt.DB) {
+		if err := db.Update(func(tx *bbolt.Tx) error {
+			return tx.Bucket(tasksBucket).Put(idKey(600), []byte(`{:id 600 :origin :agent :cwd "/" :status :accepted :what ":notes/add"}`))
+		}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	start(t, dir)
+	c = dial(t, dir)
+	if r, err := c.Message("wait", "", "["+held+"]", dir); err != nil || r.Value != want {
+		t.Errorf("wait %s after a restart = %+v %v", held, r, err)
+	}
+	r, err = c.Message("wait", "", "[600]", dir)
+	if err != nil || !strings.Contains(r.Value, ":kind :interrupted") || !strings.Contains(r.Value, ":outcome :unknown") {
+		t.Errorf("wait for one accepted as whiff died = %+v %v", r, err)
+	}
+}
+
 func TestStoredJob(t *testing.T) {
 	j := &job{ticket: ticket{id: 7, from: "plan", dir: "/x", user: true, session: "agent/2"}, cmd: puff.NewVector(puff.String("go")), pid: 42}
 	got, err := storedJob(7, puff.Print(j.stored()))

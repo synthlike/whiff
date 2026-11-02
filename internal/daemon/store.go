@@ -243,6 +243,35 @@ func (st *state) forget(a *asked) {
 	}
 }
 
+// acceptHeld takes the message id out of :review's inbox and stores it as
+// an accepted task, in one transaction: so if whiff dies before it ends,
+// its sender hears :interrupted :unknown, rather than nothing, and it isn't
+// held again. nil if it isn't there; the error leaves it held.
+func (st *state) acceptHeld(id int64) (*asked, error) {
+	i := slices.IndexFunc(st.asked, func(a *asked) bool { return a.id == id && a.addr == "review" })
+	if i < 0 {
+		return nil, nil
+	}
+	a := st.asked[i]
+	m, err := puff.NewMap(append(ticketEntries(a.ticket),
+		puff.Entry{Key: puff.Keyword("status"), Val: puff.Keyword("accepted")},
+		puff.Entry{Key: puff.Keyword("what"), Val: puff.String(a.what())})...)
+	if err != nil {
+		return nil, err
+	}
+	err = st.db.Update(func(tx *bbolt.Tx) error {
+		if err := tx.Bucket(inboxBucket).Delete(idKey(id)); err != nil {
+			return err
+		}
+		return tx.Bucket(tasksBucket).Put(idKey(id), []byte(puff.Print(m)))
+	})
+	if err != nil {
+		return nil, err
+	}
+	st.asked = slices.Delete(st.asked, i, i+1)
+	return a, nil
+}
+
 // load reads what was stored into a new state: the inboxes, the timers, and
 // the jobs whiff lost, and the last id, which is at least the last id in the
 // inboxes and tasks. What it can't read stays stored, and noted, rather than
@@ -286,6 +315,10 @@ func (st *state) load() {
 			var status puff.Keyword
 			if err == nil {
 				status, _ = get("status").(puff.Keyword)
+			}
+			if err == nil && status == "accepted" {
+				st.cut = append(st.cut, storedTicket(id, get))
+				return nil
 			}
 			if err == nil && status != "ended" {
 				var j *job
@@ -355,6 +388,10 @@ func (d *daemon) resume() {
 			st.publish(jobDone(j, r))
 		}
 		st.lost = nil
+		for _, t := range st.cut {
+			d.answer(st, t, "review", failed("interrupted", "unknown", "task %d was accepted as whiff died: whether it happened is unknown", t.id))
+		}
+		st.cut = nil
 		for _, a := range st.asked {
 			if a.expires > 0 {
 				d.expireAfter(a, time.Until(a.at.Add(a.expires)))

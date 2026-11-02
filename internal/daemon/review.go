@@ -144,8 +144,12 @@ func (st *state) reviewing() bool {
 func (d *daemon) accept(ctx context.Context, chain []string, id int64) (puff.Value, error) {
 	var a *asked
 	var next int64
-	d.do(func(st *state) { a, next = st.take("review", id), st.msgID() })
-	if a == nil {
+	var stored error
+	d.do(func(st *state) { a, stored = st.acceptHeld(id); next = st.msgID() })
+	switch {
+	case stored != nil:
+		return puff.Errorf("store", "message %d stays held: it couldn't be stored as accepted: %v", id, stored), nil
+	case a == nil:
 		return puff.Errorf("no-id", "no message %d waits for review", id), nil
 	}
 	if a.held == nil {
@@ -157,7 +161,7 @@ func (d *daemon) accept(ctx context.Context, chain []string, id int64) (puff.Val
 		return r, ctx.Err()
 	}
 	m := *a.held
-	m.id, m.cause = next, a.msg
+	m.id, m.cause, m.held = next, a.msg, a.id
 	m.gate = fmt.Sprintf("accepted %d", a.id)
 	if m.topic != "" {
 		m.reviewed = true
@@ -219,14 +223,17 @@ func (d *daemon) reject(id int64, reason string) puff.Value {
 }
 
 // reviewed answers a's sender with result, and publishes {:id :result} on
-// :review/done.
+// :review/done. A job that a started kept a's id, so it is the job's
+// pending, and the job answers it when it ends.
 func (d *daemon) reviewed(a *asked, result puff.Value) {
 	done, _ := puff.NewMap(
 		puff.Entry{Key: puff.Keyword("id"), Val: puff.Int(a.id)},
 		puff.Entry{Key: puff.Keyword("result"), Val: result},
 	)
 	d.do(func(st *state) {
-		d.answer(st, a.ticket, a.to, result)
+		if id, ok := pendingID(result); !ok || id != a.id {
+			d.answer(st, a.ticket, a.to, result)
+		}
 		st.publish(message{cause: a.msg, from: "review", topic: "review/done", args: puff.Print(puff.NewVector(done)), user: a.user})
 	})
 }

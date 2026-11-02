@@ -57,6 +57,9 @@ type message struct {
 	// task is the task whose result a whiff/done is, for a service that
 	// marks it handled once it has handled it; 0 for anything else.
 	task int64
+	// held is the id m waited under in :review's inbox, for a message you
+	// accepted: a job it starts keeps it, so its sender has one id.
+	held int64
 }
 
 // origin is :user or :agent, the origin of the chain a message belongs to.
@@ -117,6 +120,7 @@ type state struct {
 	timers  []*timer   // what load read, until resume takes it up
 	lost    []*job     // what load read, until resume takes it up
 	owed    []answered // results for services that aren't loaded, until they are
+	cut     []ticket   // what load read, until resume takes it up: accepted as whiff went
 	jobs    map[int64]*job
 	nextID  int64                       // the last id given to a message answered later, or a job
 	lastMsg int64                       // the last id given to a message or an eval in history: see msgID

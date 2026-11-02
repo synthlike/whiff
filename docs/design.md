@@ -296,10 +296,13 @@ stream.
   new chain, as message ids in history begin again with each daemon. Its
   `:expires` counts from when it arrived. What waits for an address that
   isn't loaded stays until it is, or until you reply, and history says so.
-- Replying, accepting and firing a timer aren't one transaction yet: a
-  message leaves the store before it is acted on. If whiff dies between the
-  two, your answer is lost, and an accepted write or a due timer doesn't
-  happen rather than happening twice.
+- Replying and firing a timer aren't one transaction yet: a message leaves
+  the store before it is acted on. If whiff dies between the two, your
+  answer is lost, and a due timer doesn't fire rather than firing twice. A
+  message you accept is stored as accepted as it leaves the review queue,
+  so if whiff dies before it ends, its sender hears `(err {:kind
+  :interrupted :outcome :unknown})`. A job you accept keeps the id its
+  sender already has.
 - A call waits 5s; anything longer is a job or an ask.
 - No calendar maths in puff: `1d` is 24 hours.
 - One machine. Peers over SSH are planned for v0.8.
