@@ -74,6 +74,8 @@ func (d *daemon) jobsService() *service {
 				doc: "The running jobs, each {:id :cmd :cwd :from}."},
 			"cancel": {params: []string{"id"}, mark: puff.MarkWrite, marked: true, native: d.cancelJob,
 				doc: "Kill job id and everything it started."},
+			"process": {params: []string{"id"}, mark: puff.MarkRead, marked: true, native: d.jobProcess,
+				doc: "(some pid), the process group job id may still run in: while it runs, and after whiff died while it ran, while its result's :pid is there; else (none). Retry its write only once it's (none)."},
 		},
 		subs: map[string]subscriber{}, code: map[string][]*puff.Form{},
 		mailbox: make(chan message, mailboxSize), quit: make(chan struct{}), done: make(chan struct{})}
@@ -253,14 +255,19 @@ func (j *job) again(r puff.Value) bool {
 
 // errKind is the :kind of r, an (err e); "" for anything else.
 func errKind(r puff.Value) string {
+	k, _ := errField(r, "kind").(puff.Keyword)
+	return string(k)
+}
+
+// errField is e's field key, for r an (err e); nil for anything else.
+func errField(r puff.Value, key string) puff.Value {
 	t, ok := r.(puff.Tag)
 	if !ok || t.Name() != "err" || t.Len() != 1 {
-		return ""
+		return nil
 	}
 	e, _ := t.At(0).(puff.Map)
-	k, _ := e.Get(puff.Keyword("kind"))
-	s, _ := k.(puff.Keyword)
-	return string(s)
+	v, _ := e.Get(puff.Keyword(key))
+	return v
 }
 
 // await waits for j's attempt p, and each one after it, then answers j's
@@ -385,8 +392,37 @@ func lost(j *job) puff.Value {
 }
 
 // mayRun says whether j's last process group may still run.
-func (j *job) mayRun() bool {
-	return j.pid > 1 && !errors.Is(syscall.Kill(-j.pid, 0), syscall.ESRCH)
+func (j *job) mayRun() bool { return groupThere(j.pid) }
+
+// groupThere says whether process group pid is there.
+func groupThere(pid int) bool {
+	return pid > 1 && !errors.Is(syscall.Kill(-pid, 0), syscall.ESRCH)
+}
+
+func (d *daemon) jobProcess(_ message, args []puff.Value) (puff.Value, error) {
+	id, ok := args[0].(puff.Int)
+	if !ok {
+		return nil, fmt.Errorf("want a job id, got %s", puff.Print(args[0]))
+	}
+	var pid int
+	var err error
+	d.do(func(st *state) {
+		if j := st.jobs[int64(id)]; j != nil {
+			pid = j.pid
+			return
+		}
+		var r puff.Value
+		_, _, r, err = storedResult(st.db, int64(id))
+		n, _ := errField(r, "pid").(puff.Int)
+		pid = int(n)
+	})
+	switch {
+	case err != nil:
+		return puff.Errorf("store", "%v", err), nil
+	case groupThere(pid):
+		return puff.Ok(puff.Some(puff.Int(pid))), nil
+	}
+	return puff.Ok(puff.None()), nil
 }
 
 func (d *daemon) listJobs(message, []puff.Value) (puff.Value, error) {

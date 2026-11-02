@@ -285,7 +285,9 @@ stream.
   the job's real answer if it finished just then. After a crash whiff can't
   know how far a job got: `:outcome :unknown`, with its `:pid` if that
   process group may still run. whiff leaves it, as a pid can be reused, so
-  you may have one to kill. Neither outcome undoes what the job did. A job
+  you may have one to kill; `:jobs/process id` says while it may still run,
+  and pipeline's Retry refuses until it doesn't, so two devs never share a
+  worktree. Neither outcome undoes what the job did. A job
   with `:retry n` runs again instead, under its id, up to n times, after a
   timeout, a stop or a crash, but only if it is `:read` or says
   `:idempotent #t`, and never while its process group may still run, nor
