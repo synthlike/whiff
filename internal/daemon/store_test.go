@@ -312,6 +312,40 @@ func TestStoredAsked(t *testing.T) {
 	}
 }
 
+// A message leaves the stored inbox only as its answer is stored, in one
+// transaction: taken but not answered, it is still there for a restart.
+func TestAnswerLeavesInbox(t *testing.T) {
+	dir := tempDir(t)
+	db, err := openStore(filepath.Join(dir, "services"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	st := &state{db: db}
+	a := &asked{ticket: ticket{id: 7, from: "asker", user: true}, addr: "box", fn: "q", args: puff.NewVector(), at: time.Now()}
+	if err := st.keep(a); err != nil {
+		t.Fatal(err)
+	}
+	st.asked = []*asked{a}
+	stored := func() bool {
+		var found bool
+		db.View(func(tx *bbolt.Tx) error {
+			found = tx.Bucket(inboxBucket).Get(idKey(7)) != nil
+			return nil
+		})
+		return found
+	}
+	if st.take("box", 7) != a || !stored() {
+		t.Fatal("taken, it is no longer stored before it is answered")
+	}
+	if err := endTask(db, a.ticket, "box", puff.Done, false); err != nil {
+		t.Fatal(err)
+	}
+	if stored() {
+		t.Error("answered, it is still stored in the inbox")
+	}
+}
+
 func TestTrialsAreNotStored(t *testing.T) {
 	if (&asked{addr: "try/1"}).durable() {
 		t.Error("a trial's inbox is durable")

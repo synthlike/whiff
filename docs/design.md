@@ -302,9 +302,11 @@ stream.
   new chain, as message ids in history begin again with each daemon. Its
   `:expires` counts from when it arrived. What waits for an address that
   isn't loaded stays until it is, or until you reply, and history says so.
-- Replying and firing a timer aren't one transaction yet: a message leaves
-  the store before it is acted on. If whiff dies between the two, your
-  answer is lost, and a due timer doesn't fire rather than firing twice. A
+- A message leaves its stored inbox in the transaction that stores its
+  answer, whether a reply, a reject, a cancel or its expiry: if whiff dies
+  before that, it is back in the inbox. Firing a timer isn't one
+  transaction yet: it leaves the store before its message is handled, so if
+  whiff dies between the two, it doesn't fire rather than firing twice. A
   message you accept is stored as accepted as it leaves the review queue,
   so if whiff dies before it ends, its sender hears `(err {:kind
   :interrupted :outcome :unknown})`. A job you accept keeps the id its
