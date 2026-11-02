@@ -1,0 +1,88 @@
+; check: a test of the shop's API in plain puff, no whiff needed:
+;   puff examples/shop/check.puff                        ; http://localhost:8080
+;   puff examples/shop/check.puff http://localhost:9090  ; or another
+;   puff -t examples/shop/check.puff                     ; its own tests
+; It prints a line per case and exits 0 if each passed, 1 if not.
+;
+; The cases are data: a request, [method path body], and what the response
+; must have: a :status, its :text, or fields of its :json, at any depth. A
+; case can :save a field of the JSON it got, and a later case's path can be
+; a function of what was saved: read back the order just made.
+
+(def cases
+  [{:name "it is healthy" :req [:get "/health"] :want {:status 200 :text "ok\n"}}
+   {:name "an order is made" :req [:post "/orders" {:item "tea" :qty 2}]
+    :want {:status 201 :json {:item "tea" :qty 2}} :save :id}
+   {:name "it reads back" :req [:get (fn (saved) (str "/orders/" (map/get-or saved :id 0)))]
+    :want {:status 200 :json {:item "tea" :qty 2}}}
+   {:name "an order nobody made is 404" :req [:get "/orders/999999"] :want {:status 404}}
+   {:name "an empty order is refused" :req [:post "/orders" {:item "" :qty 0}] :want {:status 400}}])
+
+; has? is whether got has want: each field of a map, at any depth; else
+; the same value.
+(def (has? got want)
+  (if (and (= (value/type want) :map) (= (value/type got) :map))
+    (vector/all? (map/entries want)
+      (fn ([k w]) (match (map/get got k) [(some g) (has? g w)] [(none) #f])))
+    (= got want)))
+
+(test "a response has a want's fields, at any depth, and no others matter"
+  (= [(has? {:status 201 :json {:id 4 :item "tea"}} {:status 201 :json {:item "tea"}})
+      (has? {:status 201 :json {:id 4}} {:json {:item "tea"}})
+      (has? {:status 404} {:status 200})]
+    [#t #f #f]))
+
+; seen is an HTTP response as a case looks at it: {:status :text}, and
+; :json if the text is JSON.
+(def (seen r)
+  (match r
+    [(ok {:status s :body b})
+     (let [m {:status s :text b}]
+       (ok (match (json/parse b) [(ok j) (map/set m :json j)] [_ m])))]
+    [e e]))
+
+(test "a JSON body is read; any other is text"
+  (= [(seen (ok {:status 200 :body "{\"id\": 1}" :headers {}})) (seen (ok {:status 200 :body "ok\n" :headers {}}))]
+    [(ok {:status 200 :text "{\"id\": 1}" :json {:id 1}}) (ok {:status 200 :text "ok\n"})]))
+
+; request sends req to base: a path that is a function gets saved.
+(def (request base req saved)
+  (let [[method path & body] req
+        path (if (= (value/type path) :function) (path saved) path)
+        opts (match body
+               [[b] {:method method :headers {"content-type" "application/json"} :body (json/to-string b)}]
+               [_ {:method method}])]
+    (seen (http/request (str base path) opts))))
+
+; run-case is case c's result, {:name :pass :got}, and saved with what it
+; saves.
+(def (run-case base saved c)
+  (let [{:name name :req req :want want} c
+        got (request base req saved)
+        pass (match got [(ok g) (has? g want)] [_ #f])
+        saved (match [(map/get c :save) got]
+                [[(some k) (ok {:json j})] (map/set saved k (map/get-or j k 0))]
+                [_ saved])]
+    [{:name name :pass pass :got got} saved]))
+
+; rising is whether five new orders get ids that only go up: no two alike,
+; none reused.
+(def (rising base)
+  (let [ids (vector/map (vector/range 0 5)
+              (fn (_) (match (request base [:post "/orders" {:item "x" :qty 1}] {}) [(ok {:json {:id id}}) id] [_ 0])))]
+    {:name "five orders get rising ids" :pass (vector/all? (vector/range 1 5) (fn (i) (< (unwrap (vector/get ids (- i 1))) (unwrap (vector/get ids i)))))
+     :got (ok ids)}))
+
+(def (line {:name name :pass pass :got got})
+  (if pass (str "✓ " name) (str "✗ " name ": got " (value/to-string got))))
+
+(def (main args)
+  (let [base (match args [[b] b] [_ "http://localhost:8080"])
+        [results _] (vector/reduce cases [[] {}]
+                      (fn ([rs saved] c) (let [[r s] (run-case base saved c)] [(vector/append rs r) s])))
+        results (vector/append results (rising base))
+        failed (vector/filter results (fn ({:pass p}) (not p)))]
+    (do (io/println (string/join (vector/map results line) "\n"))
+      (if (vector/empty? failed)
+        (ok (vector/length results))
+        (err {:kind :failed :message (str (vector/length failed) " of " (vector/length results) " cases failed")})))))

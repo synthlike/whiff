@@ -23,6 +23,27 @@ func TestWhiffFunctions(t *testing.T) {
 	}
 }
 
+// TestExamples runs the tests of the plain puff files in examples, as puff
+// -t does; services there are whiff's to test.
+func TestExamples(t *testing.T) {
+	var files []string
+	for _, pattern := range []string{"*.puff", "*/*.puff"} {
+		found, _ := filepath.Glob(filepath.Join("..", "..", "examples", pattern))
+		for _, f := range found {
+			if src, err := os.ReadFile(f); err == nil && !strings.Contains(string(src), "(service ") {
+				files = append(files, f)
+			}
+		}
+	}
+	if len(files) == 0 {
+		t.Fatal("no examples")
+	}
+	var stdout, stderr strings.Builder
+	if code := run(append([]string{"-t"}, files...), nil, &stdout, &stderr, false, nil); code != 0 {
+		t.Errorf("puff -t %v = %d\n%s%s", files, code, stdout.String(), stderr.String())
+	}
+}
+
 func TestRun(t *testing.T) {
 	dir := t.TempDir()
 	write := func(name, src string) string {
