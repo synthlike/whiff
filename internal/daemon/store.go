@@ -50,29 +50,71 @@ var tasksBucket = []byte("tasks")
 const resultKept = 30 * 24 * time.Hour
 
 // openStore opens whiff.db, next to the services directory (so
-// ~/.whiff/whiff.db), with its buckets. Only the daemon opens it.
+// ~/.whiff/whiff.db), with its buckets. Only the daemon opens it. It
+// deletes history older than historyKept, then compacts whiff.db if that
+// left much of it free.
 func openStore(services string) (*bbolt.DB, error) {
 	dir := filepath.Dir(services)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	db, err := bbolt.Open(filepath.Join(dir, "whiff.db"), 0o600, &bbolt.Options{Timeout: storeTimeout})
+	path := filepath.Join(dir, "whiff.db")
+	db, err := bbolt.Open(path, 0o600, &bbolt.Options{Timeout: storeTimeout})
 	if err != nil {
 		return nil, err
 	}
 	err = db.Update(func(tx *bbolt.Tx) error {
-		for _, b := range [][]byte{stateBucket, metaBucket, inboxBucket, timersBucket, tasksBucket} {
+		for _, b := range [][]byte{stateBucket, metaBucket, inboxBucket, timersBucket, tasksBucket, historyBucket} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err
 			}
 		}
-		return nil
+		return pruneHistory(tx, time.Now().Add(-historyKept))
 	})
 	if err != nil {
 		db.Close()
 		return nil, err
 	}
-	return db, nil
+	return compactStore(db)
+}
+
+// compactStore is db, compacted into a new file that takes its place, if a
+// quarter of it or more is free: bbolt reuses free pages but never gives
+// them back. If compacting fails, it is db as it was, and the log says so.
+func compactStore(db *bbolt.DB) (*bbolt.DB, error) {
+	path := db.Path()
+	fi, err := os.Stat(path)
+	if err != nil {
+		return db, nil
+	}
+	s := db.Stats()
+	free := int64(s.FreePageN+s.PendingPageN) * int64(db.Info().PageSize)
+	if fi.Size() < 1<<20 || free*4 < fi.Size() {
+		return db, nil
+	}
+	tmp := path + ".compact"
+	os.Remove(tmp)
+	dst, err := bbolt.Open(tmp, 0o600, nil)
+	if err == nil {
+		err = bbolt.Compact(dst, db, 64<<20)
+		if cerr := dst.Close(); err == nil {
+			err = cerr
+		}
+	}
+	if err != nil {
+		os.Remove(tmp)
+		fmt.Fprintf(os.Stderr, "whiff: whiff.db wasn't compacted: %v\n", err)
+		return db, nil
+	}
+	if err := db.Close(); err != nil {
+		os.Remove(tmp)
+		return nil, err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		fmt.Fprintf(os.Stderr, "whiff: whiff.db wasn't compacted: %v\n", err)
+	}
+	return bbolt.Open(path, 0o600, &bbolt.Options{Timeout: storeTimeout})
 }
 
 // storedState is name's committed state, printed, if it has one.
@@ -283,12 +325,17 @@ func (st *state) acceptHeld(id int64) (*asked, error) {
 	return a, nil
 }
 
-// load reads what was stored into a new state: the inboxes, the timers, and
-// the jobs whiff lost, and the last id, which is at least the last id in the
-// inboxes and tasks. What it can't read stays stored, and noted, rather than
-// being lost. It deletes the results that ended more than resultKept ago.
+// load reads what was stored into a new state: the end of history, the
+// inboxes, the timers, and the jobs whiff lost, and the last id, which is at
+// least the last id in the inboxes and tasks. What it can't read stays
+// stored, and noted, rather than being lost. It deletes the results that
+// ended more than resultKept ago.
 func (st *state) load() {
 	err := st.db.Update(func(tx *bbolt.Tx) error {
+		// First, so what load notes comes after it.
+		if err := st.loadHistory(tx); err != nil {
+			return err
+		}
 		err := tx.Bucket(inboxBucket).ForEach(func(k, v []byte) error {
 			id := int64(binary.BigEndian.Uint64(k))
 			st.nextID = max(st.nextID, id)
@@ -809,14 +856,17 @@ func storedTimer(key []byte, p string) (*timer, error) {
 }
 
 // stored is a as it is stored: as (inbox) shows it, with what a restart
-// needs too. Its cause isn't there: message ids begin again with each
-// daemon, so it could name another's.
+// needs too, and :msg, its id in history, so its answer stays in its chain:
+// message ids go on across restarts.
 func (a *asked) stored() puff.Value {
 	v := a.value().(puff.Map)
 	with := func(key string, val puff.Value) {
 		v, _ = v.With(puff.Keyword(key), val)
 	}
 	with("addr", puff.Keyword(a.addr))
+	if a.msg != 0 {
+		with("msg", puff.Int(a.msg))
+	}
 	if a.session != "" {
 		with("session", puff.Keyword(a.session))
 	}
@@ -868,7 +918,8 @@ func storedAsked(id int64, p string) (*asked, error) {
 	dir, _ := get("cwd").(puff.String)
 	at, _ := get("at").(puff.Time)
 	expires, _ := get("expires").(puff.Duration)
-	a := &asked{ticket: ticket{id: id, from: key("from"), dir: string(dir), user: key("origin") == string(origin(true)), session: key("session")},
+	msg, _ := get("msg").(puff.Int)
+	a := &asked{ticket: ticket{id: id, msg: int64(msg), from: key("from"), dir: string(dir), user: key("origin") == string(origin(true)), session: key("session")},
 		addr: addr, fn: fn, args: args, at: at.Go(), expires: time.Duration(expires)}
 	switch addr {
 	case "me":

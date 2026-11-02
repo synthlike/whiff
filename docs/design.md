@@ -293,16 +293,20 @@ record whiff's own events: a service that failed to load or faulted, a mode
 set or run out. An entry names the one that led to it, which `whiff history
 -c` and sniff show as chains; a timer's message begins a chain of its own,
 keeping its origin, or a service that schedules itself would be one endless
-chain. History is in memory, the last 1000 entries; `whiff history -f` and
-sniff follow it live, with nothing missed between the snapshot and the
-stream.
+chain. History is stored in whiff.db for 30 days; clients get the last
+1000 entries, and `whiff history -f` and sniff follow it live, with
+nothing missed between the snapshot and the stream.
 
 ## Limits, for now
 
-- History is in memory: a restart loses it. Service state, every inbox,
-  `:review`'s queue too, timers, running jobs and results are stored. (v0.6 stores the
-  rest: [tasks.md](tasks.md) is its spec.) What a `whiff try` address holds
-  isn't.
+- History, service state, every inbox, `:review`'s queue too, timers,
+  running jobs and results are stored. What a `whiff try` address holds
+  isn't. History is stored about 100ms after it happens, in batches, so a
+  message never waits for the disk: a crash loses that last moment of it,
+  and if whiff.db falls 10000 entries behind, what doesn't fit isn't
+  stored, and the log says so. It's kept 30 days, deleted at start, and
+  whiff.db is compacted then if a quarter of it is free. Clients get the
+  last 1000 entries.
 - A job isn't resumed. When whiff stops it stops the job, as a cancel or
   timeout does: SIGTERM to its process group, then SIGKILL for what's left
   after 3s, so a server shuts down cleanly. At the next start its sender
@@ -324,10 +328,9 @@ stream.
   has a `:start`, which sets the ones it needs, so a loop doesn't double. A
   one-off timer a service with a `:start` set for itself goes too, and
   history says how many.
-- A message that waited through a restart keeps its origin, sender and
-  session, as ids and agent numbers are never given out twice, but begins a
-  new chain, as message ids in history begin again with each daemon. Its
-  `:expires` counts from when it arrived. What waits for an address that
+- A message that waited through a restart keeps its origin, sender,
+  session and chain, as ids, message ids in history and agent numbers are
+  never given out twice. Its `:expires` counts from when it arrived. What waits for an address that
   isn't loaded stays until it is, or until you reply, and history says so.
 - A message leaves its stored inbox in the transaction that stores its
   answer, whether a reply, a reject, a cancel or its expiry: if whiff dies

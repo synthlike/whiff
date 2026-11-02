@@ -260,7 +260,7 @@ func TestStoredAsked(t *testing.T) {
 		t.Errorf("storedAsked = %+v", a)
 	}
 	if a.msg != 0 {
-		t.Errorf("message ids begin again with a daemon: %+v", a)
+		t.Errorf("a message stored without :msg has history id %d", a.msg)
 	}
 	// Each comes back the way keep stored it.
 	for _, a := range []*asked{
@@ -270,6 +270,7 @@ func TestStoredAsked(t *testing.T) {
 			held: &message{topic: "t/write", args: "[1]", dir: "/x"}},
 		{ticket: ticket{id: 4, dir: "/x"}, addr: "review", fn: "eval", args: puff.NewVector(puff.String("(f)")), at: time.Unix(1, 0), src: "(f)"},
 		{ticket: ticket{id: 5, user: true, dir: "/x"}, addr: "box", fn: "q", args: puff.NewVector(), at: time.Unix(1, 0), expires: time.Hour},
+		{ticket: ticket{id: 6, msg: 41, dir: "/x"}, addr: "box", fn: "q", args: puff.NewVector(), at: time.Unix(1, 0)},
 	} {
 		b, err := storedAsked(a.id, puff.Print(a.stored()))
 		if err != nil {
