@@ -43,4 +43,4 @@ Or try one without installing it: `whiff try services/git.puff status`.
   `restart`, `runs`, `logs :shop/api`, and `view` with Start, Stop, Restart
   and Logs. Starting whiff brings back the ones you wanted up; with
   `:restart #t` one that exits is started again, until its third exit in a
-  minute, which lands in your inbox.
+  minute, which lands in your inbox. See [docs/procs.md](../docs/procs.md).

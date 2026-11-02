@@ -184,30 +184,20 @@ curl localhost:8080/health              # each binds its own port
 whiff call procs/down :shop
 ```
 
-Each process is a job with `:timeout :none`, so `whiff call jobs/list`
-shows them too and `jobs/output` has their output. Stopping one sends its
-process group SIGTERM, so a server shuts down cleanly, then SIGKILL after
-3s; then its `:stop` runs. A container runs in the foreground, and `docker
-run` passes the SIGTERM on to it; one that takes longer is stopped by its
-`:stop`, `docker stop shop-db` for a named container unless you give
-another, such as `docker compose down` for a `docker compose up`.
+A process with `:ready` is `:starting` until its URL answers 2xx or its
+command exits 0, and one with `:after` waits until those it comes after
+are ready. Stopping one sends its process group SIGTERM, then SIGKILL
+after 3s. Starting whiff brings back the ones you wanted up; with
+`:restart #t` one that exits starts again. `up`, `down` and `restart` are
+`:write`, so an agent's calls to them wait for your review; `runs`, `view`
+and `logs` are `:read`.
 
-Processes stop with whiff, and starting whiff brings back the ones you
-wanted up. If whiff died instead, one may still be running: `procs`
-checks `:jobs/process` and leaves it, as starting another would fight it
-for its port, and your inbox says which process group to kill. A
-container still running from before is stopped with its `:stop` and
-started again. With `:restart #t`, one that exits is started again after
-2s; after its third exit in a minute it stays down, and your inbox has
-its last output, with Start and Logs.
-
-`up`, `down` and `restart` are `:write`, so an agent's calls to them wait
-for your review; `runs`, `view` and `logs` are `:read`. A process with
-`:ready` is `:starting` until its URL answers 2xx or its command exits 0,
-and one with `:after` waits until those it comes after are ready; `up
-:shop/web` brings up the db and the api first. `:ready` is checked only
-as a process starts, not as it runs, and whiff doesn't serve or proxy
-HTTP: you reach a server on its own port.
+Because the processes are whiff's, another service can bring the app up
+and test it: [`examples/shop`](../examples/shop) has a Go API on postgres
+and redis, a whiff service that runs an integration test once it is all
+ready and tells you how it went, and the same test as a plain puff
+script for CI. [procs.md](procs.md) has the table's fields, how a
+process goes, crashes and strays, and that example's real run.
 
 ## Work that answers later
 
