@@ -67,6 +67,16 @@ func pending(id int64, format string, args ...any) puff.Value {
 	return puff.NewTag("err", e)
 }
 
+// failed is the (err {:kind kind :outcome outcome}) of a task whiff ended
+// without its answer. outcome is what to read before acting on it:
+// :not-started, so it's safe to send again; :stopped, so what it had done
+// stays done; or :unknown. None says anything was undone.
+func failed(kind, outcome, format string, args ...any) puff.Value {
+	e := puff.Errorf(kind, format, args...).(puff.Tag).At(0).(puff.Map)
+	e, _ = e.With(puff.Keyword("outcome"), puff.Keyword(outcome))
+	return puff.NewTag("err", e)
+}
+
 // ask puts m, for an ask function of s, in s's inbox and returns what its
 // sender gets at once: (err {:kind :pending :id n}), or why it isn't
 // there. An ask with :expires is answered (err {:kind :expired}) once that
@@ -116,7 +126,7 @@ func (d *daemon) expireAfter(a *asked, after time.Duration) {
 		}
 		d.do(func(st *state) {
 			if st.take(a.addr, a.id) != nil {
-				d.answer(st, a.ticket, a.addr, puff.Errorf("expired", ":%s/%s waited longer than %v", a.addr, a.fn, a.expires))
+				d.answer(st, a.ticket, a.addr, failed("expired", "not-started", ":%s/%s waited longer than %v", a.addr, a.fn, a.expires))
 			}
 		})
 	})
@@ -150,22 +160,14 @@ func (st *state) take(addr string, id int64) *asked {
 	return a
 }
 
-// answered is the result a message or job was answered with, by, for its
-// ticket.
-type answered struct {
-	ticket
-	by     string
-	result puff.Value
-}
-
-// answer tells t's sender its result, from by (an address, "" for a
-// client): [:whiff/done id result] in its mailbox if it is a service with
-// an (on (whiff/done id result) ...), else a line in history. Anyone in
-// whiff wait for it gets it too, and so does a wait that comes later.
+// answer stores result as task t's, from by (an address, "" for a client),
+// then tells t's sender: [:whiff/done id result] in its mailbox if it is a
+// service with an (on (whiff/done id result) ...), else a line in history.
+// Anyone in whiff wait for it gets it too, and so does a wait that comes
+// later, after a restart too.
 func (d *daemon) answer(st *state, t ticket, by string, result puff.Value) {
-	st.answers = append(st.answers, answered{t, by, result})
-	if n := len(st.answers) - historySize; n > 0 {
-		st.answers = slices.Delete(st.answers, 0, n)
+	if err := endTask(st.db, t, by, result, true); err != nil {
+		st.note(fmt.Sprintf("task %d's result isn't stored, so a later whiff wait won't find it: %v", t.id, err))
 	}
 	for _, w := range st.waiters[t.id] {
 		w <- result
@@ -214,14 +216,15 @@ func (d *daemon) handOn(by string, id int64, m message) error {
 			}
 			return
 		}
-		for i, a := range slices.Backward(st.answers) {
-			if a.id == id && a.from == by {
-				found = true
-				// Handed on once: by can't hand it on again.
-				st.answers[i].from = m.from
-				d.answer(st, ticket{id: id, msg: m.id, from: m.from, dir: m.dir, user: a.user && m.user, session: sameSession(a.session, m.session)}, a.by, a.result)
-				return
-			}
+		// It ended: stored as m's sender's, by can't hand it on again.
+		was, answeredBy, r, err := storedResult(st.db, id)
+		if err != nil {
+			found, stored = true, err
+			return
+		}
+		if r != nil && was.from == by {
+			found = true
+			d.answer(st, ticket{id: id, msg: m.id, from: m.from, dir: m.dir, user: was.user && m.user, session: sameSession(was.session, m.session)}, answeredBy, r)
 		}
 	})
 	if !found {
@@ -343,24 +346,24 @@ func (d *daemon) inboxText(addr string) string {
 	return b.String()
 }
 
-// wait returns the answer to the message or job id, waiting for it while
-// it is pending, or an (err {:kind :no-id}) if it is neither pending nor
-// among the latest answers. The error is for ctx ending.
+// wait returns the result of task id, waiting for it while it is pending,
+// or an (err {:kind :no-id}) if it is neither pending nor stored: it never
+// was, or it ended more than resultKept ago. The error is for ctx ending.
 func (d *daemon) wait(ctx context.Context, id int64) (puff.Value, error) {
 	var res puff.Value
 	w := make(chan puff.Value, 1)
 	d.do(func(st *state) {
-		for _, a := range slices.Backward(st.answers) {
-			if a.id == id {
-				res = a.result
-				return
-			}
+		_, _, r, err := storedResult(st.db, id)
+		switch {
+		case err != nil:
+			res = puff.Errorf("store", "%v", err)
+		case r != nil:
+			res = r
+		case st.jobs[id] == nil && !slices.ContainsFunc(st.asked, func(a *asked) bool { return a.id == id }):
+			res = puff.Errorf("no-id", "no task %d is pending, or ended in the last 30 days", id)
+		default:
+			st.waiters[id] = append(st.waiters[id], w)
 		}
-		if st.jobs[id] == nil && !slices.ContainsFunc(st.asked, func(a *asked) bool { return a.id == id }) {
-			res = puff.Errorf("no-id", "no message or job %d is pending or answered lately", id)
-			return
-		}
-		st.waiters[id] = append(st.waiters[id], w)
 	})
 	if res != nil {
 		return res, nil

@@ -58,9 +58,12 @@ Some answers take longer than a call waits: a job, a question to a person,
 a message the review gate holds. Those answer **pending** at once, `(err
 {:kind :pending :id 12})`, and the real answer comes later as a message,
 `[:whiff/done 12 result]`, to the sender's `(on (whiff/done id r) ...)`, or
-into history for a client, which picks it up with `whiff wait 12`. A handler
-can pass its caller a pending it got (`hand-on`), so the caller waits for the
-job instead of the handler.
+into history for a client, which picks it up with `whiff wait 12`. whiff
+stores the result before anyone is told and keeps it 30 days, so a wait
+finds it after a restart too. A failure whiff gives says in `:outcome` what
+happened: `:not-started`, `:stopped` or `:unknown`. A handler can pass its
+caller a pending it got (`hand-on`), so the caller waits for the job
+instead of the handler.
 
 An **ask** is a function with no body, `(ask (approve text) "...")`: its
 messages wait in the address's inbox until something replies. `:me` is your
@@ -267,7 +270,7 @@ stream.
 ## Limits, for now
 
 - History is in memory: a restart loses it. Service state, every inbox,
-  `:review`'s queue too, timers and running jobs are stored. (v0.6 stores the
+  `:review`'s queue too, timers, running jobs and results are stored. (v0.6 stores the
   rest: [tasks.md](tasks.md) is its spec.) What a `whiff try` address holds
   isn't.
 - A job isn't resumed, nor run again. When whiff stops it kills the job, and
@@ -293,8 +296,6 @@ stream.
   message leaves the store before it is acted on. If whiff dies between the
   two, your answer is lost, and an accepted write or a due timer doesn't
   happen rather than happening twice.
-- `whiff wait` finds an answer among the last 1000, like history: a busy
-  daemon can push one out before a client that went away asks for it.
 - A call waits 5s; anything longer is a job or an ask.
 - No calendar maths in puff: `1d` is 24 hours.
 - One machine. Peers over SSH are planned for v0.8.

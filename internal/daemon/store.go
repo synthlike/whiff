@@ -41,9 +41,13 @@ var inboxBucket = []byte("inbox")
 // it is due.
 var timersBucket = []byte("timers")
 
-// jobsBucket holds each job until its sender has its answer, printed, by id.
-// One found at start was running when whiff went: see resume.
-var jobsBucket = []byte("jobs")
+// tasksBucket holds every task, printed, by id: a job as it runs, then each
+// task's result from when it ends until resultKept has passed. One found
+// running at start was running when whiff went: see resume.
+var tasksBucket = []byte("tasks")
+
+// resultKept is how long a task's result is kept after it ended.
+const resultKept = 30 * 24 * time.Hour
 
 // openStore opens whiff.db, next to the services directory (so
 // ~/.whiff/whiff.db), with its buckets. Only the daemon opens it.
@@ -57,7 +61,7 @@ func openStore(services string) (*bbolt.DB, error) {
 		return nil, err
 	}
 	err = db.Update(func(tx *bbolt.Tx) error {
-		for _, b := range [][]byte{stateBucket, metaBucket, inboxBucket, timersBucket, jobsBucket} {
+		for _, b := range [][]byte{stateBucket, metaBucket, inboxBucket, timersBucket, tasksBucket} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err
 			}
@@ -202,10 +206,10 @@ func (st *state) forget(a *asked) {
 
 // load reads what was stored into a new state: the inboxes, the timers, and
 // the jobs whiff lost, and the last id, which is at least the last id in the
-// inboxes and jobs. What it can't read stays stored, and noted, rather than
-// being lost.
+// inboxes and tasks. What it can't read stays stored, and noted, rather than
+// being lost. It deletes the results that ended more than resultKept ago.
 func (st *state) load() {
-	err := st.db.View(func(tx *bbolt.Tx) error {
+	err := st.db.Update(func(tx *bbolt.Tx) error {
 		err := tx.Bucket(inboxBucket).ForEach(func(k, v []byte) error {
 			id := int64(binary.BigEndian.Uint64(k))
 			st.nextID = max(st.nextID, id)
@@ -233,12 +237,29 @@ func (st *state) load() {
 		if err != nil {
 			return err
 		}
-		err = tx.Bucket(jobsBucket).ForEach(func(k, v []byte) error {
+		tasks := tx.Bucket(tasksBucket)
+		cutoff := time.Now().Add(-resultKept)
+		var old [][]byte
+		err = tasks.ForEach(func(k, v []byte) error {
 			id := int64(binary.BigEndian.Uint64(k))
 			st.nextID = max(st.nextID, id)
+			get, err := fields(string(v))
+			if err == nil {
+				status, _ := get("status").(puff.Keyword)
+				told, _ := get("told").(puff.Bool)
+				ended, _ := get("ended").(puff.Time)
+				switch {
+				case status == "ended" && bool(told) && ended.Go().Before(cutoff):
+					old = append(old, slices.Clone(k))
+					return nil
+				case status == "ended" && bool(told):
+					return nil
+				}
+			}
+			// It was running, or it ended as whiff stopped: a job either way.
 			j, err := storedJob(id, string(v))
 			if err != nil {
-				st.note(fmt.Sprintf("job %d can't be read, and stays stored: %v", id, err))
+				st.note(fmt.Sprintf("task %d can't be read, and stays stored: %v", id, err))
 				return nil
 			}
 			st.lost = append(st.lost, j)
@@ -246,6 +267,11 @@ func (st *state) load() {
 		})
 		if err != nil {
 			return err
+		}
+		for _, k := range old {
+			if err := tasks.Delete(k); err != nil {
+				return err
+			}
 		}
 		n, err := storedInt(tx, nextIDKey)
 		st.nextID = max(st.nextID, n)
@@ -272,7 +298,6 @@ func (d *daemon) resume() {
 				r = lost(j)
 			}
 			d.answer(st, j.ticket, "jobs", r)
-			d.forgetJob(j)
 			st.publish(jobDone(j, r))
 		}
 		st.lost = nil
@@ -320,25 +345,121 @@ type timer struct {
 // own says whether t is a service's timer to itself.
 func (t *timer) own() bool { return t.addr == t.m.from }
 
-// keepJob stores j as it is now.
+// keepJob stores j, running, as it is now.
 func (d *daemon) keepJob(j *job) error {
 	return d.db.Update(func(tx *bbolt.Tx) error {
-		return tx.Bucket(jobsBucket).Put(idKey(j.id), []byte(puff.Print(j.stored())))
+		return tx.Bucket(tasksBucket).Put(idKey(j.id), []byte(puff.Print(j.stored())))
 	})
 }
 
-// forgetJob deletes j, whose sender has its answer. One that can't be
-// deleted is reported as interrupted after a restart, so it is noted; a
-// sender that isn't waiting for its id ignores that.
-func (d *daemon) forgetJob(j *job) {
-	err := d.db.Update(func(tx *bbolt.Tx) error { return tx.Bucket(jobsBucket).Delete(idKey(j.id)) })
-	if err != nil {
-		fmt.Fprintf(d.log, "whiff: job %d stays stored: %v\n", j.id, err)
-	}
+// endKeys are what endTask writes of a task, over what was stored of it.
+var endKeys = []string{"id", "from", "origin", "cwd", "session", "status", "ended", "by", "result", "told"}
+
+// endTask stores r as the result of task t, answered by by, over what was
+// stored of it as it ran, such as a job's :cmd. told is whether t's owner
+// is told now: not if whiff is stopping. The owner is t's, so a task handed
+// on is stored as the new owner's.
+func endTask(db *bbolt.DB, t ticket, by string, r puff.Value, told bool) error {
+	return db.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket(tasksBucket)
+		var es []puff.Entry
+		if p := b.Get(idKey(t.id)); p != nil {
+			if v, err := puff.ReadValue(string(p)); err == nil {
+				was, _ := v.(puff.Map)
+				for i := range was.Len() {
+					if e := was.Entry(i); !slices.ContainsFunc(endKeys, func(k string) bool { return puff.Equal(e.Key, puff.Keyword(k)) }) {
+						es = append(es, e)
+					}
+				}
+			}
+		}
+		es = append(es, ticketEntries(t)...)
+		es = append(es,
+			puff.Entry{Key: puff.Keyword("status"), Val: puff.Keyword("ended")},
+			puff.Entry{Key: puff.Keyword("ended"), Val: puff.NewTime(time.Now())},
+		)
+		if by != "" {
+			es = append(es, puff.Entry{Key: puff.Keyword("by"), Val: puff.Keyword(by)})
+		}
+		es = append(es,
+			puff.Entry{Key: puff.Keyword("result"), Val: r},
+			puff.Entry{Key: puff.Keyword("told"), Val: puff.Bool(told)},
+		)
+		m, err := puff.NewMap(es...)
+		if err != nil {
+			return err
+		}
+		return b.Put(idKey(t.id), []byte(puff.Print(m)))
+	})
 }
 
-// stored is j as it is stored: as :jobs/list shows it, with what a restart
-// needs too. As for a message, its cause isn't there.
+// storedResult is the owner of task id, who answered it and its result, if
+// it has ended and is still kept; r is nil if it hasn't, or isn't.
+func storedResult(db *bbolt.DB, id int64) (t ticket, by string, r puff.Value, err error) {
+	err = db.View(func(tx *bbolt.Tx) error {
+		p := tx.Bucket(tasksBucket).Get(idKey(id))
+		if p == nil {
+			return nil
+		}
+		get, err := fields(string(p))
+		if err != nil {
+			return fmt.Errorf("task %d can't be read: %v", id, err)
+		}
+		if status, _ := get("status").(puff.Keyword); status != "ended" {
+			return nil
+		}
+		b, _ := get("by").(puff.Keyword)
+		t, by, r = storedTicket(id, get), string(b), get("result")
+		return nil
+	})
+	return t, by, r, err
+}
+
+// ticketEntries is t as a task stores it: {:id :from :origin :cwd :session},
+// without :from for a client nor :session outside one.
+func ticketEntries(t ticket) []puff.Entry {
+	es := []puff.Entry{{Key: puff.Keyword("id"), Val: puff.Int(t.id)}}
+	if t.from != "" {
+		es = append(es, puff.Entry{Key: puff.Keyword("from"), Val: puff.Keyword(t.from)})
+	}
+	es = append(es,
+		puff.Entry{Key: puff.Keyword("origin"), Val: origin(t.user)},
+		puff.Entry{Key: puff.Keyword("cwd"), Val: puff.String(t.dir)},
+	)
+	if t.session != "" {
+		es = append(es, puff.Entry{Key: puff.Keyword("session"), Val: puff.Keyword(t.session)})
+	}
+	return es
+}
+
+// storedTicket is the ticket of task id, from get, its stored fields. Only
+// a stored :user is the user's. As for a message, its cause isn't there.
+func storedTicket(id int64, get func(string) puff.Value) ticket {
+	from, _ := get("from").(puff.Keyword)
+	org, _ := get("origin").(puff.Keyword)
+	session, _ := get("session").(puff.Keyword)
+	dir, _ := get("cwd").(puff.String)
+	return ticket{id: id, from: string(from), dir: string(dir), user: org == origin(true), session: string(session)}
+}
+
+// fields is the printed map p as a lookup: nil for a key it hasn't.
+func fields(p string) (func(string) puff.Value, error) {
+	v, err := puff.ReadValue(p)
+	if err != nil {
+		return nil, err
+	}
+	m, ok := v.(puff.Map)
+	if !ok {
+		return nil, fmt.Errorf("want a map, got %s", p)
+	}
+	return func(k string) puff.Value {
+		v, _ := m.Get(puff.Keyword(k))
+		return v
+	}, nil
+}
+
+// stored is j as it is stored while it runs: as :jobs/list shows it, with
+// what a restart needs too.
 func (j *job) stored() puff.Value {
 	v := j.value().(puff.Map)
 	with := func(key string, val puff.Value) {
@@ -349,38 +470,23 @@ func (j *job) stored() puff.Value {
 	if j.session != "" {
 		with("session", puff.Keyword(j.session))
 	}
-	if j.result != nil {
-		with("result", j.result)
-	}
+	with("status", puff.Keyword("running"))
 	return v
 }
 
-// storedJob is the job id from p, as stored printed it. Only a stored :user
-// is the user's.
+// storedJob is the job id from p, as stored printed it: with the :result it
+// had when whiff stopped, if any.
 func storedJob(id int64, p string) (*job, error) {
-	v, err := puff.ReadValue(p)
+	get, err := fields(p)
 	if err != nil {
 		return nil, err
-	}
-	m, ok := v.(puff.Map)
-	if !ok {
-		return nil, fmt.Errorf("want a map, got %s", p)
-	}
-	get := func(k string) puff.Value {
-		v, _ := m.Get(puff.Keyword(k))
-		return v
 	}
 	cmd, ok := get("cmd").(puff.Vector)
 	if !ok {
 		return nil, fmt.Errorf("want :cmd as a vector, got %s", p)
 	}
-	from, _ := get("from").(puff.Keyword)
-	org, _ := get("origin").(puff.Keyword)
-	session, _ := get("session").(puff.Keyword)
-	dir, _ := get("cwd").(puff.String)
 	pid, _ := get("pid").(puff.Int)
-	return &job{ticket: ticket{id: id, from: string(from), dir: string(dir), user: org == origin(true), session: string(session)},
-		cmd: cmd, pid: int(pid), result: get("result")}, nil
+	return &job{ticket: storedTicket(id, get), cmd: cmd, pid: int(pid), result: get("result")}, nil
 }
 
 // durable says whether t survives a restart: not one to or from whiff try's

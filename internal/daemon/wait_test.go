@@ -69,7 +69,7 @@ func TestWait(t *testing.T) {
 		t.Errorf("wait for job %s = %s", job, r)
 	}
 
-	if r := answer(waiting("99")); r != `(err {:kind :no-id :message "no message or job 99 is pending or answered lately"})` {
+	if r := answer(waiting("99")); r != `(err {:kind :no-id :message "no task 99 is pending, or ended in the last 30 days"})` {
 		t.Errorf("wait 99 = %s", r)
 	}
 	if r := answer(waiting(`"x"`)); r != `want [id], got ["x"]` {

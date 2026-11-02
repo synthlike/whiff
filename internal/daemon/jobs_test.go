@@ -126,10 +126,10 @@ func TestJobs(t *testing.T) {
 	if err != nil || resp.Value != "(ok :done)" {
 		t.Errorf("cancel = %s %v", resp.Value, err)
 	}
-	inHistory(`done  user   :jobs -> client ` + id + ` (err {:kind :cancelled`)
+	inHistory(`done  user   :jobs -> client ` + id + ` (err {:kind :cancelled :message "job ` + id + ` was cancelled" :outcome :stopped})`)
 
 	id = run(`(call :jobs/run ["sleep" "10"] {:timeout 50ms})`)
-	inHistory(`done  user   :jobs -> client ` + id + ` (err {:kind :timeout :message "job ` + id + ` took longer than 50ms"})`)
+	inHistory(`done  user   :jobs -> client ` + id + ` (err {:kind :timeout :message "job ` + id + ` took longer than 50ms" :outcome :stopped})`)
 
 	tests := []struct{ src, want string }{
 		{`(call :jobs/run [])`, `(err {:kind :bad-call :message ":jobs/run: want a command like [\"go\" \"test\"], got []"})`},

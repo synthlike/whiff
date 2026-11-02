@@ -168,7 +168,7 @@ func (d *daemon) accept(ctx context.Context, chain []string, id int64) (puff.Val
 	m.reviewed = true
 	r, err := d.request(ctx, &caller{chain: chain}, a.to, m)
 	if err != nil {
-		r = puff.Errorf("cancelled", "the accept was cancelled before :%s replied", m.to(a.to))
+		r = failed("cancelled", "unknown", "the accept was cancelled before :%s replied", m.to(a.to))
 	}
 	d.reviewed(a, r)
 	return r, err
@@ -211,7 +211,9 @@ func (d *daemon) reject(id int64, reason string) puff.Value {
 		msg += ": " + reason
 		es = append(es, puff.Entry{Key: puff.Keyword("reason"), Val: puff.String(reason)})
 	}
-	e, _ := puff.NewMap(append(es, puff.Entry{Key: puff.Keyword("message"), Val: puff.String(msg)})...)
+	e, _ := puff.NewMap(append(es,
+		puff.Entry{Key: puff.Keyword("message"), Val: puff.String(msg)},
+		puff.Entry{Key: puff.Keyword("outcome"), Val: puff.Keyword("not-started")})...)
 	d.reviewed(a, puff.NewTag("err", e))
 	return puff.Done
 }

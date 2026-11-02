@@ -116,7 +116,6 @@ type state struct {
 	jobs    map[int64]*job
 	nextID  int64                       // the last id given to a message answered later, or a job
 	lastMsg int64                       // the last id given to a message or an eval in history: see msgID
-	answers []answered                  // the latest answers, oldest first
 	waiters map[int64][]chan puff.Value // whiff waits, by the id they wait for
 	subs    map[*watcher]bool           // clients' subscriptions: whiff sub
 	tracers map[*tracer]bool            // clients following history: whiff history -f
