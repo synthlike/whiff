@@ -174,9 +174,6 @@
   (def (unwant state name)
     (map/update state :wanted (fn (w) (vector/filter w (fn (n) (not (= n name)))))))
 
-  ; started is (ok id), the id of the job r says has started, or r.
-  (def (started r) (catch r [{:kind :pending :id id} (ok id)]))
-
   ; tail is the last 4000 characters of s.
   (def (tail s) (string/slice s (max 0 (- (string/length s) 4000))))
 
@@ -208,7 +205,7 @@
   ; passes, or :running at once without one; or :failed if it can't start.
   (def (launch state name)
     (let [spec (spec-of name)]
-      (match (started (call :jobs/run (map/get-or spec :cmd []) {:dir (dir-of spec) :timeout :none}))
+      (match (submitted (call :jobs/run (map/get-or spec :cmd []) {:dir (dir-of spec) :timeout :none}))
         [(ok id)
          (let [s (map/set-in state [:jobs id] [name :run])]
            (if (map/has? spec :ready)
@@ -226,7 +223,7 @@
 
   ; run-stop runs name's :stop as a job, then name is status till it ends.
   (def (run-stop state name cmd status)
-    (match (started (call :jobs/run cmd {:dir (dir-of (spec-of name)) :timeout 1m}))
+    (match (submitted (call :jobs/run cmd {:dir (dir-of (spec-of name)) :timeout 1m}))
       [(ok id) (-> state (map/set-in [:jobs id] [name :stop]) (set-proc name {:status status}))]
       [(err e) (after-stop state name)]))
 

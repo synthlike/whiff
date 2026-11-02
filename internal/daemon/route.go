@@ -382,6 +382,18 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 				}
 				return args[0], nil
 			}},
+		// submitted is the one place a pending becomes a successful
+		// submission. A held one counts: it keeps its id from held to
+		// ended, so the same whiff/done answers it, with :rejected if you
+		// reject it.
+		{Name: "submitted", Args: "r", Mark: puff.MarkRead,
+			Doc: "(ok id) if r is a pending, of a job, an ask or a message the review gate holds: it was accepted, and [:whiff/done id result] answers it; else r, so a failure to submit stays an err. hand-on wants the pending itself.",
+			Fn: func(_ *puff.Call, args []puff.Value) (puff.Value, error) {
+				if id, ok := pendingID(args[0]); ok {
+					return puff.Ok(puff.Int(id)), nil
+				}
+				return args[0], nil
+			}},
 		{Name: "publish", Args: "topic v", Mark: puff.MarkWrite, MarkByArgs: true,
 			Doc: "Send v to every service subscribed to topic, a keyword: :done at once; pending if the review gate holds it.",
 			Fn: func(c *puff.Call, args []puff.Value) (puff.Value, error) {

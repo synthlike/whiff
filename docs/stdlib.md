@@ -221,6 +221,7 @@ mark rather than `:write`, and `publish` to a literal topic as its subscribers'.
 - `(self)`: This service's address, as a keyword: :assistant, or :try/3/assistant in whiff try.
 - `(session/mode)`: (ok m): this agent session's mode, {:mode :gated}, {:mode :free} or {:mode :trusted :services [:todo ...]}, with :until, a time, if it runs out. (err {:kind :no-session}) for anyone else.
 - `(hand-on r)`: r; if r is the pending of a job or ask this service started, its answer goes to the caller of the message being handled instead. (err {:kind :no-id}) for another pending.
+- `(submitted r)`: (ok id) if r is a pending, of a job, an ask or a message the review gate holds: it was accepted, and [:whiff/done id result] answers it; else r, so a failure to submit stays an err. hand-on wants the pending itself.
 - `(publish topic v)` `:write`: Send v to every service subscribed to topic, a keyword: :done at once; pending if the review gate holds it.
 - `(call target [arg] ...)` `:write`: Send target, :address/fn, a message and wait for its Result; (err {:kind :timeout}) after 5s.
 - `(send target [arg] ...)` `:write`: Send target, :address/fn, a message without waiting: :done once it is in the mailbox.

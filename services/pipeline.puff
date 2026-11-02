@@ -55,9 +55,6 @@
   (def (set-run state n m)
     (map/update-in state [:runs n] (fn (run) (map/merge run m))))
 
-  ; started is (ok id), the id of the job r says has started, or r.
-  (def (started r) (catch r [{:kind :pending :id id} (ok id)]))
-
   ; waiting notes that run n waits for job id at step, and says so on
   ; :pipeline/step.
   (def (waiting state n step id)
@@ -81,12 +78,12 @@
 
   (def (dev state n input)
     (let [run (run-of state n)
-          id (try (started (call :jobs/run (dev-cmd run) {:stdin input :dir (map/get-or run :dir "") :as :text :timeout 30m})))]
+          id (try (submitted (call :jobs/run (dev-cmd run) {:stdin input :dir (map/get-or run :dir "") :as :text :timeout 30m})))]
       (ok (waiting state n :dev id))))
 
   (def (check state n)
     (let [{:check cmd :dir dir} (run-of state n)
-          id (try (started (call :jobs/run cmd {:dir dir :timeout 10m})))]
+          id (try (submitted (call :jobs/run cmd {:dir dir :timeout 10m})))]
       (ok (waiting state n :check id))))
 
   (def (passed? checked) (match checked [{:exit 0} #t] [_ #f]))
@@ -106,8 +103,8 @@
       (if (= diff "")
         (finish state n :failed "The developer changed nothing.")
         (let [input (str review-prompt "\n\nTask: " task "\n\nThe check " (check-text checked) "\n\nThe diff:\n" diff)
-              id (try (started (call :jobs/run ["claude" "-p" "--strict-mcp-config" "--tools" "" "--no-session-persistence"]
-                                 {:stdin input :dir dir :as :text :timeout 10m})))]
+              id (try (submitted (call :jobs/run ["claude" "-p" "--strict-mcp-config" "--tools" "" "--no-session-persistence"]
+                                   {:stdin input :dir dir :as :text :timeout 10m})))]
           (ok (waiting (set-run state n {:checked checked :diff diff}) n :review id))))))
 
   ; subject is task's first sentence, as a commit's subject: at most 72

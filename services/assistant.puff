@@ -55,11 +55,10 @@
   (def (turn text)
     (if (busy?)
       (err {:kind :busy :message (string/concat name " is still answering your last message; send it again in a moment")})
-      (do (try (file/mkdir home))
-        (catch (call :jobs/run (claude (try (session))) {:stdin text :dir home :as :text :timeout 10m :origin :agent})
-          [{:kind :pending :id id}
-           (do (try (file/append turns (str id "\n")))
-             (ok :thinking))]))))
+      (let [_ (try (file/mkdir home))
+            id (try (submitted (call :jobs/run (claude (try (session))) {:stdin text :dir home :as :text :timeout 10m :origin :agent})))]
+        (do (try (file/append turns (str id "\n")))
+          (ok :thinking)))))
 
   ; answered leaves a turn's answer in your inbox.
   (def (answered r)
