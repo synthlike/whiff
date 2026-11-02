@@ -541,6 +541,7 @@ aside h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; co
 .view .at { font: 12px var(--mono); color: var(--accent); word-break: break-all; }
 .view .copied .at::after { content: "  copied"; color: var(--muted); }
 .view .detail { color: var(--muted); }
+.view .item .url { font: 12px var(--mono); color: var(--accent); word-break: break-all; }
 .view .item { flex-wrap: wrap; }
 /* Long text in an item: a report, a plan's tasks. */
 .view .prose { flex-basis: 100%; max-width: 72ch; line-height: 1.5; }

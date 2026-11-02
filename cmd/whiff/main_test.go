@@ -31,7 +31,7 @@ func TestRun(t *testing.T) {
   (on (echo x) "Returns x."
     (ok x))
   (on (pick) "Items to pick."
-    (ok (view/items [{:label "a" :action [:greet/hello "x"]} {:label "b\tc" :detail "d"}])))
+    (ok (view/items [{:label "a" :action [:greet/hello "x"]} {:label "b\tc" :detail "d"} {:label "e" :url "http://localhost:8080"}])))
   (on (places) "Locations."
     (ok (view/locations [{:file "a.go" :line 3 :col 2 :note "here"} {:file "b.go"}])))
   (on (say) "Text."
@@ -85,7 +85,7 @@ func TestRun(t *testing.T) {
 			wantErr: "whiff: {:kind :no-function :message \":greet has no function nope\"}\n"},
 		{name: "call a bad target", args: []string{"call", "greet"}, code: 1,
 			wantErr: "whiff: :greet has no address: only a service can leave it out, want :address/fn\n"},
-		{name: "items", args: []string{"call", "greet/pick"}, wantOut: "a\t\t[:greet/hello \"x\"]\nb c\td\n"},
+		{name: "items", args: []string{"call", "greet/pick"}, wantOut: "a\t\t[:greet/hello \"x\"]\nb c\td\ne\thttp://localhost:8080\n"},
 		{name: "locations", args: []string{"call", "greet/places"}, wantOut: "a.go:3:2: here\nb.go\n"},
 		{name: "text", args: []string{"call", "greet/say"}, wantOut: "two\nlines\n"},
 		{name: "board", args: []string{"call", "greet/board"}, wantOut: "# Now\na\t\tGreet x\t[:greet/hello \"x\"]\na\t\tGreet someone\t[:greet/hello \"\"]\n\n# Later\nb\n"},

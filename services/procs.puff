@@ -36,13 +36,13 @@
   ; procs is each process, :project/name then how it runs: :cmd, a
   ; command; :dir, where; :ready, a URL or a command that says it's ready;
   ; :after, the processes that must be ready first; :stop, a command that
-  ; runs after it stops; and :restart #t, to start it again when it exits.
-  ; For example:
+  ; runs after it stops; :restart #t, to start it again when it exits; and
+  ; :url, its web UI, a link in the view. For example:
   ;   [:shop/db {:cmd ["docker" "run" "--rm" "--name" "shop-db" "-p" "5432:5432" "-e" "POSTGRES_PASSWORD=dev" "postgres:17"]
   ;              :ready ["docker" "exec" "shop-db" "pg_isready" "-U" "postgres"]}
   ;    :shop/api {:cmd ["go" "run" "./cmd/api"] :dir "~/src/shop" :restart #t
   ;               :ready "http://localhost:8080/health" :after [:shop/db]}
-  ;    :shop/web {:cmd ["go" "run" "./cmd/web"] :dir "~/src/shop" :after [:shop/api]}]
+  ;    :shop/web {:cmd ["go" "run" "./cmd/web"] :dir "~/src/shop" :after [:shop/api] :url "http://localhost:3000"}]
   (def procs [])
 
   (def delay 2s)        ; before starting one that exited again
@@ -402,13 +402,14 @@
     (ok (vector/map table (fn ([name _]) (run-of name (proc state name))))))
 
   (on (view state) :read
-    "The processes as a view: Stop, Restart and Logs for one that runs; Start and Logs for one that doesn't."
+    "The processes as a view: Stop, Restart and Logs for one that runs; Start and Logs for one that doesn't; its :url, a link."
     (ok (view/items (vector/map table
                       (fn ([name spec])
-                        (let [p (proc state name)]
-                          {:label (keyword/name name)
-                           :detail (str (detail p) "  " (string/join (map/get-or spec :cmd []) " "))
-                           :actions (actions name (map/get-or p :status :down))})))
+                        (let [p (proc state name)
+                              item {:label (keyword/name name)
+                                    :detail (str (detail p) "  " (string/join (map/get-or spec :cmd []) " "))
+                                    :actions (actions name (map/get-or p :status :down))}]
+                          (match (map/get spec :url) [(some u) (map/set item :url u)] [(none) item]))))
           {:changed :procs/changed})))
 
   (on (logs state name) :read

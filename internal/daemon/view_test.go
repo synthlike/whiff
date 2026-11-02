@@ -19,6 +19,8 @@ func TestViews(t *testing.T) {
 		{`(view/items [{:detail "d"}])`, `has no :label`},
 		{`(view/items [{:label 1}])`, `want :label as a string, got 1`},
 		{`(view/items [{:label "a" :action ["todo/done" 1]}])`, `want :action as a message like [:todo/done 12]`},
+		{`(view/items [{:label "a" :url "http://localhost:8080/"}])`, `(items [{:label "a" :url "http://localhost:8080/"}])`},
+		{`(view/items [{:label "a" :url "javascript:alert(1)"}])`, `want :url as an http or https URL`},
 		{`(view/items [{:label "a" :actions [{:label "Tick it" :action [:todo/done 1]} {:label "Drop it" :action [:todo/drop 1]}]}])`,
 			`(items [{:actions [{:action [:todo/done 1] :label "Tick it"} {:action [:todo/drop 1] :label "Drop it"}] :label "a"}])`},
 		{`(view/items [{:label "a" :actions [{:label "Drop it" :action [:todo/drop 1] :ask "Why?"}]}])`,

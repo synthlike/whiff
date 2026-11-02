@@ -12,7 +12,7 @@ import (
 
 // viewText is v as the CLI shows a view, and true; false if v isn't one:
 //
-//	items      a line each, label, detail and action apart by tabs, for fzf;
+//	items      a line each, label, detail (and url) and action apart by tabs, for fzf;
 //	           an item with :actions has a line for each, with its label
 //	           before the action, and "" after one that asks for an answer
 //	text       as it is
@@ -35,7 +35,11 @@ func viewText(v puff.Value) (string, bool) {
 			line := str(it, "label")
 			action := field(it, "action")
 			actions, _ := field(it, "actions").(puff.Vector)
-			if d := str(it, "detail"); d != "" || action != nil || actions.Len() > 0 {
+			d := str(it, "detail")
+			if u := str(it, "url"); u != "" {
+				d = strings.TrimSpace(d + "  " + u)
+			}
+			if d != "" || action != nil || actions.Len() > 0 {
 				line += "\t" + d
 			}
 			if action != nil || actions.Len() == 0 {

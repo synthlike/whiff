@@ -47,6 +47,7 @@ type column struct {
 type item struct {
 	Label   prose
 	Detail  string
+	URL     string // its page, http or https only
 	Actions []act
 }
 
@@ -163,8 +164,9 @@ func topicsOf(opts puff.Value) []string {
 }
 
 // itemsOf is v, a vector of items, each a map with a :label string, with
-// its :detail and what can be done with it: its :actions, and its :action,
-// labelled with its message; false if v isn't such a vector.
+// its :detail, its :url if it is http or https, and what can be done with
+// it: its :actions, and its :action, labelled with its message; false if v
+// isn't such a vector.
 func itemsOf(v puff.Value, marks map[string]string, back string) ([]item, bool) {
 	vec, ok := v.(puff.Vector)
 	if !ok {
@@ -179,6 +181,10 @@ func itemsOf(v puff.Value, marks map[string]string, back string) ([]item, bool) 
 		}
 		it := item{Label: proseOf(label)}
 		it.Detail, _ = strOf(m, "detail")
+		// view/items checks it too, but a service can build (items ...) itself.
+		if u, _ := strOf(m, "url"); strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://") {
+			it.URL = u
+		}
 		if msg, ok := get(m, "action").(puff.Vector); ok {
 			if a, ok := actOf("", msg, "", marks, back); ok {
 				it.Actions = append(it.Actions, a)
