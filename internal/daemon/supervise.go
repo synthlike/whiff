@@ -23,12 +23,61 @@ type supervisor struct {
 	files map[string]*watched // by path
 }
 
-// watched is a service file as the supervisor last saw it, and the service
-// running from it, nil if it never loaded.
+// watched is a service file as the supervisor last saw it, the files it
+// uses as they were when it loaded, and the service running from it, nil
+// if it never loaded.
 type watched struct {
+	stamp
+	uses map[string]stamp
+	s    *service
+}
+
+// stamp is when a file last changed, and its size: the zero stamp if
+// there isn't one.
+type stamp struct {
 	mod  time.Time
 	size int64
-	s    *service
+}
+
+func stampOf(path string) stamp {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return stamp{}
+	}
+	return stamp{fi.ModTime(), fi.Size()}
+}
+
+func (a stamp) same(b stamp) bool { return a.mod.Equal(b.mod) && a.size == b.size }
+
+// usesChanged is whether a file w's service uses has changed since it
+// loaded, or come or gone.
+func (w *watched) usesChanged() bool {
+	for path, st := range w.uses {
+		if !stampOf(path).same(st) {
+			return true
+		}
+	}
+	return false
+}
+
+// serviceUses are the files file's service uses, by its (use "path")
+// forms and theirs, as far as they read: those that failed to load too,
+// so fixing one reloads it.
+func serviceUses(file string) map[string]stamp {
+	uses := map[string]stamp{}
+	src, err := os.ReadFile(file)
+	if err != nil {
+		return uses
+	}
+	forms, err := puff.Read(file, string(src))
+	if err != nil || len(forms) != 1 || !isList(forms[0], "service") {
+		return uses
+	}
+	_, files, _ := puff.ExpandUses(forms[0].Items[1:], file, "")
+	for _, f := range files {
+		uses[f] = stampOf(f)
+	}
+	return uses
 }
 
 func (d *daemon) newSupervisor(dir string) *supervisor {
@@ -60,14 +109,14 @@ func (sv *supervisor) run() {
 	}
 }
 
-// scan loads every file that is new or changed since the last scan, and
-// removes the services whose file is gone.
+// scan loads every file that is new or changed since the last scan, or
+// uses one that changed, and removes the services whose file is gone.
 func (sv *supervisor) scan() {
 	paths, _ := filepath.Glob(filepath.Join(sv.dir, "*.puff"))
 	there := map[string]bool{}
 	for _, file := range paths {
-		fi, err := os.Stat(file)
-		if err != nil {
+		st := stampOf(file)
+		if st == (stamp{}) {
 			continue
 		}
 		there[file] = true
@@ -75,10 +124,10 @@ func (sv *supervisor) scan() {
 		if w == nil {
 			w = &watched{}
 			sv.files[file] = w
-		} else if fi.ModTime().Equal(w.mod) && fi.Size() == w.size {
+		} else if st.same(w.stamp) && !w.usesChanged() {
 			continue
 		}
-		w.mod, w.size = fi.ModTime(), fi.Size()
+		w.stamp = st
 		sv.load(file, w)
 	}
 	for file, w := range sv.files {
@@ -95,6 +144,8 @@ func (sv *supervisor) scan() {
 // any. A file that fails to load leaves that service running, and the
 // error is noted and returned.
 func (sv *supervisor) load(file string, w *watched) error {
+	// Before the load, so a change while it loads is seen at the next scan.
+	w.uses = serviceUses(file)
 	s, err := sv.d.loadService(file)
 	switch {
 	case err != nil && w.s != nil:

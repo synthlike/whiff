@@ -914,7 +914,10 @@ func TestServiceFileTests(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		resp, err := c.Test(file, string(src), t.TempDir())
+		// From where the file is, so its uses are found, as whiff test
+		// from the repository would.
+		wd, _ := os.Getwd()
+		resp, err := c.Test(file, string(src), wd)
 		if err != nil || resp.Error != "" {
 			t.Errorf("%s: %+v %v", file, resp, err)
 			continue

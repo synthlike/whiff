@@ -104,7 +104,7 @@ func runFile(ctx context.Context, file string, args []string, stdout, stderr io.
 		return 1
 	}
 	env := newEnv(stdout)
-	if _, err := env.Load(ctx, file, string(src)); err != nil {
+	if _, err := env.LoadFile(ctx, file, string(src)); err != nil {
 		return report(stderr, err)
 	}
 	main, ok := env.Lookup("main")
@@ -154,7 +154,7 @@ func test(ctx context.Context, files []string, stdout, stderr io.Writer) int {
 			failed++
 		}
 		env := newEnv(stdout)
-		if _, err := env.Load(ctx, file, string(src)); err != nil {
+		if _, err := env.LoadFile(ctx, file, string(src)); err != nil {
 			fmt.Fprintln(stderr, err)
 			failed++
 			continue

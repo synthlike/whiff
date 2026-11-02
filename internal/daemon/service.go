@@ -100,13 +100,15 @@ func (d *daemon) loadService(file string) (*service, error) {
 	if err != nil {
 		return nil, err
 	}
-	return d.loadSource(file, string(src), "", true)
+	return d.loadSource(file, "", string(src), "", true)
 }
 
 // loadSource is loadService for src, read from file, at addr: the
 // service's name if addr is "", else a scratch address for whiff try or
-// test. Its :start runs if start is set.
-func (d *daemon) loadSource(file, src, addr string, start bool) (*service, error) {
+// test. Its :start runs if start is set. A relative file is in dir, the
+// client's directory, as far as its uses go. A used file's defs are the
+// service's own, so whiff sees what its handlers reach through them.
+func (d *daemon) loadSource(file, dir, src, addr string, start bool) (*service, error) {
 	forms, err := puff.Read(file, src)
 	if err != nil {
 		return nil, err
@@ -143,6 +145,14 @@ func (d *daemon) loadSource(file, src, addr string, start bool) (*service, error
 			return nil, &puff.Error{Pos: body[0].Pos, Msg: opt.want}
 		}
 		*opt.f, body = body[1], body[2:]
+	}
+
+	from := file
+	if dir != "" && !filepath.IsAbs(file) {
+		from = filepath.Join(dir, file)
+	}
+	if body, _, err = puff.ExpandUses(body, from, ""); err != nil {
+		return nil, err
 	}
 
 	keep := addr == ""
