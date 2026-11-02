@@ -34,13 +34,18 @@ func TestProcs(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
-	// a shuts down cleanly on SIGTERM; b writes its pid, its group's.
-	table := `(def procs [:demo/a {:cmd ["sh" "-c" "echo a up; trap 'echo a bye; exit 0' TERM; while :; do sleep 0.1; done"]
-                            :dir "` + dir + `" :stop ["sh" "-c" "echo stopped >> stops"]}
-                    :demo/b {:cmd ["sh" "-c" "echo $$ > b.pid; echo b up; while :; do sleep 0.1; done"] :dir "` + dir + `"}
-                    :demo/flaky {:cmd ["sh" "-c" "echo flaky; exit 3"] :restart #t}])`
+	// a shuts down cleanly on SIGTERM, and is ready once a.ready is there,
+	// a moment after it starts; b comes after it, and writes its pid, its
+	// group's, and early if a wasn't ready. slow is never ready.
+	table := `(def procs [:demo/a {:cmd ["sh" "-c" "echo a up; (sleep 0.2; touch a.ready) & trap 'echo a bye; exit 0' TERM; while :; do sleep 0.1; done"]
+                            :dir "` + dir + `" :stop ["sh" "-c" "echo stopped >> stops"] :ready ["test" "-e" "a.ready"]}
+                    :demo/b {:cmd ["sh" "-c" "test -e a.ready || touch early; echo $$ > b.pid; echo b up; while :; do sleep 0.1; done"]
+                             :dir "` + dir + `" :after [:demo/a]}
+                    :demo/flaky {:cmd ["sh" "-c" "echo flaky; exit 3"] :restart #t}
+                    :other/slow {:cmd ["sleep" "60"] :ready ["false"]}])`
 	s := string(src)
-	for old, new := range map[string]string{"(def procs [])": table, "(def delay 2s)": "(def delay 50ms)"} {
+	for old, new := range map[string]string{"(def procs [])": table, "(def delay 2s)": "(def delay 50ms)",
+		"(def every 1s)": "(def every 50ms)", "(def ready-within 2m)": "(def ready-within 1s)"} {
 		if strings.Count(s, old) != 1 {
 			t.Fatalf("procs.puff should have %s once", old)
 		}
@@ -96,10 +101,23 @@ func TestProcs(t *testing.T) {
 		return m[1]
 	}
 
-	if got := call("procs/up", "[:demo]"); got != "(ok {:demo/a :running :demo/b :running :demo/flaky :running})" {
+	// a starts until its :ready passes; b, after it, waits for that.
+	if got := call("procs/up", "[:demo]"); got != "(ok {:demo/a :starting :demo/b :queued :demo/flaky :running})" {
 		t.Fatalf("up = %s", got)
 	}
+	until("b after a", runs(":proc :demo/a :status :running", ":proc :demo/b :status :running"))
+	if _, err := os.Stat(filepath.Join(dir, "early")); err == nil {
+		t.Error("b started before a was ready")
+	}
 	until("a's output", func() bool { return strings.Contains(call("procs/logs", "[:demo/a]"), "a up") })
+	// One whose :ready never passes is :unready, and you hear of it.
+	call("procs/up", "[:other]")
+	until("slow unready", runs(":proc :other/slow :status :unready"))
+	if inbox := call("me/inbox", "[]"); !strings.Contains(inbox, "procs: other/slow started, but its :ready didn't pass within 1s") {
+		t.Errorf("your inbox = %s", inbox)
+	}
+	call("procs/down", "[:other]")
+	until("slow down", runs(":proc :other/slow :status :down"))
 	// flaky exits, and is started again, until its third exit.
 	until("flaky giving up", runs(":proc :demo/flaky :status :failed"))
 	if inbox := call("me/inbox", "[]"); !strings.Contains(inbox, "procs: demo/flaky exited 3 times in a minute") ||
@@ -144,12 +162,12 @@ func TestProcs(t *testing.T) {
 	if inbox := call("me/inbox", "[]"); !strings.Contains(inbox, "kill -- -"+group) {
 		t.Errorf("your inbox = %s", inbox)
 	}
-	if got := call("procs/up", "[:demo/b]"); got != "(ok {:demo/b :stray})" {
+	// up b brings a, which b comes after, too.
+	if got := call("procs/up", "[:demo/b]"); got != "(ok {:demo/a :starting :demo/b :stray})" {
 		t.Errorf("up while b's group runs = %s", got)
 	}
 	syscall.Kill(-pid, syscall.SIGKILL)
 	until("b's group gone", func() bool { return errors.Is(syscall.Kill(-pid, 0), syscall.ESRCH) })
-	if got := call("procs/up", "[:demo/b]"); got != "(ok {:demo/b :running})" {
-		t.Errorf("up once b's group is gone = %s", got)
-	}
+	call("procs/up", "[:demo/b]")
+	until("b up once its group is gone", runs(":proc :demo/a :status :running", ":proc :demo/b :status :running"))
 }

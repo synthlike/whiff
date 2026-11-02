@@ -168,9 +168,11 @@ project, in the order they start:
 
 ```lisp
 (def procs [:shop/db {:cmd ["docker" "run" "--rm" "--name" "shop-db" "-p" "5432:5432"
-                            "-e" "POSTGRES_PASSWORD=dev" "postgres:17"]}
-            :shop/api {:cmd ["go" "run" "./cmd/api"] :dir "~/src/shop" :restart #t}
-            :shop/web {:cmd ["go" "run" "./cmd/web"] :dir "~/src/shop"}])
+                            "-e" "POSTGRES_PASSWORD=dev" "postgres:17"]
+                      :ready ["docker" "exec" "shop-db" "pg_isready" "-U" "postgres"]}
+            :shop/api {:cmd ["go" "run" "./cmd/api"] :dir "~/src/shop" :restart #t
+                       :ready "http://localhost:8080/health" :after [:shop/db]}
+            :shop/web {:cmd ["go" "run" "./cmd/web"] :dir "~/src/shop" :after [:shop/api]}])
 ```
 
 ```sh
@@ -200,9 +202,12 @@ started again. With `:restart #t`, one that exits is started again after
 its last output, with Start and Logs.
 
 `up`, `down` and `restart` are `:write`, so an agent's calls to them wait
-for your review; `runs`, `view` and `logs` are `:read`. There are no
-health checks, port waits or dependencies between processes, and whiff
-doesn't serve or proxy HTTP: you reach a server on its own port.
+for your review; `runs`, `view` and `logs` are `:read`. A process with
+`:ready` is `:starting` until its URL answers 2xx or its command exits 0,
+and one with `:after` waits until those it comes after are ready; `up
+:shop/web` brings up the db and the api first. `:ready` is checked only
+as a process starts, not as it runs, and whiff doesn't serve or proxy
+HTTP: you reach a server on its own port.
 
 ## Work that answers later
 
