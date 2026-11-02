@@ -125,7 +125,7 @@ the end is dropped, and history says so.
 | One id from held to ended | Yes: a held job keeps its id, and accepting stores it as accepted as it leaves the queue |
 | `:outcome` on every failure | Yes |
 | Cancelling any task | Yes, `whiff cancel` and the agent's `cancel` tool, and a task ends once; not a message you accepted while it is delivered, which ends within a call's 5s |
-| Attempts and retries | None; services retry by hand |
+| Attempts and retries | Yes, for jobs: `:retry n` on `:jobs/run`, and `:idempotent #t` for a write that is safe to run twice. A job whose process group may still run after a crash isn't run again |
 
 `whiff try` is unchanged: a trial's state, inbox and timers aren't stored. A
 task a trial starts is, as it was, so `whiff wait` finds its result.

@@ -365,12 +365,22 @@ func (st *state) load() {
 // for an address that isn't loaded stays, for a client to claim it or a file
 // to be fixed; :jobs, :me and :review are always there. A service with a
 // :start drops the timers it set itself, as a reload does: its :start has
-// just set its own, so its loops don't double. The sender of each job that
-// was running hears how it ended, as far as whiff knows; no job runs again.
-// A result its owner hadn't handled went to it as it loaded; one for an
-// owner that won't handle it, a client or a service with no file, is a
-// line in history.
+// just set its own, so its loops don't double. A job that was running runs
+// again if it may: see again. The sender of each of the others hears how it
+// ended, as far as whiff knows. A result its owner hadn't handled went to
+// it as it loaded; one for an owner that won't handle it, a client or a
+// service with no file, is a line in history.
 func (d *daemon) resume() {
+	type rerun struct {
+		j *job
+		r puff.Value
+	}
+	var again []rerun
+	defer func() {
+		for _, a := range again {
+			d.rerun(a.j, a.r)
+		}
+	}()
 	d.do(func(st *state) {
 		away := map[string]int{}
 		owed := st.owed
@@ -384,6 +394,11 @@ func (d *daemon) resume() {
 		}
 		for _, j := range st.lost {
 			r := lost(j)
+			// Not while any of it may still run: it would run twice at once.
+			if j.again(r) && !j.mayRun() {
+				again = append(again, rerun{j, r})
+				continue
+			}
 			d.answer(st, j.ticket, "jobs", r)
 			st.publish(jobDone(j, r))
 		}
@@ -443,7 +458,7 @@ func (d *daemon) keepJob(j *job) error {
 }
 
 // endKeys are what endTask writes of a task, over what was stored of it.
-var endKeys = []string{"id", "from", "origin", "cwd", "session", "reviewed", "status", "ended", "by", "result", "handled"}
+var endKeys = []string{"id", "from", "origin", "cwd", "session", "reviewed", "status", "ended", "by", "result", "handled", "stdin"}
 
 // endTask stores r as the result of task t, answered by by, over what was
 // stored of it as it ran, such as a job's :cmd. handled is whether t's
@@ -556,7 +571,8 @@ func fields(p string) (func(string) puff.Value, error) {
 }
 
 // stored is j as it is stored while it runs: as :jobs/list shows it, with
-// what a restart needs too.
+// what a restart needs too: its attempts, and how it runs if it may run
+// again.
 func (j *job) stored() puff.Value {
 	v := j.value().(puff.Map)
 	with := func(key string, val puff.Value) {
@@ -568,6 +584,35 @@ func (j *job) stored() puff.Value {
 		with("session", puff.Keyword(j.session))
 	}
 	with("status", puff.Keyword("running"))
+	var as []puff.Value
+	for _, a := range j.attempts {
+		es := []puff.Entry{
+			{Key: puff.Keyword("started"), Val: puff.NewTime(a.started)},
+			{Key: puff.Keyword("pid"), Val: puff.Int(a.pid)},
+		}
+		if !a.ended.IsZero() {
+			es = append(es,
+				puff.Entry{Key: puff.Keyword("ended"), Val: puff.NewTime(a.ended)},
+				puff.Entry{Key: puff.Keyword("outcome"), Val: puff.Keyword(a.outcome)})
+		}
+		m, _ := puff.NewMap(es...)
+		as = append(as, m)
+	}
+	with("attempts", puff.NewVector(as...))
+	if o := j.opts; o.retry > 0 {
+		with("retry", puff.Int(o.retry))
+		with("timeout", puff.Duration(o.timeout))
+		with("dir", puff.String(o.dir))
+		if o.stdin != nil {
+			with("stdin", puff.String(*o.stdin))
+		}
+		if o.text {
+			with("as", puff.Keyword("text"))
+		}
+		if o.idempotent {
+			with("idempotent", puff.Bool(true))
+		}
+	}
 	return v
 }
 
@@ -582,7 +627,38 @@ func storedJob(id int64, p string) (*job, error) {
 		return nil, fmt.Errorf("want :cmd as a vector, got %s", p)
 	}
 	pid, _ := get("pid").(puff.Int)
-	return &job{ticket: storedTicket(id, get), cmd: cmd, pid: int(pid)}, nil
+	j := &job{ticket: storedTicket(id, get), cmd: cmd, pid: int(pid), opts: jobOpts{timeout: defaultJobTimeout}}
+	j.opts.dir = j.dir
+	if t, ok := get("timeout").(puff.Duration); ok && t > 0 {
+		j.opts.timeout = time.Duration(t)
+	}
+	if s, ok := get("dir").(puff.String); ok {
+		j.opts.dir = string(s)
+	}
+	if s, ok := get("stdin").(puff.String); ok {
+		j.opts.stdin = (*string)(&s)
+	}
+	n, _ := get("retry").(puff.Int)
+	idem, _ := get("idempotent").(puff.Bool)
+	j.opts.retry, j.opts.text, j.opts.idempotent = int(n), puff.Equal(get("as"), puff.Keyword("text")), bool(idem)
+	as, _ := get("attempts").(puff.Vector)
+	for i := range as.Len() {
+		m, _ := as.At(i).(puff.Map)
+		at := func(k string) puff.Value {
+			v, _ := m.Get(puff.Keyword(k))
+			return v
+		}
+		started, _ := at("started").(puff.Time)
+		ended, isEnded := at("ended").(puff.Time)
+		outcome, _ := at("outcome").(puff.Keyword)
+		apid, _ := at("pid").(puff.Int)
+		a := attempt{started: started.Go(), outcome: string(outcome), pid: int(apid)}
+		if isEnded {
+			a.ended = ended.Go()
+		}
+		j.attempts = append(j.attempts, a)
+	}
+	return j, nil
 }
 
 // durable says whether t survives a restart: not one to or from whiff try's
