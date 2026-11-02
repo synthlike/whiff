@@ -901,6 +901,14 @@ func TestServiceFileTests(t *testing.T) {
 	if err != nil || len(files) == 0 {
 		t.Fatalf("no services: %v", err)
 	}
+	// Examples' services, in a directory each, have tests too; plain puff
+	// files beside them are cmd/puff's TestExamples'.
+	examples, _ := filepath.Glob(filepath.Join("..", "..", "examples", "*", "*.puff"))
+	for _, file := range examples {
+		if src, err := os.ReadFile(file); err == nil && strings.Contains(string(src), "(service ") {
+			files = append(files, file)
+		}
+	}
 	for _, file := range files {
 		src, err := os.ReadFile(file)
 		if err != nil {

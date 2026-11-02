@@ -1,0 +1,92 @@
+; shop-test: an integration test of the shop in examples/shop, which procs
+; runs (see docs/procs.md). run brings the shop up, waits until every one of
+; its processes is ready, then tries the API as a client would and tells
+; you how it went, in your inbox and on :shop-test/done.
+;   whiff call shop-test/run
+;   whiff inbox
+;   whiff sub shop-test/done
+;
+; Its state is only whether it waits for the shop to be ready.
+
+(service shop-test :state {:waiting #f}
+  (def api "http://localhost:8080")
+  (def stack :shop) ; the project in procs.puff
+  (def project (keyword/name stack))
+
+  ; ready? is whether every process of the project in runs, as procs/runs
+  ; gives them, is running and ready.
+  (def (ready? runs)
+    (vector/all? (vector/filter runs (fn ({:proc p}) (string/starts-with? (keyword/name p) (str project "/"))))
+      (fn ({:status s}) (= s :running))))
+
+  (test "the shop is ready once each of its processes runs"
+    (= [(ready? [{:proc :shop/db :status :running} {:proc :shop/api :status :starting} {:proc :blog/x :status :down}])
+        (ready? [{:proc :shop/db :status :running} {:proc :shop/api :status :running} {:proc :blog/x :status :down}])]
+      [#f #t]))
+
+  (def (shop-ready?) (match (call :procs/runs) [(ok rs) (ready? rs)] [_ #f]))
+
+  (def (status-is r n) (match r [(ok {:status s}) (= s n)] [_ #f]))
+
+  (def (post path v)
+    (http/request (str api path) {:method :post :headers {"content-type" "application/json"} :body (json/to-string v)}))
+
+  ; step is one check of the scenario: what, whether it passed, and if it
+  ; didn't, the response, r, it looked at: its status and body.
+  (def (step what passed r)
+    (if passed
+      {:step what :ok #t}
+      {:step what :ok #f :got (match r [(ok {:status s :body b}) {:status s :body b}] [e e])}))
+
+  (test "a step that failed keeps the status and body it got"
+    (= [(step "a" #t (ok {:status 200 :body "" :headers {}})) (step "b" #f (ok {:status 503 :body "no" :headers {}}))]
+      [{:step "a" :ok #t} {:step "b" :ok #f :got {:status 503 :body "no"}}]))
+
+  ; scenario tries the API: it is healthy, makes an order, gives it back,
+  ; and says there is no order it never made.
+  (def (scenario)
+    (let [health (http/request (str api "/health"))
+          made (post "/orders" {:item "tea" :qty 2})
+          id (match made [(ok {:status 201 :body b}) (match (json/parse b) [(ok {:id id}) id] [_ 0])] [_ 0])
+          back (http/request (str api "/orders/" id))
+          missing (http/request (str api "/orders/999999"))]
+      [(step "GET /health answers 200" (status-is health 200) health)
+       (step "POST /orders makes an order" (and (status-is made 201) (> id 0)) made)
+       (step "GET /orders/<id> gives it back"
+         (match back [(ok {:status 200 :body b}) (= (json/parse b) (ok {:id id :item "tea" :qty 2}))] [_ #f]) back)
+       (step "GET /orders/999999 is 404" (status-is missing 404) missing)]))
+
+  ; summary is how results went, a line, then a line for each that failed
+  ; with the response it got.
+  (def (summary results)
+    (let [failed (vector/filter results (fn ({:ok ok}) (not ok)))]
+      (str (- (vector/length results) (vector/length failed)) " of " (vector/length results) " checks passed"
+        (string/join (vector/map failed (fn ({:step s :got r}) (str "\n✗ " s ": got " (value/to-string r)))) ""))))
+
+  (test "a summary counts what passed and shows what failed"
+    (= (summary [(step "a" #t (ok 1)) (step "b" #f (err {:kind :http}))])
+      "1 of 2 checks passed\n✗ b: got (err {:kind :http})"))
+
+  ; report tells you how results went, offering to run it again or see the
+  ; API's output, and says so on :shop-test/done.
+  (def (report results)
+    (let [passed (vector/all? results (fn ({:ok ok}) ok))]
+      (do (publish :shop-test/done {:passed passed :results results})
+        (or-else (call :me/tell (str "shop-test: " (summary results))
+                   {:actions [{:label "Run again" :action [:shop-test/run]}
+                              {:label "Logs of shop/api" :action [:procs/logs :shop/api]}]})
+          :told))))
+
+  (on (run state) :write :update
+    "Brings the shop up with procs and tries its API once every process is ready: (ok results) if it is ready already, else (ok :waiting); either way you hear how it went in your inbox, and on :shop-test/done."
+    (let [_ (try (call :procs/up stack))]
+      (if (shop-ready?)
+        (let [results (scenario)]
+          (do (report results) (ok [results (map/set state :waiting #f)])))
+        (ok [:waiting (map/set state :waiting #t)]))))
+
+  ; A process is ready: once all of the shop is, and run waits, it runs.
+  (on :procs/ready (state v) :update
+    (if (and (map/get-or state :waiting #f) (shop-ready?))
+      (do (report (scenario)) (ok (map/set state :waiting #f)))
+      (ok state))))
