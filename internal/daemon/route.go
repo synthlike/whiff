@@ -54,9 +54,9 @@ type message struct {
 	// its entry in history has its own; cause is the id of what led to
 	// it: see rpc.Entry.
 	id, cause int64
-	// task is the task whose result a whiff/done is, for a service that
-	// marks it handled once it has handled it; 0 for anything else.
-	task int64
+	// kept is where m stays stored until its service has handled it: the
+	// result of a task, for a service that handles whiff/done, or a timer.
+	kept kept
 	// held is the id m waited under in :review's inbox, for a message you
 	// accepted: a job it starts keeps it, so its sender has one id.
 	held int64

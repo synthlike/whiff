@@ -223,7 +223,7 @@ func (d *daemon) tell(st *state, t ticket, by string, result puff.Value) bool {
 	if s := st.addrs[t.from]; s != nil {
 		if h, ok := s.fns[m.fn]; ok && !h.ask {
 			if owed {
-				m.task = t.id
+				m.kept.task = t.id
 			}
 			d.put(st, t.from, m)
 			return owed
@@ -250,7 +250,7 @@ func (d *daemon) loaded(st *state, addr string) {
 			still = append(still, a)
 		case !d.tell(st, a.ticket, a.by, a.result):
 			// This version doesn't handle whiff/done: history has it.
-			d.handled(a.from, a.id)
+			d.handled(a.from, kept{task: a.id})
 		}
 	}
 	st.owed = still

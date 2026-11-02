@@ -304,9 +304,12 @@ stream.
   isn't loaded stays until it is, or until you reply, and history says so.
 - A message leaves its stored inbox in the transaction that stores its
   answer, whether a reply, a reject, a cancel or its expiry: if whiff dies
-  before that, it is back in the inbox. Firing a timer isn't one
-  transaction yet: it leaves the store before its message is handled, so if
-  whiff dies between the two, it doesn't fire rather than firing twice. A
+  before that, it is back in the inbox. A timer that fired stays stored
+  until its message has been handled, in the transaction that commits the
+  service's new state if it has one, as a result does: if whiff dies first,
+  it fires again at start. So a stateful service's state sees it once, but a
+  handler's effects outside its state can happen twice. A timer for an ask,
+  or one the review gate holds, ends as it reaches the inbox. A
   message you accept is stored as accepted as it leaves the review queue,
   so if whiff dies before it ends, its sender hears `(err {:kind
   :interrupted :outcome :unknown})`. A job you accept keeps the id its

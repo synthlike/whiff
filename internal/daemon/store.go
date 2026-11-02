@@ -113,26 +113,51 @@ func (d *daemon) stateOf(name string) (puff.Value, error) {
 	return puff.Ok(v), nil
 }
 
-// storeState commits p as name's state, and if task isn't 0, marks the
-// result of task, which name is handling, handled in the same transaction:
-// so a restart redelivers only a result whose effect on the state was lost.
-func (d *daemon) storeState(name, p string, task int64) error {
+// kept is where a message stays stored until its service has handled it, so
+// a restart gives it again: the result of a task, or the timer of a
+// send-after. The zero kept is a message that isn't stored.
+type kept struct {
+	task  int64  // the task whose result a whiff/done is
+	timer string // the key of the stored timer that sent it
+}
+
+// storeState commits p as name's state, and in the same transaction marks
+// k, the message name is handling, handled: so a restart gives again only a
+// message whose effect on the state was lost.
+func (d *daemon) storeState(name, p string, k kept) error {
 	return d.db.Update(func(tx *bbolt.Tx) error {
-		if err := tx.Bucket(stateBucket).Put([]byte(name), []byte(p)); err != nil || task == 0 {
+		if err := tx.Bucket(stateBucket).Put([]byte(name), []byte(p)); err != nil {
 			return err
 		}
-		return markHandled(tx, task, name)
+		return k.handled(tx, name)
 	})
 }
 
-// handled marks the result of task id handled by owner, which isn't given
-// it again. One that can't be marked comes again after a restart, so it is
-// noted.
-func (d *daemon) handled(owner string, id int64) {
-	err := d.db.Update(func(tx *bbolt.Tx) error { return markHandled(tx, id, owner) })
-	if err != nil {
-		fmt.Fprintf(d.log, "whiff: the result of task %d may come to :%s again: %v\n", id, owner, err)
+// handled marks k handled by owner, which isn't given it again. One that
+// can't be marked comes again after a restart, so it is noted.
+func (d *daemon) handled(owner string, k kept) {
+	err := d.db.Update(func(tx *bbolt.Tx) error { return k.handled(tx, owner) })
+	switch {
+	case err == nil:
+	case k.task != 0:
+		fmt.Fprintf(d.log, "whiff: the result of task %d may come to :%s again: %v\n", k.task, owner, err)
+	default:
+		fmt.Fprintf(d.log, "whiff: a timer for :%s may fire again: %v\n", owner, err)
 	}
+}
+
+// handled marks k handled by owner, in tx: its task's result, and its
+// timer, which is deleted.
+func (k kept) handled(tx *bbolt.Tx, owner string) error {
+	if k.task != 0 {
+		if err := markHandled(tx, k.task, owner); err != nil {
+			return err
+		}
+	}
+	if k.timer == "" {
+		return nil
+	}
+	return tx.Bucket(timersBucket).Delete([]byte(k.timer))
 }
 
 // markHandled marks the result of task id handled by owner, in tx, unless
@@ -373,7 +398,7 @@ func (d *daemon) resume() {
 		st.owed = nil
 		for _, a := range owed {
 			if !d.tell(st, a.ticket, a.by, a.result) {
-				d.handled(a.from, a.id)
+				d.handled(a.from, kept{task: a.id})
 			} else if st.addrs[a.from] == nil {
 				away[a.from]++
 			}
@@ -686,22 +711,28 @@ func (d *daemon) forgetTimer(t *timer) {
 	}
 }
 
-// arm delivers t when it is due, once: it leaves the store first, so a
-// restart can't send it twice. It goes unsent if stop closes first, the
-// version of the service that set it having gone, and stays stored if whiff
-// is stopping. A delivery that fails is in history.
+// arm delivers t when it is due. In a mailbox, its message stays stored
+// until the service has handled it, with its new state if it has one, so if
+// whiff dies first, it fires again at start; anything else ends its delivery
+// at once, as an inbox stores it, or history has why it failed. It goes
+// unsent if stop closes first, the version of the service that set it
+// having gone, and stays stored if whiff is stopping.
 func (d *daemon) arm(t *timer, stop <-chan struct{}) {
 	time.AfterFunc(time.Until(t.due), func() {
 		if d.ctx.Err() != nil {
 			return
 		}
-		d.forgetTimer(t)
 		select {
 		case <-stop:
+			d.forgetTimer(t)
 			return
 		default:
 		}
-		d.deliver(t.addr, t.m)
+		m := t.m
+		m.kept.timer = string(t.key)
+		if d.deliver(t.addr, m) != nil && d.ctx.Err() == nil {
+			d.forgetTimer(t)
+		}
 	})
 }
 
