@@ -292,6 +292,8 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 			resp = d.clientReview(ctx, req)
 		case "wait":
 			resp = d.clientWait(ctx, req)
+		case "cancel-task":
+			resp = d.clientCancel(from, req)
 		case "stop":
 			conn.Send(resp)
 			stop()

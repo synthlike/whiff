@@ -24,7 +24,7 @@ const Version = 18
 // Request is a client's message to the daemon. The daemon answers each with
 // a Response, in order, except an answer or a cancel, which have none.
 type Request struct {
-	Op      string `json:"op"`                // "hello", "eval", "repl", "cancel", "call", "send", "pub", "sub", "try", "inbox", "reply", "accept", "reject", "mode", "wait", "claim", "answer", "history", "trace", "ls" or "stop"
+	Op      string `json:"op"`                // "hello", "eval", "repl", "cancel", "call", "send", "pub", "sub", "try", "inbox", "reply", "accept", "reject", "mode", "wait", "cancel-task", "claim", "answer", "history", "trace", "ls" or "stop"
 	Version int    `json:"version,omitempty"` // hello: the client's protocol
 	Src     string `json:"src,omitempty"`     // eval, repl: puff code; claim: the interface, (on ...) and (ask ...) forms without bodies; try: the service file
 	File    string `json:"file,omitempty"`    // try: the service file's name, for its errors
@@ -439,7 +439,8 @@ func (c *Client) Cancel() error { return c.conn.Send(Request{Op: "cancel"}) }
 // vector, from dir; publishes args's one value to the topic target (op
 // "pub"); answers a message in an inbox, with args [id result] (op
 // "reply"); or accepts or rejects a message that waits for review, with
-// args [id] (op "accept") or [id reason] (op "reject"). The Response's
+// args [id] (op "accept") or [id reason] (op "reject"); or cancels a task
+// that hasn't ended, with args [id] (op "cancel-task"). The Response's
 // Value is the printed Result.
 func (c *Client) Message(op, target, args, dir string) (Response, error) {
 	var resp Response

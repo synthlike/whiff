@@ -124,7 +124,7 @@ the end is dropped, and history says so.
 | A service gets its result until handled | Yes: the mark commits with a stateful service's state; a stateless one's is set once its handler returns |
 | One id from held to ended | Yes: a held job keeps its id, and accepting stores it as accepted as it leaves the queue |
 | `:outcome` on every failure | Yes |
-| Cancelling any task | Only jobs, `:jobs/cancel`, and rejecting what's held |
+| Cancelling any task | Yes, `whiff cancel` and the agent's `cancel` tool, and a task ends once; not a message you accepted while it is delivered, which ends within a call's 5s |
 | Attempts and retries | None; services retry by hand |
 
 `whiff try` is unchanged: a trial's state, inbox and timers aren't stored. A
