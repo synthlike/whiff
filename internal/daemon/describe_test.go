@@ -134,7 +134,7 @@ func TestLs(t *testing.T) {
   (hello name)  :read   Greets name.
   (lost)        :write  Calls targets that don't exist.
 :jobs
-  (cancel id)       :write  Kill job id and everything it started.
+  (cancel id)       :write  Stop job id and everything it started: SIGTERM, then SIGKILL for what's left after 3s.
   (list)            :read   The running jobs, each {:id :cmd :cwd :from}.
   (output id)       :read   (ok {:stdout :stderr}), what running job id has written so far: the last 64KiB of each. (err {:kind :no-id}) once it isn't running: its result is in whiff wait.
   (process id)      :read   (some pid), the process group job id may still run in: while it runs, and after whiff died while it ran, while its result's :pid is there; else (none). Retry its write only once it's (none).

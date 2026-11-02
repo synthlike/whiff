@@ -108,7 +108,7 @@ is: an agent cancels only what its own session started.
 | Status | What happens | Result |
 | --- | --- | --- |
 | `:held`, `:waiting` | Removed from its inbox | `:cancelled`, `:not-started` |
-| `:running` | Its process group is killed | `:cancelled`, `:stopped` |
+| `:running` | Its process group gets SIGTERM, then SIGKILL after 3s | `:cancelled`, `:stopped` |
 | `:ended` | Nothing | `(err {:kind :ended :result r})` to the canceller; the task keeps `r` |
 
 The first transaction to end a task wins. A job that exits as you cancel it

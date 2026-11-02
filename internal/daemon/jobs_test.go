@@ -1,11 +1,88 @@
 package daemon
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
+
+// TestJobStop checks that a stopped job's group gets SIGTERM, then SIGKILL
+// for what ignores it once stopGrace is over: on cancel and on whiff stop.
+func TestJobStop(t *testing.T) {
+	set(t, &stopGrace, 300*time.Millisecond)
+	dir := tempDir(t)
+	termed := filepath.Join(dir, "termed")
+	writeServices(t, dir, map[string]string{})
+	done := start(t, dir)
+	c := dial(t, dir)
+	eval := func(src string) string {
+		t.Helper()
+		resp, err := c.Eval(src, dir)
+		if err != nil || resp.Error != "" {
+			t.Fatalf("%s: %v %s", src, err, resp.Error)
+		}
+		return resp.Value
+	}
+	// run runs script and waits until it says it's ready; it returns the
+	// job's id and its process group.
+	run := func(script string) (string, int) {
+		t.Helper()
+		id := eval(`(match (call :jobs/run ["sh" "-c" "` + script + `"]) [(err {:kind :pending :id id}) id])`)
+		eventually(t, "ready", func() string { return eval(`(call :jobs/output ` + id + `)`) }, `(ok {:stderr "" :stdout "ready\n"})`)
+		pid, _ := strconv.Atoi(eval(`(match (call :jobs/process ` + id + `) [(ok (some p)) p])`))
+		return id, pid
+	}
+	cancelled := func(id string) {
+		t.Helper()
+		want := `done  user   :jobs -> client ` + id + ` (err {:kind :cancelled`
+		eventually(t, "cancelled", func() string {
+			h, _ := historyOf(c)
+			if strings.Contains(h, want) {
+				return want
+			}
+			return "not in history"
+		}, want)
+	}
+	gone := func(pid int) {
+		t.Helper()
+		eventually(t, "group gone", func() string {
+			return strconv.FormatBool(errors.Is(syscall.Kill(-pid, 0), syscall.ESRCH))
+		}, "true")
+	}
+
+	// SIGTERM first, so a server can shut down cleanly.
+	id, _ := run(`trap 'echo bye > ` + termed + `; exit 0' TERM; echo ready; sleep 10 & wait`)
+	eval(`(call :jobs/cancel ` + id + `)`)
+	cancelled(id)
+	if b, _ := os.ReadFile(termed); string(b) != "bye\n" {
+		t.Errorf("the job's trap wrote %q, want it to have run on SIGTERM", b)
+	}
+
+	// A group that ignores SIGTERM gets SIGKILL once the grace is over.
+	id, pid := run(`trap '' TERM; echo ready; sleep 10`)
+	began := time.Now()
+	eval(`(call :jobs/cancel ` + id + `)`)
+	cancelled(id)
+	if took := time.Since(began); took < stopGrace {
+		t.Errorf("cancelled after %v, before the %v grace was over", took, stopGrace)
+	}
+	gone(pid)
+
+	// whiff stop stops its jobs the same way, and waits for them.
+	_, pid = run(`trap '' TERM; echo ready; sleep 10`)
+	if err := c.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	if err := wait(t, done); err != nil {
+		t.Fatal(err)
+	}
+	gone(pid)
+}
 
 func TestJobs(t *testing.T) {
 	dir := tempDir(t)

@@ -281,9 +281,11 @@ stream.
   `:review`'s queue too, timers, running jobs and results are stored. (v0.6 stores the
   rest: [tasks.md](tasks.md) is its spec.) What a `whiff try` address holds
   isn't.
-- A job isn't resumed. When whiff stops it kills the job, and at the next
-  start its sender gets `(err {:kind :interrupted :outcome :stopped})`, or
-  the job's real answer if it finished just then. After a crash whiff can't
+- A job isn't resumed. When whiff stops it stops the job, as a cancel or
+  timeout does: SIGTERM to its process group, then SIGKILL for what's left
+  after 3s, so a server shuts down cleanly. At the next start its sender
+  gets `(err {:kind :interrupted :outcome :stopped})`, or the job's real
+  answer if it finished just then. After a crash whiff can't
   know how far a job got: `:outcome :unknown`, with its `:pid` if that
   process group may still run. whiff leaves it, as a pid can be reused, so
   you may have one to kill; `:jobs/process id` says while it may still run,
