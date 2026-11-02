@@ -509,13 +509,14 @@ func TestPipelineService(t *testing.T) {
 if [ "$1 $2 $3 $4" = "-p --strict-mcp-config --tools " ]; then
   cat > "$FAKE/review-input"
   echo "review $(basename "$PWD")" >> "$FAKE/log"
+  if [ -f "$FAKE/broken" ]; then echo "stuck" >&2; exit 1; fi
   if [ -f "$FAKE/picky" ]; then echo "needs work"; echo "VERDICT: changes"; else echo "looks good"; echo "VERDICT: approve"; fi
   exit 0
 fi
 cat > "$FAKE/dev-input"
 case " $* " in
   *" --resume "*) echo "dev resume $(basename "$PWD")" >> "$FAKE/log"; echo t > test.txt ;;
-  *" --session-id "*) echo "dev new $(basename "$PWD")" >> "$FAKE/log"; echo f > feature.txt ;;
+  *" --session-id "*) echo "dev new $(basename "$PWD")" >> "$FAKE/log"; basename "$PWD" > feature.txt ;;
   *) echo "want a session, got $*" >&2; exit 9 ;;
 esac
 echo "changed things"
@@ -672,6 +673,37 @@ echo "changed things"
 	}
 	if got := call("discard", "[2]"); !strings.Contains(got, ":no-run") {
 		t.Errorf("discard of a merged run = %s", got)
+	}
+
+	// A reviewer that fails fails the run, which offers Review again: it
+	// reruns only the reviewer, in the same round, and the run goes on. Its
+	// check passes at once, as main has test.txt now.
+	os.WriteFile(filepath.Join(fake, "broken"), nil, 0o600)
+	if got := call("start", `["a third" `+check+`]`); got != "(ok 3)" {
+		t.Fatalf("start = %s", got)
+	}
+	if got := done(); !strings.Contains(got, ":status :failed") || !strings.Contains(got, "The reviewer failed") {
+		t.Errorf("done = %s", got)
+	}
+	again := `{:action [:pipeline/review-again 3] :label "Review again"}`
+	if text, _ := c.Inbox("me"); !strings.Contains(text, again) {
+		t.Errorf("your inbox = %s", text)
+	}
+	if got := call("view", "[]"); !strings.Contains(got, `{:action [:pipeline/show 3] :label "Show review and diff"} `+again) {
+		t.Errorf("view = %s", got)
+	}
+	os.Remove(filepath.Join(fake, "broken"))
+	if got := call("review-again", "[3]"); got != "(ok :reviewing)" {
+		t.Fatalf("review-again = %s", got)
+	}
+	if got := done(); !strings.Contains(got, ":status :ready") {
+		t.Errorf("done after reviewing again = %s", got)
+	}
+	if b, _ := os.ReadFile(filepath.Join(fake, "log")); !strings.HasSuffix(string(b), "dev new repo-3\nreview repo-3\nreview repo-3\n") {
+		t.Errorf("claude was run:\n%s", b)
+	}
+	if got := call("review-again", "[3]"); !strings.Contains(got, ":no-run") {
+		t.Errorf("review-again of a ready run = %s", got)
 	}
 
 	// Outside a repository nothing starts.
