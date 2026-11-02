@@ -160,7 +160,7 @@ func (sv *supervisor) reset(name string) puff.Value {
 		}
 		if err := sv.load(file, w); err != nil {
 			if found {
-				sv.d.storeState(name, p, 0)
+				sv.d.storeState(name, p, kept{})
 			}
 			return puff.Errorf("load", "%v", err)
 		}
@@ -172,7 +172,8 @@ func (sv *supervisor) reset(name string) puff.Value {
 // remove takes s's address away and stops it: a service whose file is
 // gone, or a client's address when it hangs up. Calls waiting in its
 // mailbox get (err {:kind :no-address}), and so do the senders of the
-// messages in its inbox, as [:whiff/done id result].
+// messages in its inbox, as [:whiff/done id result]. A timer's message in
+// its mailbox goes unsent, with its timer.
 func (d *daemon) remove(s *service) {
 	d.do(func(st *state) {
 		delete(st.addrs, s.name)
@@ -188,6 +189,9 @@ func (d *daemon) remove(s *service) {
 		case m := <-s.mailbox:
 			if m.reply != nil {
 				m.reply <- puff.Print(puff.Errorf("no-address", "no address :%s", s.name))
+			}
+			if m.kept.timer != "" {
+				d.handled(s.name, kept{timer: m.kept.timer})
 			}
 		default:
 			return

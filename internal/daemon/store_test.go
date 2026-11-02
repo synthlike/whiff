@@ -507,6 +507,42 @@ func TestTimersSurviveRestart(t *testing.T) {
 	}
 }
 
+// A timer that fired stays stored until its message is handled: one still
+// in a mailbox as whiff stops fires again at start, once.
+func TestTimerKeptUntilHandled(t *testing.T) {
+	dir := tempDir(t)
+	file := filepath.Join(dir, "notes")
+	writeServices(t, dir, map[string]string{
+		"slow": `(service slow
+  (on (busy) "Takes a while." (do (proc/run ["sleep" "0.5"]) (ok :done)))
+  (on (add text) "Appends text." (file/append "` + file + `" text)))`,
+	})
+	done := start(t, dir)
+	c := dial(t, dir)
+	for _, src := range []string{`(send :slow/busy)`, `(send-after 0s :slow/add "late")`} {
+		if r, err := c.Eval(src, dir); err != nil || r.Error != "" {
+			t.Fatalf("%s: %+v %v", src, r, err)
+		}
+	}
+	// It fired, and waits behind busy as whiff stops.
+	time.Sleep(100 * time.Millisecond)
+	stopDaemon(t, c, done)
+	notes := func() string {
+		b, _ := os.ReadFile(file)
+		return string(b)
+	}
+	if n := storedTimers(t, dir, "slow"); n != 1 || notes() != "" {
+		t.Fatalf("%d timers stored, notes %q: want the unhandled one stored", n, notes())
+	}
+	done = start(t, dir)
+	c = dial(t, dir)
+	eventually(t, "the timer, after a restart", notes, "late")
+	stopDaemon(t, c, done)
+	if n := storedTimers(t, dir, "slow"); n != 0 {
+		t.Errorf("%d timers stored once handled", n)
+	}
+}
+
 func TestStoredTimer(t *testing.T) {
 	tm := &timer{key: []byte("k"), due: time.Unix(100, 0), addr: "notes", m: message{from: "agent/1", fn: "add", args: `["x" 1]`, dir: "/x", reviewed: true, session: "agent/1"}}
 	got, err := storedTimer(tm.key, puff.Print(tm.stored()))

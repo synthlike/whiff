@@ -38,7 +38,7 @@ type service struct {
 	stateful bool
 	state    puff.Value
 	keep     bool          // commit its state; not for whiff try's scratch addresses
-	handling int64         // the task whose result it handles, until that is marked handled
+	handling kept          // where the message it handles is stored, until that is marked handled
 	starts   bool          // it has a :start, which sets the timers it needs each time it loads
 	quit     chan struct{} // closed to stop it after the message it is handling
 	done     chan struct{} // closed when it has stopped
@@ -260,7 +260,7 @@ func (s *service) initState(ctx context.Context, init *puff.Form) error {
 }
 
 // commit makes v s's state, once it is stored: only data can be. The
-// result s is handling, if any, is marked handled with it.
+// message s is handling, a result or a timer's, is marked handled with it.
 func (s *service) commit(v puff.Value) error {
 	p := puff.Print(v)
 	if _, err := puff.ReadValue(p); err != nil {
@@ -270,7 +270,7 @@ func (s *service) commit(v puff.Value) error {
 		if err := s.d.storeState(s.name, p, s.handling); err != nil {
 			return fmt.Errorf("can't store the state: %v", err)
 		}
-		s.handling = 0
+		s.handling = kept{}
 	}
 	s.state = v
 	return nil
@@ -488,17 +488,22 @@ func (s *service) run(ctx context.Context) {
 	for {
 		select {
 		case m := <-s.mailbox:
+			// whiff is stopping: what is kept comes again at start.
+			if ctx.Err() != nil {
+				return
+			}
 			begin := time.Now()
-			s.handling = m.task
-			r, faulted := s.handle(ctx, m)
+			s.handling = m.kept
+			r, faulted, stopped := s.handle(ctx, m)
 			// Handled, if no commit marked it: a handler that faults on a
 			// result would fault again, so it isn't given it again either.
-			if s.handling != 0 {
+			// Not one whiff stopping cut short: it comes again at start.
+			if s.handling != (kept{}) && !stopped {
 				s.d.handled(s.name, s.handling)
-				s.handling = 0
+				s.handling = kept{}
 			}
-			if faulted && m.task != 0 {
-				s.d.note(":%s faulted on the result of task %d, so it won't get it again; whiff wait %d has it", s.name, m.task, m.task)
+			if faulted && m.kept.task != 0 {
+				s.d.note(":%s faulted on the result of task %d, so it won't get it again; whiff wait %d has it", s.name, m.kept.task, m.kept.task)
 			}
 			// Recorded before the reply, so the caller finds it in history.
 			s.d.do(func(st *state) {
@@ -543,10 +548,10 @@ func (d *daemon) yours(m message) bool {
 
 // handle runs the function or subscriber m is for and returns its Result,
 // printed. A fault in it replies (err {:kind :fault}) and reports faulted,
-// unless it was the caller giving up.
-func (s *service) handle(ctx context.Context, m message) (reply string, faulted bool) {
-	fail := func(kind, format string, args ...any) (string, bool) {
-		return puff.Print(puff.Errorf(kind, format, args...)), false
+// unless it was the caller giving up, or stopped, if it was whiff stopping.
+func (s *service) handle(ctx context.Context, m message) (reply string, faulted, stopped bool) {
+	fail := func(kind, format string, args ...any) (string, bool, bool) {
+		return puff.Print(puff.Errorf(kind, format, args...)), false, false
 	}
 	var f puff.Value
 	var native func(message, []puff.Value) (puff.Value, error)
@@ -601,7 +606,7 @@ func (s *service) handle(ctx context.Context, m message) (reply string, faulted 
 		if err != nil {
 			return fail("bad-call", "%s: %v", what, err)
 		}
-		return puff.Print(r), false
+		return puff.Print(r), false, false
 	}
 	// The backstop: what a handler reaches, leaving out :read claims, sets
 	// its mark at run time, so if it is :read, a :write builtin or target
@@ -623,7 +628,7 @@ func (s *service) handle(ctx context.Context, m message) (reply string, faulted 
 	}
 	r, err := s.env.Call(m.ctx, pos, f, args...)
 	if err != nil {
-		return puff.Print(puff.Errorf("fault", "%v", err)), m.ctx.Err() == nil
+		return puff.Print(puff.Errorf("fault", "%v", err)), m.ctx.Err() == nil, ctx.Err() != nil
 	}
 	t, ok := r.(puff.Tag)
 	if !ok || t.Len() != 1 || t.Name() != "ok" && t.Name() != "err" {
@@ -639,5 +644,5 @@ func (s *service) handle(ctx context.Context, m message) (reply string, faulted 
 	if err != nil {
 		return fail("fault", "%s: %s: %v", pos, what, err)
 	}
-	return reply, false
+	return reply, false, false
 }
