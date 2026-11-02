@@ -81,7 +81,7 @@ func cancelOn(interrupts <-chan os.Signal) (context.Context, context.CancelFunc)
 var whiffFunctions = []string{
 	"address/describe", "address/list", "call", "hand-on", "inbox", "publish", "reply", "self",
 	"send", "send-after", "service/reset", "service/state", "session/mode",
-	"view/board", "view/items", "view/locations", "view/text",
+	"submitted", "view/board", "view/items", "view/locations", "view/text",
 }
 
 func newEnv(stdout io.Writer) *puff.Env {

@@ -70,7 +70,11 @@ in `:outcome` what happened: `:not-started`, `:stopped` or `:unknown`.
 inbox; a running job is killed. An agent cancels only what its session
 began. A task ends once: an answer after its end is dropped, and history
 says so. A handler can pass its caller a pending it got (`hand-on`), so the
-caller waits for the job instead of the handler.
+caller waits for the job instead of the handler. A service that keeps the
+work itself turns the pending into `(ok 12)` with `(submitted r)`, and
+leaves a real failure, like `(err {:kind :start})`, as it is. A held one is
+submitted too: it keeps its id, so the same `whiff/done 12` brings the job's
+result, or `:rejected` if you reject it.
 
 An **ask** is a function with no body, `(ask (approve text) "...")`: its
 messages wait in the address's inbox until something replies. `:me` is your

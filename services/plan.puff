@@ -107,9 +107,8 @@
     (let [repo (string/trim (try (proc/output ["git" "rev-parse" "--show-toplevel"])))
           base (string/trim (try (proc/output ["git" "-C" repo "rev-parse" "HEAD"])))
           n (map/get-or state :next 1)
-          id (try (catch (call :jobs/run ["claude" "-p" "--strict-mcp-config" "--tools" "Read,Glob,Grep" "--no-session-persistence"]
-                           {:stdin (str prompt "\n\nGoal: " goal) :dir repo :as :text :timeout 10m})
-                    [{:kind :pending :id id} (ok id)]))]
+          id (try (submitted (call :jobs/run ["claude" "-p" "--strict-mcp-config" "--tools" "Read,Glob,Grep" "--no-session-persistence"]
+                               {:stdin (str prompt "\n\nGoal: " goal) :dir repo :as :text :timeout 10m})))]
       (moved n (ok [n (-> state
                         (map/set :next (+ n 1))
                         (map/set-in [:plans n] {:goal goal :repo repo :base base :check check :step :planning :tasks [] :draft draft})
