@@ -159,6 +159,51 @@ publishes `:gh/changed {:dir :prs}` for each that changed. Anything can
 subscribe: `whiff sub`, hiss for a toast, or another service, `(on
 :gh/changed (v) ...)`. The state survives restarts; `gh/unwatch` stops.
 
+## Your dev servers, without a terminal each
+
+The terminals you keep open for a project, a `go run` server or two and a
+database in a container, as processes `procs` runs for you. Copy the
+service, as you'll edit it, and name your processes in its `procs`, per
+project, in the order they start:
+
+```lisp
+(def procs [:shop/db {:cmd ["docker" "run" "--rm" "--name" "shop-db" "-p" "5432:5432"
+                            "-e" "POSTGRES_PASSWORD=dev" "postgres:17"]}
+            :shop/api {:cmd ["go" "run" "./cmd/api"] :dir "~/src/shop" :restart #t}
+            :shop/web {:cmd ["go" "run" "./cmd/web"] :dir "~/src/shop"}])
+```
+
+```sh
+cp services/procs.puff ~/.whiff/services/
+whiff call procs/up :shop               # db, api, then web
+whiff call procs/view | fzf | whiff act # Stop, Restart or Logs, or Start
+whiff call procs/logs :shop/api         # its output so far
+curl localhost:8080/health              # each binds its own port
+whiff call procs/down :shop
+```
+
+Each process is a job with `:timeout :none`, so `whiff call jobs/list`
+shows them too and `jobs/output` has their output. Stopping one sends its
+process group SIGTERM, so a server shuts down cleanly, then SIGKILL after
+3s; then its `:stop` runs. A container runs in the foreground, and `docker
+run` passes the SIGTERM on to it; one that takes longer is stopped by its
+`:stop`, `docker stop shop-db` for a named container unless you give
+another, such as `docker compose down` for a `docker compose up`.
+
+Processes stop with whiff, and starting whiff brings back the ones you
+wanted up. If whiff died instead, one may still be running: `procs`
+checks `:jobs/process` and leaves it, as starting another would fight it
+for its port, and your inbox says which process group to kill. A
+container still running from before is stopped with its `:stop` and
+started again. With `:restart #t`, one that exits is started again after
+2s; after its third exit in a minute it stays down, and your inbox has
+its last output, with Start and Logs.
+
+`up`, `down` and `restart` are `:write`, so an agent's calls to them wait
+for your review; `runs`, `view` and `logs` are `:read`. There are no
+health checks, port waits or dependencies between processes, and whiff
+doesn't serve or proxy HTTP: you reach a server on its own port.
+
 ## Work that answers later
 
 ```sh

@@ -455,7 +455,13 @@ func (d *daemon) jobProcess(_ message, args []puff.Value) (puff.Value, error) {
 			return
 		}
 		var r puff.Value
-		_, _, r, err = storedResult(st.db, int64(id))
+		// One whiff died while it ran has no result until resume, after
+		// the services load: a :start asks before then.
+		if i := slices.IndexFunc(st.lost, func(j *job) bool { return j.id == int64(id) }); i >= 0 {
+			r = lost(st.lost[i])
+		} else {
+			_, _, r, err = storedResult(st.db, int64(id))
+		}
 		n, _ := errField(r, "pid").(puff.Int)
 		pid = int(n)
 	})
