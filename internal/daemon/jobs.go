@@ -47,7 +47,7 @@ type job struct {
 
 // jobOpts is how a job runs, from :jobs/run's options.
 type jobOpts struct {
-	timeout    time.Duration
+	timeout    time.Duration // 0 for :timeout :none, a server that runs until stopped
 	stdin      *string
 	dir        string // where it runs
 	text       bool   // :as :text
@@ -79,7 +79,7 @@ func (d *daemon) jobsService() *service {
 	return &service{name: "jobs", d: d, cur: caller{addr: "jobs"},
 		fns: map[string]handler{
 			"run": {params: []string{"cmd", "opts"}, optional: 1, mark: puff.MarkWrite, marked: true, native: d.runJob, cmd: true,
-				doc: "Run cmd, [program args...], here; pending now, {:exit :stdout :stderr} when done. Options: :timeout (1h); :stdin, a string; :dir, where it runs; :as :text answers (ok stdout), or (err {:kind :exit}) unless it exits 0; :origin :agent, for a job whose output a model writes, answers as :agent's; :retry n runs it again, up to n times, under its id, if a timeout or whiff stopped it, or whiff died while it ran, and only if it is :read or :idempotent #t says running it twice is safe. :read for a read-only command, as whiff ls lists them."},
+				doc: "Run cmd, [program args...], here; pending now, {:exit :stdout :stderr} when done. Options: :timeout (1h), or :none for a server; :stdin, a string; :dir, where it runs; :as :text answers (ok stdout), or (err {:kind :exit}) unless it exits 0; :origin :agent, for a job whose output a model writes, answers as :agent's; :retry n runs it again, up to n times, under its id, if a timeout or whiff stopped it, or whiff died while it ran, and only if it is :read or :idempotent #t says running it twice is safe. :read for a read-only command, as whiff ls lists them."},
 			"list": {mark: puff.MarkRead, marked: true, native: d.listJobs,
 				doc: "The running jobs, each {:id :cmd :cwd :from}."},
 			"cancel": {params: []string{"id"}, mark: puff.MarkWrite, marked: true, native: d.cancelJob,
@@ -152,6 +152,8 @@ func jobArgs(m message, args []puff.Value) (puff.Vector, jobOpts, bool, error) {
 		switch {
 		case puff.Equal(e.Key, puff.Keyword("timeout")) && isDur && t > 0:
 			o.timeout = time.Duration(t)
+		case puff.Equal(e.Key, puff.Keyword("timeout")) && puff.Equal(e.Val, puff.Keyword("none")):
+			o.timeout = 0
 		case puff.Equal(e.Key, puff.Keyword("stdin")) && isStr:
 			o.stdin = (*string)(&s)
 		case puff.Equal(e.Key, puff.Keyword("dir")) && isStr:
@@ -168,7 +170,7 @@ func jobArgs(m message, args []puff.Value) (puff.Vector, jobOpts, bool, error) {
 		case puff.Equal(e.Key, puff.Keyword("idempotent")) && isBool:
 			o.idempotent = bool(b)
 		default:
-			return cmdv, o, user, fmt.Errorf("want {:timeout d :stdin s :dir path :as :text :origin :agent :retry n :idempotent b}, a positive duration and count and strings, got %s", puff.Print(opts))
+			return cmdv, o, user, fmt.Errorf("want {:timeout d :stdin s :dir path :as :text :origin :agent :retry n :idempotent b}, a positive duration or :none, a count and strings, got %s", puff.Print(opts))
 		}
 	}
 	return cmdv, o, user, nil
@@ -189,7 +191,11 @@ func (j *job) argv() []string {
 // after stopGrace (see stop).
 func (d *daemon) spawn(j *job) (*proc, error) {
 	p := &proc{}
-	p.ctx, p.cancel = context.WithTimeout(j.ctx, j.opts.timeout)
+	if j.opts.timeout > 0 {
+		p.ctx, p.cancel = context.WithTimeout(j.ctx, j.opts.timeout)
+	} else {
+		p.ctx, p.cancel = context.WithCancel(j.ctx)
+	}
 	argv := j.argv()
 	cmd := exec.CommandContext(p.ctx, argv[0], argv[1:]...)
 	cmd.Dir = j.opts.dir

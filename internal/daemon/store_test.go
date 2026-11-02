@@ -882,8 +882,13 @@ func TestStoredJob(t *testing.T) {
 	}
 	// Only a stored :user is yours.
 	got, err = storedJob(7, `{:cmd ["go"]}`)
-	if err != nil || got.user {
+	if err != nil || got.user || got.opts.timeout != defaultJobTimeout {
 		t.Errorf("storedJob = %+v %v", got, err)
+	}
+	// A server that may run again keeps having no timeout.
+	j.opts = jobOpts{retry: 1}
+	if got, err = storedJob(7, puff.Print(j.stored())); err != nil || got.opts.timeout != 0 || got.opts.retry != 1 {
+		t.Errorf("storedJob with :timeout :none = %+v %v", got, err)
 	}
 	for _, p := range []string{`[1]`, `{:cwd "/x"}`, `(not read`} {
 		if got, err := storedJob(7, p); err == nil {

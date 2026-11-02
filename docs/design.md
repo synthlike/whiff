@@ -152,7 +152,9 @@ subscribers and private `def`s.
   at once, `{:exit :stdout :stderr}` as its `whiff/done`, the last 64KiB of
   each stream kept. `:as :text` answers stdout as text, or an err unless it
   exits 0. This is how services run `claude -p`, `gh` or a build.
-  `:jobs/output id` is a running job's output so far.
+  `:jobs/output id` is a running job's output so far. A job times out
+  after 1h unless its `:timeout` says otherwise; `:timeout :none`, for a
+  server, runs until it ends or is stopped.
 - **HTTP.** `(http/get url {:headers {...}})` answers the body of a 2xx, and
   `http/request` any method and the whole response. Both are `:write`: a
   request leaves the machine, and a GET can carry out in its URL whatever a
