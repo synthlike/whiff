@@ -376,6 +376,13 @@ func (d *daemon) evalIn(ctx context.Context, env *puff.Env, cur *caller, out *st
 	freeWrite := false
 	if req.Agent {
 		if forms, err := puff.Read(file, req.Src); err == nil {
+			// What a review shows is the eval's own code, and a held one
+			// runs later: a used file could have changed by then.
+			for _, f := range forms {
+				if isList(f, "use") {
+					return rpc.Response{Error: f.Pos.String() + ": an agent's eval can't use files; a service can"}
+				}
+			}
 			write := d.evalMark(env, from, forms) == puff.MarkWrite
 			switch {
 			case free:

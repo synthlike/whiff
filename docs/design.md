@@ -132,6 +132,17 @@ subscribers and private `def`s.
   a saved file reloads, a deleted one unloads, a fault restarts the service
   from its file. `whiff try file.puff fn` loads a file under a scratch
   address, calls it once and unloads it.
+- **Shared code.** `(use "lib/http-check.puff")` brings another file's
+  defs and tests in, as if they were written there: a handler's mark sees
+  through them, a name defined twice is an error at both places, and
+  `whiff test` runs the used file's tests too. A used file holds only
+  defs, tests and uses. A path starts from the using file's directory, its
+  target's if it is a symlink, so a service linked into
+  `~/.whiff/services/` uses the lib next to its source; a file comes in
+  once however many use it, and a cycle is an error at the use that closes
+  it. Changing a used file reloads the services that use it. Plain puff
+  files and the REPL use files too (from the working directory); an
+  agent's eval can't, since its review would show only the `use`.
 - **Tested in place.** `(test "name" body...)` in a service file passes if
   its body is `#t`, or for `(= got want)`, if they are equal, and shows both
   when not. Loading a service skips its tests; `whiff test file.puff` loads

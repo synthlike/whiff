@@ -22,7 +22,7 @@ func (d *daemon) try(ctx context.Context, from string, req rpc.Request) rpc.Resp
 	}
 	name := strings.TrimSuffix(filepath.Base(req.File), ".puff")
 	addr := fmt.Sprintf("try/%d/%s", d.tries.Add(1), name)
-	s, err := d.loadSource(req.File, req.Src, addr, true)
+	s, err := d.loadSource(req.File, req.Dir, req.Src, addr, true)
 	if err != nil {
 		return rpc.Response{Error: err.Error()}
 	}
@@ -50,7 +50,7 @@ func (d *daemon) test(ctx context.Context, req rpc.Request) rpc.Response {
 	}
 	name := strings.TrimSuffix(filepath.Base(req.File), ".puff")
 	addr := fmt.Sprintf("try/%d/%s", d.tries.Add(1), name)
-	s, err := d.loadSource(req.File, req.Src, addr, false)
+	s, err := d.loadSource(req.File, req.Dir, req.Src, addr, false)
 	if err != nil {
 		return rpc.Response{Error: err.Error()}
 	}

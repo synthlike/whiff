@@ -158,32 +158,28 @@ the web UI after it: about three seconds from nothing to all four ready.
 ### A whiff service: shop-test
 
 [`examples/shop/shop-test.puff`](../examples/shop/shop-test.puff) brings
-the shop up, waits until it's ready, tries the API as a client would, and
-tells you how it went. Install it next to procs:
+the shop up, waits until it's ready, runs the API's cases, and tells you
+how it went. Link it next to procs; a link, not a copy, as it uses
+`check.puff` and `lib/http-check.puff` beside it:
 
 ```sh
-cp examples/shop/shop-test.puff ~/.whiff/services/
+ln -s "$PWD/examples/shop/shop-test.puff" ~/.whiff/services/
 whiff call shop-test/run
 ```
 
 `run` calls `:procs/up :shop`. If the shop isn't ready yet, `run` answers
 `:waiting` and notes it in its state. `shop-test` subscribes to
-`:procs/ready`, and once every `shop/` process runs, it runs the
-scenario. The scenario is puff: `http/request` and `json/parse`, and each
-check a pattern match on the response.
+`:procs/ready`, and once every `shop/` process runs, it runs the cases.
+They aren't its own: `(use "check.puff")` brings in the cases of the plain
+puff script below, and the HTTP checking both share, so whiff and CI test
+the same thing.
 
 ```lisp
-(def (scenario)
-  (let [health (http/request (str api "/health"))
-        made (post "/orders" {:item "tea" :qty 2})
-        id (match made [(ok {:status 201 :body b}) (match (json/parse b) [(ok {:id id}) id] [_ 0])] [_ 0])
-        back (http/request (str api "/orders/" id))
-        missing (http/request (str api "/orders/999999"))]
-    [(step "GET /health answers 200" (status-is health 200) health)
-     (step "POST /orders makes an order" (and (status-is made 201) (> id 0)) made)
-     (step "GET /orders/<id> gives it back"
-       (match back [(ok {:status 200 :body b}) (= (json/parse b) (ok {:id id :item "tea" :qty 2}))] [_ #f]) back)
-     (step "GET /orders/999999 is 404" (status-is missing 404) missing)]))
+(service shop-test :state {:waiting #f}
+  (use "check.puff")
+  (def api "http://localhost:8080")
+  ...
+  (let [results (check api)] ...))
 ```
 
 The result lands in your inbox, with Run again and the API's logs, and on
@@ -191,16 +187,18 @@ The result lands in your inbox, with Run again and the API's logs, and on
 
 ```
 $ whiff inbox
-35  :shop-test -> :me/tell "shop-test: 4 of 4 checks passed"
+35  :shop-test -> :me/tell "shop-test: 6 of 6 passed"
     {:actions [{:action [:shop-test/run] :label "Run again"} {:action [:procs/logs :shop/api] :label "Logs of shop/api"}]}
 ```
 
-With the shop already up, `run` answers at once:
+With the shop already up, `run` answers at once, each case's result, and
+what it got if it failed:
 
 ```
 $ whiff call shop-test/run
-[{:ok #t :step "GET /health answers 200"} {:ok #t :step "POST /orders makes an order"}
- {:ok #t :step "GET /orders/<id> gives it back"} {:ok #t :step "GET /orders/999999 is 404"}]
+[{:name "it is healthy" :pass #t} {:name "an order is made" :pass #t} {:name "it reads back" :pass #t}
+ {:name "an order nobody made is 404" :pass #t} {:name "an empty order is refused" :pass #t}
+ {:name "five orders get rising ids" :pass #t}]
 ```
 
 `whiff history` shows the whole conversation; here oldest first, and
@@ -214,7 +212,7 @@ abridged:
 22:41:59.298  pub   user   :procs -> :shop-test on :procs/ready {:proc :shop/api}  (ok :done)
 22:42:00.332  pub   user   :procs -> :shop-test on :procs/ready {:proc :shop/web}  (ok :done)
 22:42:00.345  call  user   :shop-test -> :procs/runs  (ok [... each :running])
-22:42:00.378  call  user   :shop-test -> :me/tell "shop-test: 4 of 4 checks passed" ...
+22:42:00.378  call  user   :shop-test -> :me/tell "shop-test: 6 of 6 passed" ...
 ```
 
 ### A plain puff script: check.puff
@@ -225,7 +223,9 @@ API as a script, `puff examples/shop/check.puff`, which exits 0 if each
 case passes and 1 if not, so it fits CI as it is. Its cases are data: a
 request and what the response must have, its status, its text, or fields
 of its JSON at any depth. A case can `:save` a field of what it got, and a
-later case's path can be a function of what was saved:
+later case's path can be a function of what was saved. The checking is in
+[`lib/http-check.puff`](../examples/shop/lib/http-check.puff), which the
+script uses, `(use "lib/http-check.puff")`; the script keeps the cases:
 
 ```lisp
 (def cases
@@ -237,7 +237,8 @@ later case's path can be a function of what was saved:
    {:name "an order nobody made is 404" :req [:get "/orders/999999"] :want {:status 404}}
    {:name "an empty order is refused" :req [:post "/orders" {:item "" :qty 0}] :want {:status 400}}])
 
-; has? is whether got has want: each field of a map, at any depth; else
+; In lib/http-check.puff: has? is whether got has want: each field of a
+; map, at any depth; else
 ; the same value.
 (def (has? got want)
   (if (and (= (value/type want) :map) (= (value/type got) :map))
@@ -276,7 +277,8 @@ What makes this short in puff: responses are values you match on, not
 objects to poke at; a failure is an `(err ...)` you can print, not an
 exception; JSON parses to maps you compare with `=`; and the cases are
 data, with functions in them where a case needs what an earlier one got.
-Its own helpers have tests in the file: `puff -t examples/shop/check.puff`.
+The helpers have tests in the lib, which run with the script's:
+`puff -t examples/shop/check.puff`.
 
 ## What else you can build on it
 

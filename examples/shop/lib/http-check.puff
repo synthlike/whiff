@@ -1,0 +1,84 @@
+; http-check: an HTTP API checked against cases, for check.puff and
+; shop-test.puff, which use it.
+;
+; A case is data: a request, [method path body], and what the response
+; must have: a :status, its :text, or fields of its :json, at any depth. A
+; case can :save a field of the JSON it got, and a later case's path can
+; be a function of what was saved.
+
+; has? is whether got has want: each field of a map, at any depth; else
+; the same value.
+(def (has? got want)
+  (if (and (= (value/type want) :map) (= (value/type got) :map))
+    (vector/all? (map/entries want)
+      (fn ([k w]) (match (map/get got k) [(some g) (has? g w)] [(none) #f])))
+    (= got want)))
+
+(test "a response has a want's fields, at any depth, and no others matter"
+  (= [(has? {:status 201 :json {:id 4 :item "tea"}} {:status 201 :json {:item "tea"}})
+      (has? {:status 201 :json {:id 4}} {:json {:item "tea"}})
+      (has? {:status 404} {:status 200})]
+    [#t #f #f]))
+
+; seen is an HTTP response as a case looks at it: {:status :text}, and
+; :json if the text is JSON.
+(def (seen r)
+  (match r
+    [(ok {:status s :body b})
+     (let [m {:status s :text b}]
+       (ok (match (json/parse b) [(ok j) (map/set m :json j)] [_ m])))]
+    [e e]))
+
+(test "a JSON body is read; any other is text"
+  (= [(seen (ok {:status 200 :body "{\"id\": 1}" :headers {}})) (seen (ok {:status 200 :body "ok\n" :headers {}}))]
+    [(ok {:status 200 :text "{\"id\": 1}" :json {:id 1}}) (ok {:status 200 :text "ok\n"})]))
+
+; request sends req to base: a path that is a function gets saved.
+(def (request base req saved)
+  (let [[method path & body] req
+        path (if (= (value/type path) :function) (path saved) path)
+        opts (match body
+               [[b] {:method method :headers {"content-type" "application/json"} :body (json/to-string b)}]
+               [_ {:method method}])]
+    (seen (http/request (str base path) opts))))
+
+; result is how a check named name went: {:name :pass}, and :got, what it
+; got, if it didn't pass.
+(def (result name pass got)
+  (if pass {:name name :pass #t} {:name name :pass #f :got got}))
+
+; run-case is case c's result, and saved with what it saves.
+(def (run-case base saved c)
+  (let [{:name name :req req :want want} c
+        got (request base req saved)
+        pass (match got [(ok g) (has? g want)] [_ #f])
+        saved (match [(map/get c :save) got]
+                [[(some k) (ok {:json j})] (map/set saved k (map/get-or j k 0))]
+                [_ saved])]
+    [(result name pass got) saved]))
+
+; run-cases runs cases against base, in order, each with what the ones
+; before it saved, and gives their results.
+(def (run-cases base cases)
+  (let [[results _] (vector/reduce cases [[] {}]
+                      (fn ([rs saved] c) (let [[r s] (run-case base saved c)] [(vector/append rs r) s])))]
+    results))
+
+; line is a result as a line: ✓ and its name, or ✗, its name and what it
+; got.
+(def (line r)
+  (match r
+    [{:name name :pass #t} (str "✓ " name)]
+    [{:name name :got got} (str "✗ " name ": got " (value/to-string got))]))
+
+; summary is how results went, a line, then a line for each that failed.
+(def (summary results)
+  (let [failed (vector/filter results (fn ({:pass p}) (not p)))]
+    (string/join
+      (vector/concat [(str (- (vector/length results) (vector/length failed)) " of " (vector/length results) " passed")]
+        (vector/map failed line))
+      "\n")))
+
+(test "a summary counts what passed and shows what failed"
+  (= (summary [(result "a" #t (ok 1)) (result "b" #f (err {:kind :http}))])
+    "1 of 2 passed\n✗ b: got (err {:kind :http})"))

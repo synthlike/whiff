@@ -116,13 +116,30 @@ func (e *Env) Load(ctx context.Context, file, src string) (Value, error) {
 	return e.LoadForms(ctx, forms)
 }
 
+// LoadFile is Load for src, read from file: its uses start from file's
+// directory, not e.Dir.
+func (e *Env) LoadFile(ctx context.Context, file, src string) (Value, error) {
+	forms, err := Read(file, src)
+	if err != nil {
+		return nil, err
+	}
+	if forms, _, err = ExpandUses(forms, file, ""); err != nil {
+		return nil, err
+	}
+	return e.LoadForms(ctx, forms)
+}
+
 // LoadForms checks and evaluates forms, and returns the value of the last:
-// nil if that is a def or there are no forms. Names are checked before
-// anything runs, so an unknown name fails the whole load with an *Error.
-// Evaluation stops at a *Fault, keeping the defs that ran before it. A def
-// of an existing name replaces it for everything that uses it.
+// nil if that is a def or there are no forms. A (use "path") brings in
+// that file's forms, as ExpandUses does, from e.Dir. Names are checked
+// before anything runs, so an unknown name fails the whole load with an
+// *Error. Evaluation stops at a *Fault, keeping the defs that ran before
+// it. A def of an existing name replaces it for everything that uses it.
 func (e *Env) LoadForms(ctx context.Context, forms []*Form) (Value, error) {
-	var err error
+	forms, _, err := ExpandUses(forms, "", e.Dir)
+	if err != nil {
+		return nil, err
+	}
 	c := &compiler{env: e, defined: map[string]*global{}, defPos: map[string]Pos{}}
 	// Declare the defs first, so functions can call ones defined later.
 	for _, f := range forms {
@@ -221,6 +238,7 @@ func (s *scope) loop() *scope {
 var specialForms = map[string]bool{
 	"def": true, "let": true, "fn": true, "if": true, "cond": true, "do": true, "and": true, "or": true,
 	"match": true, "when": true, "loop": true, "recur": true, "->": true, "try": true, "catch": true, "test": true,
+	"use": true,
 }
 
 // compiler turns forms into exprs, resolving every name.
@@ -384,6 +402,8 @@ func (c *compiler) expr(f *Form, s *scope, tail bool) (expr, error) {
 			return c.catch(f, s, tail)
 		case "test":
 			return nil, errorf(f.Pos, "test only at top level")
+		case "use":
+			return nil, errorf(f.Pos, "use only at top level")
 		}
 	}
 	return c.call(f, s)
