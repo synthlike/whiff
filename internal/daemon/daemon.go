@@ -39,6 +39,7 @@ type daemon struct {
 	resets      chan reset    // whiff reset, for the supervisor
 	db          *bbolt.DB     // whiff.db: see store.go
 	log         io.Writer     // notes, and what services print
+	services    string        // the services directory
 	callTimeout time.Duration
 	base        *puff.Env    // only looked up in, for builtins' marks
 	tries       atomic.Int64 // the last whiff try's number, for its scratch address
@@ -96,7 +97,7 @@ func Run(ctx context.Context, dir, services string) error {
 	}()
 
 	d := &daemon{ctx: ctx, ops: make(chan func(*state)), restarts: make(chan *service, 16),
-		resets: make(chan reset), db: db, log: os.Stderr, callTimeout: defaultCallTimeout}
+		resets: make(chan reset), db: db, log: os.Stderr, services: services, callTimeout: defaultCallTimeout}
 	d.base = d.newEnv(io.Discard, &caller{})
 	d.timers.Store(time.Now().UnixNano())
 	err = db.View(func(tx *bbolt.Tx) error {

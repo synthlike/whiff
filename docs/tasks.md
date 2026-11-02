@@ -121,7 +121,7 @@ the end is dropped, and history says so.
 | --- | --- |
 | Pending means accepted and stored | Yes for jobs, asks and held messages (`tasks` and `inbox` buckets) |
 | A result is stored before anyone is told | Yes, in `tasks`, for 30 days: `whiff wait` reads it after a restart |
-| A service gets its result until handled | **No.** `whiff/done` sits in a mailbox, in memory: a crash there loses it, though `whiff wait` still has it, and a pipeline run waiting for it stays on its step for ever |
+| A service gets its result until handled | Yes: the mark commits with a stateful service's state; a stateless one's is set once its handler returns |
 | One id from held to ended | **No.** A held job's id answers `(err {:kind :pending :id m})`, then `m` answers: two ids, two `whiff/done`s |
 | `:outcome` on every failure | Yes |
 | Cancelling any task | Only jobs, `:jobs/cancel`, and rejecting what's held |

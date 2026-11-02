@@ -54,6 +54,9 @@ type message struct {
 	// its entry in history has its own; cause is the id of what led to
 	// it: see rpc.Entry.
 	id, cause int64
+	// task is the task whose result a whiff/done is, for a service that
+	// marks it handled once it has handled it; 0 for anything else.
+	task int64
 }
 
 // origin is :user or :agent, the origin of the chain a message belongs to.
@@ -109,10 +112,11 @@ type state struct {
 	db      *bbolt.DB // whiff.db: see store.go
 	log     io.Writer
 	addrs   map[string]*service
-	history []entry  // oldest first
-	asked   []*asked // every service's inbox, oldest first
-	timers  []*timer // what load read, until resume takes it up
-	lost    []*job   // what load read, until resume takes it up
+	history []entry    // oldest first
+	asked   []*asked   // every service's inbox, oldest first
+	timers  []*timer   // what load read, until resume takes it up
+	lost    []*job     // what load read, until resume takes it up
+	owed    []answered // results for services that aren't loaded, until they are
 	jobs    map[int64]*job
 	nextID  int64                       // the last id given to a message answered later, or a job
 	lastMsg int64                       // the last id given to a message or an eval in history: see msgID
