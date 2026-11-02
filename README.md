@@ -60,8 +60,8 @@ whiff session agent/1      # everything the session wrote, and how
   The CLI prints them for fzf (`whiff call todo/view | fzf | whiff act`);
   sniff shows them as pages with buttons.
 
-Docs: [use cases](docs/use-cases.md) · [design](docs/design.md) ·
-[stdlib](docs/stdlib.md)
+Docs: [use cases](docs/use-cases.md) · [procs](docs/procs.md) ·
+[design](docs/design.md) · [stdlib](docs/stdlib.md)
 
 ## Status
 
