@@ -168,6 +168,7 @@ func (sv *supervisor) load(file string, w *watched) error {
 			return
 		}
 		st.addrs[s.name] = s
+		close(s.placed)
 		sv.d.loaded(st, s.name)
 	})
 	if held {

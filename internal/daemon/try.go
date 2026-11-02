@@ -28,7 +28,10 @@ func (d *daemon) try(ctx context.Context, from string, req rpc.Request) rpc.Resp
 	}
 	// A trial answers its one message, and nothing published meanwhile.
 	s.subs = map[string]subscriber{}
-	d.do(func(st *state) { st.addrs[addr] = s })
+	d.do(func(st *state) {
+		st.addrs[addr] = s
+		close(s.placed)
+	})
 	d.wg.Go(func() { s.run(d.ctx) })
 	defer d.remove(s)
 	req.Op, req.Target = "call", ":"+addr+"/"+strings.TrimPrefix(req.Target, ":")
@@ -54,6 +57,8 @@ func (d *daemon) test(ctx context.Context, req rpc.Request) rpc.Response {
 	if err != nil {
 		return rpc.Response{Error: err.Error()}
 	}
+	// It never takes its address: timers its tests set for it go with it.
+	defer close(s.quit)
 	s.env.Dir = req.Dir
 	s.cur.chain, s.cur.user = []string{s.name}, true
 	var results []puff.Value

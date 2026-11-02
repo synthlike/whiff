@@ -103,8 +103,8 @@ type caller struct {
 	reviewed bool
 	session  string // the agent session that began the current chain, if one did
 	// stop is closed when the service version acting stops; nil for a
-	// client.
-	stop <-chan struct{}
+	// client. placed is closed once that version has its address.
+	stop, placed <-chan struct{}
 	// handOn gives the sender of the message being handled the answer to
 	// a job or ask; nil outside a handler.
 	handOn func(id int64) error
@@ -455,11 +455,11 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 				if err := d.keepTimer(t); err != nil {
 					return puff.Errorf("store", "the timer for :%s wasn't stored: %v", m.to(addr), err), nil
 				}
-				var stop <-chan struct{}
+				var stop, placed <-chan struct{}
 				if t.own() {
-					stop = cur.stop
+					stop, placed = cur.stop, cur.placed
 				}
-				d.arm(t, stop)
+				d.arm(t, stop, placed)
 				return puff.Done, nil
 			}},
 	}, viewBuiltins()...)

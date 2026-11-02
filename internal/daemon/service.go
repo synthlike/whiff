@@ -41,6 +41,7 @@ type service struct {
 	handling kept          // where the message it handles is stored, until that is marked handled
 	starts   bool          // it has a :start, which sets the timers it needs each time it loads
 	quit     chan struct{} // closed to stop it after the message it is handling
+	placed   chan struct{} // closed once it has its address: its own timers wait for it
 	done     chan struct{} // closed when it has stopped
 }
 
@@ -159,10 +160,10 @@ func (d *daemon) loadSource(file, dir, src, addr string, start bool) (*service, 
 	if addr == "" {
 		addr = name
 	}
-	quit := make(chan struct{})
+	quit, placed := make(chan struct{}), make(chan struct{})
 	s := &service{name: addr, fns: map[string]handler{}, subs: map[string]subscriber{}, code: map[string][]*puff.Form{},
-		forms: srv.Items[2:], mailbox: make(chan message, mailboxSize), cur: caller{addr: addr, stop: quit}, d: d,
-		quit: quit, done: make(chan struct{}), stateful: init != nil, keep: keep}
+		forms: srv.Items[2:], mailbox: make(chan message, mailboxSize), cur: caller{addr: addr, stop: quit, placed: placed}, d: d,
+		quit: quit, placed: placed, done: make(chan struct{}), stateful: init != nil, keep: keep}
 	var loads []*puff.Form
 	fns := map[string]*puff.Form{} // each subscriber's (fn (v) body...)
 	// add adds a handler named at pos, unless the name is taken.

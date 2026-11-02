@@ -190,18 +190,27 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 		}
 	}()
 
-	reqs := make(chan rpc.Request)
+	// queued is a request on its way to the loop below; an eval's has its
+	// context already, so a cancel read after it stops it even if it
+	// hasn't started yet.
+	type queued struct {
+		req    rpc.Request
+		ctx    context.Context
+		cancel *context.CancelFunc
+	}
+	reqs := make(chan queued)
 	go func() {
 		defer cancel()
 		for {
-			var req rpc.Request
-			if err := conn.Recv(&req); err != nil {
+			var q queued
+			req := &q.req
+			if err := conn.Recv(req); err != nil {
 				return
 			}
 			// An answer goes straight to the delivery waiting for it: the
 			// client may be waiting on a request of its own meanwhile.
 			if req.Op == "answer" {
-				l.answered(req)
+				l.answered(*req)
 				continue
 			}
 			// So does a cancel, which stops the evaluation in progress.
@@ -211,8 +220,14 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 				}
 				continue
 			}
+			if req.Op == "eval" || req.Op == "repl" {
+				var c context.CancelFunc
+				q.ctx, c = context.WithCancel(ctx)
+				q.cancel = &c
+				cancelEval.Store(q.cancel)
+			}
 			select {
-			case reqs <- req:
+			case reqs <- q:
 			case <-ctx.Done():
 				return
 			}
@@ -220,12 +235,13 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 	}()
 
 	for {
-		var req rpc.Request
+		var q queued
 		select {
-		case req = <-reqs:
+		case q = <-reqs:
 		case <-ctx.Done():
 			return
 		}
+		req := q.req
 		var resp rpc.Response
 		from := ""
 		if held != nil {
@@ -235,8 +251,7 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 		case "hello":
 			resp.Version = rpc.Version
 		case "eval", "repl":
-			ectx, cancel := context.WithCancel(ctx)
-			cancelEval.Store(&cancel)
+			ectx := q.ctx
 			// A free session's code runs as if you had accepted it.
 			free := false
 			if req.Agent && from != "" {
@@ -252,8 +267,9 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 				resp = d.evalIn(ectx, repl, cur, &replOut, "repl", req)
 				replOut.Reset()
 			}
-			cancelEval.Store(nil)
-			cancel()
+			// Unless a later eval has come in meanwhile.
+			cancelEval.CompareAndSwap(q.cancel, nil)
+			(*q.cancel)()
 		case "call", "send", "pub":
 			resp = d.message(ctx, from, req)
 		case "try":

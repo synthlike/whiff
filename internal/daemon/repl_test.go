@@ -41,17 +41,25 @@ func TestRepl(t *testing.T) {
 		resp, _ := c.Repl(`(loop [] (recur))`, "")
 		done <- resp.Error
 	}()
-	time.Sleep(50 * time.Millisecond)
-	if err := c.Cancel(); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case e := <-done:
-		if e == "" {
-			t.Errorf("a cancelled loop has no error")
+	// Cancel until it stops: the loop's request may not be sent yet, and a
+	// cancel before it does nothing.
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	for stop := time.After(2 * time.Second); ; {
+		if err := c.Cancel(); err != nil {
+			t.Fatal(err)
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("cancel didn't stop the loop")
+		select {
+		case e := <-done:
+			if e == "" {
+				t.Errorf("a cancelled loop has no error")
+			}
+		case <-tick.C:
+			continue
+		case <-stop:
+			t.Fatal("cancel didn't stop the loop")
+		}
+		break
 	}
 	if resp, err := c.Repl("(twice n)", ""); err != nil || resp.Value != "42" {
 		t.Errorf("after the cancel = %+v %v", resp, err)
