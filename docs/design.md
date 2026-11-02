@@ -60,10 +60,14 @@ a message the review gate holds. Those answer **pending** at once, `(err
 `[:whiff/done 12 result]`, to the sender's `(on (whiff/done id r) ...)`, or
 into history for a client, which picks it up with `whiff wait 12`. whiff
 stores the result before anyone is told and keeps it 30 days, so a wait
-finds it after a restart too. A failure whiff gives says in `:outcome` what
-happened: `:not-started`, `:stopped` or `:unknown`. A handler can pass its
-caller a pending it got (`hand-on`), so the caller waits for the job
-instead of the handler.
+finds it after a restart too. A service gets the result again after a
+restart until it has handled it: the mark that it did commits with its
+state, so its state never sees a result twice, though a handler's other
+effects can happen twice. One it faults on isn't given again, and one for
+a service that isn't loaded waits until it is. A failure whiff gives says
+in `:outcome` what happened: `:not-started`, `:stopped` or `:unknown`. A
+handler can pass its caller a pending it got (`hand-on`), so the caller
+waits for the job instead of the handler.
 
 An **ask** is a function with no body, `(ask (approve text) "...")`: its
 messages wait in the address's inbox until something replies. `:me` is your

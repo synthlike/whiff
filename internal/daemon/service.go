@@ -38,6 +38,7 @@ type service struct {
 	stateful bool
 	state    puff.Value
 	keep     bool          // commit its state; not for whiff try's scratch addresses
+	handling int64         // the task whose result it handles, until that is marked handled
 	starts   bool          // it has a :start, which sets the timers it needs each time it loads
 	quit     chan struct{} // closed to stop it after the message it is handling
 	done     chan struct{} // closed when it has stopped
@@ -258,16 +259,18 @@ func (s *service) initState(ctx context.Context, init *puff.Form) error {
 	return nil
 }
 
-// commit makes v s's state, once it is stored: only data can be.
+// commit makes v s's state, once it is stored: only data can be. The
+// result s is handling, if any, is marked handled with it.
 func (s *service) commit(v puff.Value) error {
 	p := puff.Print(v)
 	if _, err := puff.ReadValue(p); err != nil {
 		return fmt.Errorf("can't keep %s as state: only data can be", p)
 	}
 	if s.keep {
-		if err := s.d.storeState(s.name, p); err != nil {
+		if err := s.d.storeState(s.name, p, s.handling); err != nil {
 			return fmt.Errorf("can't store the state: %v", err)
 		}
+		s.handling = 0
 	}
 	s.state = v
 	return nil
@@ -486,7 +489,17 @@ func (s *service) run(ctx context.Context) {
 		select {
 		case m := <-s.mailbox:
 			begin := time.Now()
+			s.handling = m.task
 			r, faulted := s.handle(ctx, m)
+			// Handled, if no commit marked it: a handler that faults on a
+			// result would fault again, so it isn't given it again either.
+			if s.handling != 0 {
+				s.d.handled(s.name, s.handling)
+				s.handling = 0
+			}
+			if faulted && m.task != 0 {
+				s.d.note(":%s faulted on the result of task %d, so it won't get it again; whiff wait %d has it", s.name, m.task, m.task)
+			}
 			// Recorded before the reply, so the caller finds it in history.
 			s.d.do(func(st *state) {
 				gate := m.gate

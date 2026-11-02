@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -160,31 +162,87 @@ func (st *state) take(addr string, id int64) *asked {
 	return a
 }
 
+// answered is the result a task was answered with, by, for its ticket.
+type answered struct {
+	ticket
+	by     string
+	result puff.Value
+}
+
 // answer stores result as task t's, from by (an address, "" for a client),
-// then tells t's sender: [:whiff/done id result] in its mailbox if it is a
-// service with an (on (whiff/done id result) ...), else a line in history.
-// Anyone in whiff wait for it gets it too, and so does a wait that comes
-// later, after a restart too.
+// then tells t's sender: see tell. Anyone in whiff wait for it gets it too,
+// and so does a wait that comes later, after a restart too.
 func (d *daemon) answer(st *state, t ticket, by string, result puff.Value) {
-	if err := endTask(st.db, t, by, result, true); err != nil {
+	owed := d.owes(st, t.from)
+	if err := endTask(st.db, t, by, result, !owed); err != nil {
 		st.note(fmt.Sprintf("task %d's result isn't stored, so a later whiff wait won't find it: %v", t.id, err))
 	}
 	for _, w := range st.waiters[t.id] {
 		w <- result
 	}
 	delete(st.waiters, t.id)
+	if d.tell(st, t, by, result) && st.addrs[t.from] == nil {
+		st.note(fmt.Sprintf("the result of task %d waits for :%s, which isn't loaded", t.id, t.from))
+	}
+}
+
+// owes says whether a result for addr is stored until addr has handled
+// it: addr is a service with an (on (whiff/done id result) ...), or one
+// whose file is there but isn't loaded. Not a client, which reads it with
+// whiff wait.
+func (d *daemon) owes(st *state, addr string) bool {
+	if s := st.addrs[addr]; s != nil {
+		h, ok := s.fns["whiff/done"]
+		return !s.client && ok && !h.ask
+	}
+	if addr == "" || strings.Contains(addr, "/") {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(d.services, addr+".puff"))
+	return err == nil
+}
+
+// tell gives t's sender result, from by: [:whiff/done id result] in its
+// mailbox if it is a service with an (on (whiff/done id result) ...), else
+// a line in history. One for a service that isn't loaded waits until it
+// is. It says whether the result is still owed: in a mailbox, or waiting.
+func (d *daemon) tell(st *state, t ticket, by string, result puff.Value) bool {
 	m := message{id: st.msgID(), cause: t.msg, from: by, fn: "whiff/done", args: puff.Print(puff.NewVector(puff.Int(t.id), result)), dir: t.dir, user: t.user, reviewed: t.reviewed, session: t.session}
+	owed := d.owes(st, t.from)
 	if s := st.addrs[t.from]; s != nil {
 		if h, ok := s.fns[m.fn]; ok && !h.ask {
+			if owed {
+				m.task = t.id
+			}
 			d.put(st, t.from, m)
-			return
+			return owed
 		}
+	} else if owed {
+		st.owed = append(st.owed, answered{t, by, result})
+		return true
 	}
 	to := ""
 	if t.from != "" {
 		to = m.to(t.from)
 	}
 	st.record(entry{at: time.Now(), kind: m.kind(), id: m.id, cause: m.cause, user: m.user, from: by, to: to, args: m.args})
+	return false
+}
+
+// loaded gives addr, a service that has just loaded, the results that
+// waited for it.
+func (d *daemon) loaded(st *state, addr string) {
+	var still []answered
+	for _, a := range st.owed {
+		switch {
+		case a.from != addr:
+			still = append(still, a)
+		case !d.tell(st, a.ticket, a.by, a.result):
+			// This version doesn't handle whiff/done: history has it.
+			d.handled(a.from, a.id)
+		}
+	}
+	st.owed = still
 }
 
 // handOn gives m's sender the answer to id, a job or ask by sent, as

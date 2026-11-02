@@ -26,8 +26,7 @@ type job struct {
 	ticket
 	cmd    puff.Vector
 	cancel context.CancelFunc
-	pid    int        // its process group, as it is the group's leader
-	result puff.Value // read from the store: the answer it had as whiff stopped, if any
+	pid    int // its process group, as it is the group's leader
 }
 
 // jobsService is :jobs, whiff's own service for work longer than a call:
@@ -148,7 +147,8 @@ func (d *daemon) runJob(m message, args []puff.Value) (puff.Value, error) {
 			r = puff.Errorf("fault", "job %d: %v", j.id, err)
 		}
 		cancel()
-		// Stopping, nobody can be told: the answer waits for the next daemon.
+		// Stopping, nobody can be told: the answer waits, unhandled, for the
+		// next daemon.
 		told := d.do(func(st *state) {
 			delete(st.jobs, j.id)
 			d.answer(st, j.ticket, "jobs", r)

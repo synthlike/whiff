@@ -117,6 +117,7 @@ func (sv *supervisor) load(file string, w *watched) error {
 			return
 		}
 		st.addrs[s.name] = s
+		sv.d.loaded(st, s.name)
 	})
 	if held {
 		close(s.quit) // drops the timers its :start set
@@ -159,7 +160,7 @@ func (sv *supervisor) reset(name string) puff.Value {
 		}
 		if err := sv.load(file, w); err != nil {
 			if found {
-				sv.d.storeState(name, p)
+				sv.d.storeState(name, p, 0)
 			}
 			return puff.Errorf("load", "%v", err)
 		}

@@ -556,11 +556,11 @@ func TestJobsInterrupted(t *testing.T) {
 		return j
 	}
 	withDB(t, dir, func(db *bbolt.DB) {
-		j := stored(db, mine)
-		if !strings.Contains(puff.Print(j.result), ":outcome :stopped") || !j.user {
-			t.Errorf("job %s is stored as %+v", mine, j)
+		n, _ := strconv.ParseInt(mine, 10, 64)
+		if o, _, r, err := storedResult(db, n); err != nil || !strings.Contains(puff.Print(r), ":outcome :stopped") || !o.user {
+			t.Errorf("job %s is stored as %+v %s %v", mine, o, puff.Print(r), err)
 		}
-		if !errors.Is(syscall.Kill(-j.pid, 0), syscall.ESRCH) {
+		if j := stored(db, mine); !errors.Is(syscall.Kill(-j.pid, 0), syscall.ESRCH) {
 			t.Errorf("job %s still runs", mine)
 		}
 		// The hand-on took your chain's origin down to the agent's.
@@ -598,7 +598,7 @@ func TestJobsInterrupted(t *testing.T) {
 	cmd := puff.NewVector(puff.String("x"))
 	sender := ticket{from: "waiter", user: true}
 	jobs := []*job{
-		{ticket: sender, cmd: cmd, result: puff.Ok(puff.String("it finished"))},
+		{ticket: sender, cmd: cmd},
 		{ticket: sender, cmd: cmd, pid: gone.Process.Pid},
 		{ticket: sender, cmd: cmd, pid: running.Process.Pid},
 		{ticket: sender, cmd: cmd},
@@ -608,7 +608,7 @@ func TestJobsInterrupted(t *testing.T) {
 		puff.Entry{Key: puff.Keyword("status"), Val: puff.Keyword("ended")},
 		puff.Entry{Key: puff.Keyword("ended"), Val: puff.NewTime(time.Now().Add(-resultKept - time.Hour))},
 		puff.Entry{Key: puff.Keyword("result"), Val: puff.Ok(puff.Int(1))},
-		puff.Entry{Key: puff.Keyword("told"), Val: puff.Bool(true)},
+		puff.Entry{Key: puff.Keyword("handled"), Val: puff.Bool(true)},
 	)
 	withDB(t, dir, func(db *bbolt.DB) {
 		err := db.Update(func(tx *bbolt.Tx) error {
@@ -628,7 +628,7 @@ func TestJobsInterrupted(t *testing.T) {
 			t.Fatal(err)
 		}
 		// 900 finished as whiff stopped, before its sender was told.
-		if err := endTask(db, jobs[0].ticket, "jobs", jobs[0].result, false); err != nil {
+		if err := endTask(db, jobs[0].ticket, "jobs", puff.Ok(puff.String("it finished")), false); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -659,7 +659,7 @@ func TestJobsInterrupted(t *testing.T) {
 		for _, j := range jobs {
 			db.View(func(tx *bbolt.Tx) error {
 				p := tx.Bucket(tasksBucket).Get(idKey(j.id))
-				if get, err := fields(string(p)); err != nil || !puff.Equal(get("told"), puff.Bool(true)) {
+				if get, err := fields(string(p)); err != nil || !puff.Equal(get("handled"), puff.Bool(true)) {
 					t.Errorf("job %d, answered, is stored as %s", j.id, p)
 				}
 				return nil
@@ -676,6 +676,73 @@ func TestJobsInterrupted(t *testing.T) {
 	}
 }
 
+// A result a service hadn't handled when whiff went comes to it at the next
+// start, or once it loads, and only once: a stateful service's mark commits
+// with its state. One it faults on isn't given again, and one for an owner
+// with no file is a line in history.
+func TestResultsUntilHandled(t *testing.T) {
+	set(t, &pollInterval, 10*time.Millisecond)
+	dir := tempDir(t)
+	got := filepath.Join(dir, "got")
+	writeServices(t, dir, map[string]string{
+		"counter": `(service counter :state 0
+  (on (get n) "The count." (ok n))
+  (on (whiff/done n id r) :update "Counts results." (ok (+ n 1))))`,
+		"faulty": `(service faulty (on (whiff/done id r) "Faults." (+ 1 1.0)))`,
+		"later":  `(service later`,
+	})
+	db, err := openStore(filepath.Join(dir, "services"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, owner := range []string{"counter", "faulty", "later", "gone"} {
+		if err := endTask(db, ticket{id: int64(500 + i), from: owner, user: true}, "jobs", puff.Ok(puff.Int(i)), false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.Close()
+
+	done := start(t, dir)
+	c := dial(t, dir)
+	count := func() string {
+		resp, err := c.Eval(`(call :counter/get)`, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.Value
+	}
+	eventually(t, "counter's count", count, "(ok 1)")
+	historyHas(t, c, ":faulty faulted on the result of task 501, so it won't get it again")
+	historyHas(t, c, "1 waiting for :later, which isn't loaded")
+	writeServices(t, dir, map[string]string{"later": `(service later
+  (on (whiff/done id r) "Notes it." (file/append "` + got + `" (string/concat (int/to-string id) "\n"))))`})
+	eventually(t, ":later, loaded", func() string {
+		b, _ := os.ReadFile(got)
+		return string(b)
+	}, "502\n")
+	stopDaemon(t, c, done)
+
+	withDB(t, dir, func(db *bbolt.DB) {
+		db.View(func(tx *bbolt.Tx) error {
+			for id := 500; id < 504; id++ {
+				p := tx.Bucket(tasksBucket).Get(idKey(int64(id)))
+				if get, err := fields(string(p)); err != nil || !puff.Equal(get("handled"), puff.Bool(true)) {
+					t.Errorf("task %d is stored as %s", id, p)
+				}
+			}
+			return nil
+		})
+	})
+	start(t, dir)
+	c = dial(t, dir)
+	if n := count(); n != "(ok 1)" {
+		t.Errorf("after a restart, counter's count is %s: it got a result twice", n)
+	}
+	if b, _ := os.ReadFile(got); string(b) != "502\n" {
+		t.Errorf(":later got %q", b)
+	}
+}
+
 func TestStoredJob(t *testing.T) {
 	j := &job{ticket: ticket{id: 7, from: "plan", dir: "/x", user: true, session: "agent/2"}, cmd: puff.NewVector(puff.String("go")), pid: 42}
 	got, err := storedJob(7, puff.Print(j.stored()))
@@ -683,12 +750,12 @@ func TestStoredJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.id != 7 || got.from != "plan" || got.dir != "/x" || !got.user || got.session != "agent/2" || got.pid != 42 ||
-		puff.Print(got.cmd) != `["go"]` || got.result != nil {
+		puff.Print(got.cmd) != `["go"]` {
 		t.Errorf("storedJob = %+v", got)
 	}
-	// Only a stored :user is yours; a :result is the answer it had.
-	got, err = storedJob(7, `{:cmd ["go"] :result (ok 1)}`)
-	if err != nil || got.user || puff.Print(got.result) != "(ok 1)" {
+	// Only a stored :user is yours.
+	got, err = storedJob(7, `{:cmd ["go"]}`)
+	if err != nil || got.user {
 		t.Errorf("storedJob = %+v %v", got, err)
 	}
 	for _, p := range []string{`[1]`, `{:cwd "/x"}`, `(not read`} {
