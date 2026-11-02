@@ -16,6 +16,9 @@
 ; that exits 0, tried every second; then it is :running, and on
 ; :procs/ready. One that doesn't pass within 2m is :unready, and you hear
 ; of it. One with :after [...] is :queued until each of those is running.
+; While it runs, its :ready is tried every 10s: after 3 misses in a row it
+; is restarted if it has :restart #t, else :unready, and you hear of it;
+; :unready, it is :running again once its :ready passes.
 ;
 ; Stopping sends its process group SIGTERM, then SIGKILL after 3s; then
 ; its :stop, if it has one, runs. A container runs in the foreground
@@ -49,6 +52,8 @@
   (def window 1m)       ; three exits within it, and it stays down
   (def most 3)
   (def every 1s)        ; how often a :ready check is tried
+  (def checking 10s)    ; how often it is tried again while it runs
+  (def misses 3)        ; failures in a row before it counts as unwell
   (def ready-within 2m) ; it must pass by then
 
   ; pairs is v, [k1 v1 k2 v2 ...], as [[k1 v1] [k2 v2] ...]: a map that
@@ -304,8 +309,8 @@
 
   ; resume is state at start: jobs that ended while whiff was down are
   ; gone, and those you want up come back, in the order listed. On a
-  ; reload the jobs still run, and stay; a :ready check, whose timer the
-  ; reload dropped, is tried again.
+  ; reload the jobs still run, and stay; a :ready check, starting or
+  ; while it runs, whose timer the reload dropped, is tried again.
   (def (resume state)
     (let [running (vector/map (or-else (call :jobs/list) []) (fn ({:id id}) id))
           state (vector/reduce (map/entries (map/get-or state :jobs {})) state
@@ -313,6 +318,8 @@
                     (cond
                       [(not (vector/contains? running id)) (lost s id name kind)]
                       [(= (status-of s name) :starting) (do (send-after every :procs/probe name id) s)]
+                      [(and (= kind :run) (vector/contains? [:running :unready] (status-of s name)) (map/has? (spec-of name) :ready))
+                       (do (send-after checking :procs/check name id) s)]
                       [_ s])))]
       (vector/reduce (names-of table) state
         (fn (s name)
@@ -414,7 +421,7 @@
       (each state which #t (fn (s name) (if (vector/contains? these name) (restart-one s name) (up-one s name))))))
 
   (on (runs state) :read
-    "Every process in procs.puff, in order: {:proc :status :job}, with :status one of :running (and ready), :starting (until its :ready passes), :unready (it didn't, in 2m), :queued (until those it comes :after run), :stopping, :clearing, :waiting (to start again), :exited, :failed, :stray (may still run from before whiff died) or :down; :pid for a stray, :exit once it exited and :for, what a queued one waits for."
+    "Every process in procs.puff, in order: {:proc :status :job}, with :status one of :running (and ready), :starting (until its :ready passes), :unready (it didn't, in 2m, or failed it 3 times in a row since), :queued (until those it comes :after run), :stopping, :clearing, :waiting (to start again), :exited, :failed, :stray (may still run from before whiff died) or :down; :pid for a stray, :exit once it exited and :for, what a queued one waits for."
     (ok (vector/map table (fn ([name _]) (run-of name (proc state name))))))
 
   (on (view state) :read
@@ -443,11 +450,33 @@
       (cond
         [(not (and (= (map/get-or p :status :down) :starting) (= (map/get p :job) (some id)))) (ok [:stale state])]
         [(passes? (spec-of name))
-         (ok [:ready (became-ready (set-proc state name {:status :running}) name)])]
+         (do (send-after checking :procs/check name id)
+           (ok [:ready (became-ready (set-proc state name {:status :running}) name)]))]
         [(> (time/since (map/get-or p :started (time/now))) ready-within)
          (do (tell name (str "started, but its :ready didn't pass within " ready-within ". It still runs; what comes after it waits.") :unready)
+           (send-after checking :procs/check name id)
            (ok [:unready (set-proc state name {:status :unready})]))]
         [_ (do (send-after every :procs/probe name id) (ok [:starting state]))])))
+
+  (on (check state name id) :update
+    "Tries name's :ready every 10s while its job id runs: failing 3 times in a row, it is restarted if it has :restart #t, else :unready, and you hear of it; passing again, it is :running. whiff's own loop."
+    (let [p (proc state name)
+          st (map/get-or p :status :down)
+          n (+ (map/get-or p :misses 0) 1)
+          again (fn (s) (do (send-after checking :procs/check name id) s))]
+      (cond
+        [(not (and (vector/contains? [:running :unready] st) (= (map/get p :job) (some id)))) (ok [:stale state])]
+        [(passes? (spec-of name))
+         (ok [:passed (again (if (= st :unready)
+                               (became-ready (set-proc state name {:status :running :misses 0}) name)
+                               (set-proc state name {:misses 0})))])]
+        [(= st :unready) (ok [:missed (again state)])]
+        [(< n misses) (ok [:missed (again (set-proc state name {:misses n}))])]
+        [(map/get-or (spec-of name) :restart #f)
+         (do (tell name (str "failed its :ready " misses " times in a row, so it was restarted.") :running)
+           (ok [:restarted (restart-one (set-proc state name {:misses 0}) name)]))]
+        [_ (do (tell name (str "failed its :ready " misses " times in a row. It still runs, and is :running again once it passes.") :unready)
+             (ok [:unready (again (set-proc state name {:status :unready :misses 0}))]))])))
 
   (on (again state name) :update
     "Starts name again after it exited, if you still want it: whiff's own loop."
