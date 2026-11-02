@@ -21,7 +21,8 @@
 ; A run's worktree is ~/.whiff/pipelines/<repo>-<n>, on branch whiff/<n>.
 ; Its state is the runs and the jobs they wait for; a run whose job was
 ; running when whiff stopped fails, as jobs aren't resumed, and offers
-; retry or discard. If whiff dies as a run starts, before its state is
+; retry or discard. If whiff died, the job may still be running, and retry
+; refuses until it isn't. If whiff dies as a run starts, before its state is
 ; stored, the run's worktree and branch stay, and the next run skips them.
 
 (service pipeline :state {:next 1 :runs {} :jobs {}}
@@ -187,6 +188,18 @@
         (publish :pipeline/step {:run n :step status})
         (ok (set-run state n {:step status})))))
 
+  ; failure is a run's note when a step failed with e, what saying which;
+  ; and, if the step may still be running after whiff died, how to stop it.
+  (def (failure what e)
+    (str what ": " (value/to-string e)
+      (match e
+        [{:pid pid} (str "\n\nIt may still be running, as process group " pid ", and Retry refuses until it isn't. To stop it: kill -- -" pid)]
+        [_ ""])))
+
+  (test "a failure that may still be running says how to stop it"
+    (= [(failure "The check didn't run" {:kind :start}) (string/contains? (failure "The developer failed" {:kind :interrupted :pid 42}) "kill -- -42")]
+      ["The check didn't run: {:kind :start}" #t]))
+
   ; step-done takes run n on from the result r of the job it waited for at
   ; step; a run cancelled meanwhile stays as it is.
   (def (step-done state n step r)
@@ -196,15 +209,22 @@
         [(= step :dev)
          (match r
            [(ok _) (check (set-run state n {:resumable #t}) n)]
-           [(err e) (finish state n :failed (str "The developer failed: " (value/to-string e)))])]
+           [(err e) (finish state n :failed (failure "The developer failed" e))])]
         [(= step :check)
          (match r
            [(ok checked) (review state n checked)]
-           [(err e) (finish state n :failed (str "The check didn't run: " (value/to-string e)))])]
+           [(err e) (finish state n :failed (failure "The check didn't run" e))])]
         [_
          (match r
            [(ok text) (reviewed state n text)]
-           [(err e) (finish state n :failed (str "The reviewer failed: " (value/to-string e)))])])))
+           [(err e) (finish state n :failed (failure "The reviewer failed" e))])])))
+
+  ; stray is (ok (some pid)) if run's last job may still be running, in
+  ; process group pid: whiff died while it ran, or it's being cancelled.
+  (def (stray run)
+    (match (map/get run :job)
+      [(some id) (call :jobs/process id)]
+      [(none) (ok (none))]))
 
   (def (active? step) (vector/contains? [:dev :check :review] step))
 
@@ -300,14 +320,20 @@
       [_ (err {:kind :no-run :message (str "no run " n " is going")})]))
 
   (on (retry state n note) :write :update
-    "Takes run n on after it gave up, failed or was cancelled, for up to 3 more rounds: the dev Claude, in the run's worktree, gets note, your words for it (\"\" for none), and the last review. (ok :retrying); (err {:kind :no-run}) unless run n ended so."
+    "Takes run n on after it gave up, failed or was cancelled, for up to 3 more rounds: the dev Claude, in the run's worktree, gets note, your words for it (\"\" for none), and the last review. (ok :retrying); (err {:kind :no-run}) unless run n ended so; (err {:kind :still-running :pid}) while its last job may still be running, as after whiff died while it ran."
     (match (map/get-in state [:runs n])
       [(some run) when (ended? (map/get-or run :step :none))
-       (let [round (map/get-or run :round 1)
-             ; A session no dev turn ended in may not exist: a new one.
-             fresh (if (map/get-or run :resumable #f) {} {:session (uuid/new)})
-             state (set-run state n (map/merge fresh {:round (+ round 1) :limit (+ round rounds)}))]
-         (ok [:retrying (try (dev state n (retry-input (run-of state n) note)))]))]
+       ; Two devs in one worktree would undo each other's work.
+       (match (try (stray run))
+         [(some pid)
+          (err {:kind :still-running :pid pid
+                :message (str "run " n "'s last job may still be running, as process group " pid ": stop it (kill -- -" pid ") or let it end, then retry")})]
+         [(none)
+          (let [round (map/get-or run :round 1)
+                ; A session no dev turn ended in may not exist: a new one.
+                fresh (if (map/get-or run :resumable #f) {} {:session (uuid/new)})
+                state (set-run state n (map/merge fresh {:round (+ round 1) :limit (+ round rounds)}))]
+            (ok [:retrying (try (dev state n (retry-input (run-of state n) note)))]))])]
       [_ (err {:kind :no-run :message (str "run " n " hasn't ended without being ready: nothing to retry")})]))
 
   (on (merge state n) :write :update

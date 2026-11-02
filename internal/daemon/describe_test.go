@@ -136,6 +136,7 @@ func TestLs(t *testing.T) {
 :jobs
   (cancel id)       :write  Kill job id and everything it started.
   (list)            :read   The running jobs, each {:id :cmd :cwd :from}.
+  (process id)      :read   (some pid), the process group job id may still run in: while it runs, and after whiff died while it ran, while its result's :pid is there; else (none). Retry its write only once it's (none).
   (run cmd [opts])  :write  Run cmd, [program args...], here; pending now, {:exit :stdout :stderr} when done. Options: :timeout (1h); :stdin, a string; :dir, where it runs; :as :text answers (ok stdout), or (err {:kind :exit}) unless it exits 0; :origin :agent, for a job whose output a model writes, answers as :agent's; :retry n runs it again, up to n times, under its id, if a timeout or whiff stopped it, or whiff died while it ran, and only if it is :read or :idempotent #t says running it twice is safe. :read for a read-only command, as whiff ls lists them.
 :me
   (answer id [text])         :write  Reply to message id in your inbox (ok text), or (ok :done) without text or with "", which dismisses a report.

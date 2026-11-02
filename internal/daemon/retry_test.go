@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -132,5 +133,25 @@ func TestRetries(t *testing.T) {
 	}
 	if r := wait("801"); !strings.Contains(r, ":outcome :unknown :pid") {
 		t.Errorf("job 801, which may still run, = %s", r)
+	}
+
+	// :jobs/process says which may still run: 801's group, until it's gone.
+	process := func(id string) string {
+		t.Helper()
+		resp, err := c.Eval(`(call :jobs/process `+id+`)`, dir)
+		if err != nil || resp.Error != "" {
+			t.Fatalf("process %s: %v %s", id, err, resp.Error)
+		}
+		return resp.Value
+	}
+	if got, want := process("801"), fmt.Sprintf("(ok (some %d))", running.Process.Pid); got != want {
+		t.Errorf("job 801's process = %s, want %s", got, want)
+	}
+	syscall.Kill(-running.Process.Pid, syscall.SIGKILL)
+	running.Wait()
+	for _, id := range []string{"800", "801", "999"} {
+		if got := process(id); got != "(ok (none))" {
+			t.Errorf("job %s's process = %s, want (ok (none))", id, got)
+		}
 	}
 }
