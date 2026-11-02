@@ -38,7 +38,7 @@ func TestProcs(t *testing.T) {
 	// a moment after it starts; b comes after it, and writes its pid, its
 	// group's, and early if a wasn't ready. slow is never ready.
 	table := `(def procs [:demo/a {:cmd ["sh" "-c" "echo a up; (sleep 0.2; touch a.ready) & trap 'echo a bye; exit 0' TERM; while :; do sleep 0.1; done"]
-                            :dir "` + dir + `" :stop ["sh" "-c" "echo stopped >> stops"] :ready ["test" "-e" "a.ready"]}
+                            :dir "` + dir + `" :stop ["sh" "-c" "echo stopped >> stops"] :ready ["test" "-e" "a.ready"] :url "http://localhost:1/a"}
                     :demo/b {:cmd ["sh" "-c" "test -e a.ready || touch early; echo $$ > b.pid; echo b up; while :; do sleep 0.1; done"]
                              :dir "` + dir + `" :after [:demo/a]}
                     :demo/flaky {:cmd ["sh" "-c" "echo flaky; exit 3"] :restart #t}
@@ -124,7 +124,8 @@ func TestProcs(t *testing.T) {
 		!strings.Contains(inbox, "[:procs/up :demo/flaky]") {
 		t.Errorf("your inbox = %s", inbox)
 	}
-	if view := call("procs/view", "[]"); !strings.Contains(view, "[:procs/restart :demo/a]") || !strings.Contains(view, "[:procs/up :demo/flaky]") {
+	if view := call("procs/view", "[]"); !strings.Contains(view, "[:procs/restart :demo/a]") || !strings.Contains(view, "[:procs/up :demo/flaky]") ||
+		!strings.Contains(view, `:url "http://localhost:1/a"`) {
 		t.Errorf("view = %s", view)
 	}
 

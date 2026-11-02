@@ -20,7 +20,7 @@ func drawn(t *testing.T, printed string, marks map[string]string) string {
 
 func TestRender(t *testing.T) {
 	marks := map[string]string{"p/show": "read", "p/retry": "write", "p/go": "write"}
-	items := `(ok (items [{:label "Fix <b>it</b>\n\n1. one ` + "`a`" + `\n2. two" :detail "d"
+	items := `(ok (items [{:label "Fix <b>it</b>\n\n1. one ` + "`a`" + `\n2. two" :detail "d" :url "http://localhost:8080/?a=1&b=2"
 	  :actions [{:label "Show" :action [:p/show 2]} {:label "Retry" :action [:p/retry 2] :ask "Why?"} {:label "Go" :action [:p/go]}]}
 	  {:label "plain" :action [:p/go "x"]}] {:changed :p/changed}))`
 	got := drawn(t, items, marks)
@@ -28,6 +28,8 @@ func TestRender(t *testing.T) {
 		// Text is escaped, and long text is prose.
 		`<p>Fix &lt;b&gt;it&lt;/b&gt;</p><ol start="1"><li>one <code>a</code></li><li>two</li></ol>`,
 		`<span class="detail">d</span>`,
+		// Its :url is a link, in a new tab.
+		`<a class="url" href="http://localhost:8080/?a=1&amp;b=2" target="_blank" rel="noopener noreferrer">http://localhost:8080/?a=1&amp;b=2</a>`,
 		// A :read action links to its page.
 		`<a class="action link labelled" href="/view/p/show?args=%5B2%5D"`,
 		// One that asks opens a box for the answer, then posts.
@@ -54,6 +56,8 @@ func TestRender(t *testing.T) {
 	for _, tt := range []struct{ printed, want string }{
 		{`(ok (board [{:title "Done" :items []} {:title "Dev" :items [{:label "a"}]}]))`,
 			`<div class="view board"><div class="column"><h4>Done<span class="count">0</span></h4><p class="hint">None.</p></div><div class="column"><h4>Dev<span class="count">1</span></h4><div class="item"><span>a</span></div></div></div>`},
+		// A :url that isn't http or https isn't a link.
+		{`(ok (items [{:label "a" :url "javascript:alert(1)"}]))`, `<div class="item"><span>a</span></div>`},
 		{`(ok (text "a <diff>"))`, `<div class="view"><pre>a &lt;diff&gt;</pre></div>`},
 		{`(ok (locations [{:file "a.go" :line 3 :col 4 :note "here"}]))`, `data-copy="a.go:3:4"`},
 		// A reply that holds no view is folded as puff.
