@@ -223,19 +223,23 @@ func (d *daemon) reject(id int64, reason string) puff.Value {
 }
 
 // reviewed answers a's sender with result, and publishes {:id :result} on
-// :review/done. A job that a started kept a's id, so it is the job's
-// pending, and the job answers it when it ends.
+// :review/done.
 func (d *daemon) reviewed(a *asked, result puff.Value) {
+	d.do(func(st *state) { d.settleHeld(st, a, result) })
+}
+
+// settleHeld is reviewed on the route goroutine. A job that a started kept
+// a's id, so it answers it when it ends: result is its pending, or, if the
+// accept was cancelled after it started, not what happened.
+func (d *daemon) settleHeld(st *state, a *asked, result puff.Value) {
+	if id, ok := pendingID(result); st.jobs[a.id] == nil && (!ok || id != a.id) {
+		d.answer(st, a.ticket, a.to, result)
+	}
 	done, _ := puff.NewMap(
 		puff.Entry{Key: puff.Keyword("id"), Val: puff.Int(a.id)},
 		puff.Entry{Key: puff.Keyword("result"), Val: result},
 	)
-	d.do(func(st *state) {
-		if id, ok := pendingID(result); !ok || id != a.id {
-			d.answer(st, a.ticket, a.to, result)
-		}
-		st.publish(message{cause: a.msg, from: "review", topic: "review/done", args: puff.Print(puff.NewVector(done)), user: a.user})
-	})
+	st.publish(message{cause: a.msg, from: "review", topic: "review/done", args: puff.Print(puff.NewVector(done)), user: a.user})
 }
 
 // reviewService is :review, whose inbox holds what the review gate holds:

@@ -32,6 +32,7 @@ const usage = `usage:
   whiff inbox [address]           list the messages waiting for a reply: yours, :me's, by default
   whiff reply id value            answer a message waiting for a reply
   whiff wait id                   print the answer to a pending message or job, waiting for it
+  whiff cancel id                 cancel a task that hasn't ended: held, waiting for a reply or a running job
   whiff pending                   list agents' messages that wait for your review
   whiff accept id                 deliver a message that waits for review, and print its value
   whiff reject id reason          answer a message that waits for review with (err {:kind :rejected})
@@ -96,6 +97,8 @@ func run(args []string, dir, services string, stdout, stderr io.Writer) int {
 	case len(args) == 3 && args[0] == "reply", len(args) == 2 && args[0] == "wait",
 		len(args) == 2 && args[0] == "accept", len(args) == 3 && args[0] == "reject":
 		return message(dir, args[0], "", args[1:], stdout, stderr)
+	case len(args) == 2 && args[0] == "cancel":
+		return message(dir, "cancel-task", "", args[1:], stdout, stderr)
 	case len(args) >= 2 && (args[0] == "trust" && len(args) >= 3 || args[0] == "free" || args[0] == "gate"):
 		return setMode(dir, args[0], args[1], args[2:], stdout, stderr)
 	case len(args) == 2 && args[0] == "session":

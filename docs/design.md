@@ -65,9 +65,12 @@ restart until it has handled it: the mark that it did commits with its
 state, so its state never sees a result twice, though a handler's other
 effects can happen twice. One it faults on isn't given again, and one for
 a service that isn't loaded waits until it is. A failure whiff gives says
-in `:outcome` what happened: `:not-started`, `:stopped` or `:unknown`. A
-handler can pass its caller a pending it got (`hand-on`), so the caller
-waits for the job instead of the handler.
+in `:outcome` what happened: `:not-started`, `:stopped` or `:unknown`.
+`whiff cancel 12` ends one that hasn't: held or waiting, it leaves its
+inbox; a running job is killed. An agent cancels only what its session
+began. A task ends once: an answer after its end is dropped, and history
+says so. A handler can pass its caller a pending it got (`hand-on`), so the
+caller waits for the job instead of the handler.
 
 An **ask** is a function with no body, `(ask (approve text) "...")`: its
 messages wait in the address's inbox until something replies. `:me` is your

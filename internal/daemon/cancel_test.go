@@ -1,0 +1,97 @@
+package daemon
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/synthlike/whiff/internal/rpc"
+)
+
+// whiff cancel ends a task that hasn't ended, however it waits: held,
+// waiting for a reply or running. An agent cancels only its own session's.
+func TestCancel(t *testing.T) {
+	dir := tempDir(t)
+	file := filepath.Join(dir, "touched")
+	writeServices(t, dir, map[string]string{"box": `(service box (ask (q x) "A question."))`})
+	start(t, dir)
+	you := dial(t, dir)
+	agent, other := dial(t, dir), dial(t, dir)
+	for _, a := range []*rpc.Client{agent, other} {
+		a.Agent = true
+		if _, err := a.Claim("agent", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reviewer := dial(t, dir)
+	if _, err := reviewer.Sub("review/pending"); err != nil {
+		t.Fatal(err)
+	}
+	msg := func(c *rpc.Client, op, target, args string) string {
+		t.Helper()
+		r, err := c.Message(op, target, args, dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Error != "" {
+			return "error: " + r.Error
+		}
+		return r.Value
+	}
+	cancel := func(c *rpc.Client, id string) string { return msg(c, "cancel-task", "", "["+id+"]") }
+	wait := func(id string) string { return msg(you, "wait", "", "["+id+"]") }
+	notStarted := func(id string) string {
+		return `(err {:kind :cancelled :message "task ` + id + ` was cancelled before it started" :outcome :not-started})`
+	}
+
+	// One waiting for a reply leaves its inbox; only you cancel yours.
+	q := pendingOf(t, msg(you, "call", "box/q", `["x"]`))
+	if r := cancel(agent, q); !strings.Contains(r, ":kind :refused") {
+		t.Errorf("an agent's cancel of yours = %s", r)
+	}
+	if r := cancel(you, q); r != "(ok :done)" {
+		t.Errorf("cancel %s = %s", q, r)
+	}
+	if r := wait(q); r != notStarted(q) {
+		t.Errorf("wait %s = %s", q, r)
+	}
+	if text, _ := you.Inbox("box"); text != "" {
+		t.Errorf("inbox of :box = %q", text)
+	}
+
+	// One held leaves the review queue, and nothing runs; another session
+	// can't cancel it.
+	held := pendingOf(t, msg(agent, "call", "jobs/run", `[["touch" "`+file+`"]]`))
+	if r := cancel(other, held); !strings.Contains(r, ":kind :refused") {
+		t.Errorf("another session's cancel = %s", r)
+	}
+	if r := cancel(agent, held); r != "(ok :done)" {
+		t.Errorf("cancel %s = %s", held, r)
+	}
+	if r := wait(held); r != notStarted(held) {
+		t.Errorf("wait %s = %s", held, r)
+	}
+	if text, _ := you.Inbox("review"); text != "" {
+		t.Errorf("the review queue = %q", text)
+	}
+	if _, err := os.Stat(file); err == nil {
+		t.Error("the cancelled job ran")
+	}
+
+	// A running job is killed; cancelled again, it has ended.
+	job := pendingOf(t, msg(you, "call", "jobs/run", `[["sleep" "30"]]`))
+	if r := cancel(you, job); r != "(ok :done)" {
+		t.Errorf("cancel %s = %s", job, r)
+	}
+	stopped := `(err {:kind :cancelled :message "job ` + job + ` was cancelled" :outcome :stopped})`
+	if r := wait(job); r != stopped {
+		t.Errorf("wait %s = %s", job, r)
+	}
+	if r := cancel(you, job); r != `(err {:kind :ended :message "task `+job+` has ended" :result `+stopped+`})` {
+		t.Errorf("cancel %s, ended = %s", job, r)
+	}
+	if r := cancel(you, "999"); !strings.Contains(r, ":kind :no-id") {
+		t.Errorf("cancel 999 = %s", r)
+	}
+}

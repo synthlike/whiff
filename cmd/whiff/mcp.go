@@ -402,7 +402,7 @@ func (a *agent) addEval(mode sessionMode) {
 }
 
 // addFixed adds the tools that aren't a service's and don't change with
-// the mode: wait and inbox. refresh adds eval.
+// the mode: wait, cancel and inbox. refresh adds eval.
 func (a *agent) addFixed() {
 	obj := func(props map[string]any, required ...string) map[string]any {
 		schema := map[string]any{"type": "object", "properties": props, "additionalProperties": false}
@@ -428,6 +428,29 @@ func (a *agent) addFixed() {
 				wait = min(time.Duration(in.Seconds)*time.Second, 10*time.Minute)
 			}
 			return a.wait(ctx, in.ID, wait), nil
+		})
+	a.server.AddTool(&mcp.Tool{Name: "cancel",
+		Description: "Cancels a pending message or job of yours, by its id: one waiting for review or a reply is dropped, and a running job is killed. Its result says how it ended: :outcome :not-started, or :stopped, as what it had done stays done.",
+		InputSchema: obj(map[string]any{
+			"id": map[string]any{"type": "integer", "description": "the pending id"},
+		}, "id")},
+		func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			var in struct{ ID int64 }
+			if err := json.Unmarshal(req.Params.Arguments, &in); err != nil {
+				return failed("want {\"id\": n}: %v", err), nil
+			}
+			c, _, err := a.client()
+			if err != nil {
+				return failed("%v", err), nil
+			}
+			resp, err := c.Message("cancel-task", "", fmt.Sprintf("[%d]", in.ID), a.wd)
+			if err == nil && resp.Error != "" {
+				err = errors.New(resp.Error)
+			}
+			if err != nil {
+				return failed("%v", err), nil
+			}
+			return a.answer(resp.Value), nil
 		})
 	a.server.AddTool(&mcp.Tool{Name: "inbox",
 		Description: "Lists the messages sent to you that wait for your answer, oldest first, each {:id :fn :args :from :origin :cwd :at}. Answer one with eval (reply id (ok value)).",

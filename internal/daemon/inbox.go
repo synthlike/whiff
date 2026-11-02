@@ -171,8 +171,19 @@ type answered struct {
 
 // answer stores result as task t's, from by (an address, "" for a client),
 // then tells t's sender: see tell. Anyone in whiff wait for it gets it too,
-// and so does a wait that comes later, after a restart too.
+// and so does a wait that comes later, after a restart too. The first
+// answer ends the task: one that comes after is dropped, and noted.
 func (d *daemon) answer(st *state, t ticket, by string, result puff.Value) {
+	if _, _, r, err := storedResult(st.db, t.id); err == nil && r != nil {
+		st.note(fmt.Sprintf("an answer to task %d came after it ended, so it is dropped: %s", t.id, puff.Print(result)))
+		return
+	}
+	d.settle(st, t, by, result)
+}
+
+// settle is answer for a task that may have ended: one handed on after it
+// ended, which its new owner gets too.
+func (d *daemon) settle(st *state, t ticket, by string, result puff.Value) {
 	owed := d.owes(st, t.from)
 	if err := endTask(st.db, t, by, result, !owed); err != nil {
 		st.note(fmt.Sprintf("task %d's result isn't stored, so a later whiff wait won't find it: %v", t.id, err))
@@ -282,7 +293,7 @@ func (d *daemon) handOn(by string, id int64, m message) error {
 		}
 		if r != nil && was.from == by {
 			found = true
-			d.answer(st, ticket{id: id, msg: m.id, from: m.from, dir: m.dir, user: was.user && m.user, session: sameSession(was.session, m.session)}, answeredBy, r)
+			d.settle(st, ticket{id: id, msg: m.id, from: m.from, dir: m.dir, user: was.user && m.user, session: sameSession(was.session, m.session)}, answeredBy, r)
 		}
 	})
 	if !found {
