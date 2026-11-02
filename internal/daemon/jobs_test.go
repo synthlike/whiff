@@ -56,11 +56,15 @@ func TestJobStop(t *testing.T) {
 	}
 
 	// SIGTERM first, so a server can shut down cleanly.
-	id, _ := run(`trap 'echo bye > ` + termed + `; exit 0' TERM; echo ready; sleep 10 & wait`)
+	id, _ := run(`trap 'echo bye > ` + termed + `; echo bye; exit 0' TERM; echo ready; sleep 10 & wait`)
 	eval(`(call :jobs/cancel ` + id + `)`)
 	cancelled(id)
 	if b, _ := os.ReadFile(termed); string(b) != "bye\n" {
 		t.Errorf("the job's trap wrote %q, want it to have run on SIGTERM", b)
+	}
+	// Its result keeps what it printed, as it shut down too.
+	if r, err := c.Message("wait", "", "["+id+"]", dir); err != nil || !strings.Contains(r.Value, `:stderr "" :stdout "ready\nbye\n"`) {
+		t.Errorf("wait %s = %+v %v, want what it printed", id, r, err)
 	}
 
 	// A group that ignores SIGTERM gets SIGKILL once the grace is over.
@@ -203,7 +207,7 @@ func TestJobs(t *testing.T) {
 	if err != nil || resp.Value != "(ok :done)" {
 		t.Errorf("cancel = %s %v", resp.Value, err)
 	}
-	inHistory(`done  user   :jobs -> client ` + id + ` (err {:kind :cancelled :message "job ` + id + ` was cancelled" :outcome :stopped})`)
+	inHistory(`done  user   :jobs -> client ` + id + ` (err {:kind :cancelled :message "job ` + id + ` was cancelled" :outcome :stopped :stderr "" :stdout ""})`)
 
 	// :jobs/output is a running job's output so far; once it ends, its result.
 	id = run(`(call :jobs/run ["sh" "-c" "echo up; echo warn >&2; sleep 10"])`)
@@ -222,7 +226,7 @@ func TestJobs(t *testing.T) {
 	}
 
 	id = run(`(call :jobs/run ["sleep" "10"] {:timeout 50ms})`)
-	inHistory(`done  user   :jobs -> client ` + id + ` (err {:kind :timeout :message "job ` + id + ` took longer than 50ms" :outcome :stopped})`)
+	inHistory(`done  user   :jobs -> client ` + id + ` (err {:kind :timeout :message "job ` + id + ` took longer than 50ms" :outcome :stopped :stderr "" :stdout ""})`)
 	// :timeout :none, for a server: it runs until it ends or is stopped.
 	id = run(`(call :jobs/run ["echo" "no deadline"] {:timeout :none :as :text})`)
 	inHistory(`done  user   :jobs -> client ` + id + ` (ok "no deadline\n")`)

@@ -147,6 +147,10 @@ func TestProcs(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(dir, "stops")); string(b) != "stopped\n" {
 		t.Errorf("a's :stop wrote %q", b)
 	}
+	// Its logs keep what it printed, as it shut down too.
+	if logs := call("procs/logs", "[:demo/a]"); !strings.Contains(logs, `a up\na bye`) {
+		t.Errorf("a's logs once down = %s, want its last output", logs)
+	}
 
 	// whiff dies; b's group outlives it, so b isn't started again until
 	// you stop it; a stays down.

@@ -55,7 +55,9 @@ Every result carries how it ended:
 `:outcome` is the one thing to read before acting on a failure:
 
 - `:not-started`: nothing happened, so it's safe to submit again.
-- `:stopped`: the process is gone, but what it had done stays done.
+- `:stopped`: the process is gone, but what it had done stays done. A
+  job's err has `:stdout` and `:stderr`, the end of what it printed, its
+  shutdown included, as a finished job's result does.
 - `:unknown`: it may have finished, and may still be running.
 
 None of them says anything was undone. whiff can't undo a command.

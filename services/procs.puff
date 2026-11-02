@@ -245,11 +245,28 @@
   (def (after-stop state name)
     (if (wanted? state name) (go state name) (set-proc state name {:status :down})))
 
-  ; stopped is name once its job ended as you stopped it: its :stop runs.
-  (def (stopped state name)
-    (match (stop-cmd (spec-of name))
-      [(some cmd) (run-stop state name cmd :stopping)]
-      [(none) (after-stop state name)]))
+  ; last-of is the end of what a job printed, from its result r: an (ok
+  ; out), or the (err e) of one stopped, which has it too; else what r
+  ; says.
+  (def (last-of r)
+    (match r
+      [(ok out) (tail (output-text out))]
+      [(err {:stdout o :stderr e}) (tail (output-text {:stdout o :stderr e}))]
+      [(err e) (value/to-string e)]))
+
+  (test "a stopped job's output is its last, as an exited one's is"
+    (= [(last-of (ok {:exit 1 :stdout "a\n" :stderr ""}))
+        (last-of (err {:kind :cancelled :stdout "a\n" :stderr "b\n"}))
+        (last-of (err {:kind :fault}))]
+      ["a\n" "a\n\n--- stderr ---\nb\n" "{:kind :fault}"]))
+
+  ; stopped is name once its job ended, r, as you stopped it: its output
+  ; to then is its last, and its :stop runs.
+  (def (stopped state name r)
+    (let [state (set-proc state name {:last (last-of r)})]
+      (match (stop-cmd (spec-of name))
+        [(some cmd) (run-stop state name cmd :stopping)]
+        [(none) (after-stop state name)])))
 
   (def (recent crashes) (vector/filter crashes (fn (t) (< (time/since t) window))))
 
@@ -260,7 +277,7 @@
   ; exited is name once it exited, r, on its own: started again after
   ; delay if it asks to, unless that's its third exit in a minute.
   (def (exited state name r)
-    (let [last (match r [(ok out) (tail (output-text out))] [(err e) (value/to-string e)])
+    (let [last (last-of r)
           code (match r [(ok {:exit n}) n] [_ -1])
           crashes (vector/append (recent (map/get-or (proc state name) :crashes [])) (time/now))
           state (set-proc state name {:last last :exit code :crashes crashes})]
@@ -303,11 +320,10 @@
             (bring s name)
             s)))))
 
-  ; stop-job stops name's job, keeping the end of its output first.
+  ; stop-job stops name's job; its result brings what it printed.
   (def (stop-job state name id)
-    (let [last (match (call :jobs/output id) [(ok out) (tail (output-text out))] [_ (map/get-or (proc state name) :last "")])]
-      (do (or-else (call :jobs/cancel id) :gone)
-        (set-proc state name {:status :stopping :last last}))))
+    (do (or-else (call :jobs/cancel id) :gone)
+      (set-proc state name {:status :stopping})))
 
   ; each is (ok [reply state]) for f, (fn (state name) state), done to each
   ; process which names, and those they come after if all, the reply each
@@ -448,5 +464,5 @@
          (ok (cond
                [(= kind :stop) (after-stop state name)]
                [(not (= (map/get (proc state name) :job) (some id))) state]
-               [(= (status-of state name) :stopping) (stopped state name)]
+               [(= (status-of state name) :stopping) (stopped state name r)]
                [_ (exited state name r)])))])))

@@ -84,7 +84,7 @@ func TestCancel(t *testing.T) {
 	if r := cancel(you, job); r != "(ok :done)" {
 		t.Errorf("cancel %s = %s", job, r)
 	}
-	stopped := `(err {:kind :cancelled :message "job ` + job + ` was cancelled" :outcome :stopped})`
+	stopped := `(err {:kind :cancelled :message "job ` + job + ` was cancelled" :outcome :stopped :stderr "" :stdout ""})`
 	if r := wait(job); r != stopped {
 		t.Errorf("wait %s = %s", job, r)
 	}
