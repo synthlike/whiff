@@ -191,6 +191,8 @@ func TestSession(t *testing.T) {
 	eval(`(file/append "` + file + `" "f")`)
 	eval(`(publish :t/x "g")`)
 	eventually(t, "the writes", func() string { b, _ := os.ReadFile(file); return string(b) }, "adhfg")
+	// :tally's call is in history once :notes has handled it, after the write.
+	historyHas(t, you, `:tally -> :notes/add "g"  (ok :done)`)
 
 	es, err := you.History()
 	if err != nil {
