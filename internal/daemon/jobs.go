@@ -110,7 +110,12 @@ func (d *daemon) runJob(m message, args []puff.Value) (puff.Value, error) {
 
 	j := &job{cmd: cmdv, cancel: cancel, pid: cmd.Process.Pid}
 	d.do(func(st *state) {
-		j.ticket = ticket{id: st.newID(), msg: m.id, from: m.from, dir: m.dir, user: user, session: m.session}
+		// One you accepted is the task its sender already waits for.
+		id := m.held
+		if id == 0 {
+			id = st.newID()
+		}
+		j.ticket = ticket{id: id, msg: m.id, from: m.from, dir: m.dir, user: user, session: m.session}
 		st.jobs[j.id] = j
 		if err := d.keepJob(j); err != nil {
 			st.note(fmt.Sprintf("job %d isn't stored, so a crash won't tell its sender: %v", j.id, err))
