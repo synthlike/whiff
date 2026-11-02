@@ -140,7 +140,7 @@ func TestRun(t *testing.T) {
 			name:    "tests",
 			args:    []string{"-t", passing, tested},
 			code:    1,
-			wantOut: "FAIL " + tested + ":3:1 wrong: got 9, want 6\nFAIL " + tested + ":4:1 fault: " + tested + ":1:13: *: can't multiply string and string\n2 passed, 2 failed\n",
+			wantOut: "FAIL " + tested + ":3:1 wrong: got 9, want 6\nFAIL " + tested + ":4:1 fault: " + tested + ":1:13: *: can't multiply string and string (called at " + tested + ":4:18)\n2 passed, 2 failed\n",
 		},
 		{
 			name:    "tests that pass",

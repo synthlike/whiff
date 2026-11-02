@@ -19,12 +19,31 @@ const maxDepth = 10000
 type Fault struct {
 	Pos Pos
 	Msg string
+	// Trace is the calls it came back through, innermost first: where
+	// the function it happened in was called, and where that one was.
+	Trace []Pos
 }
 
-func (f *Fault) Error() string { return f.Pos.String() + ": " + f.Msg }
+// maxTrace bounds the calls a fault's message names.
+const maxTrace = 5
+
+func (f *Fault) Error() string {
+	s := f.Pos.String() + ": " + f.Msg
+	if len(f.Trace) == 0 {
+		return s
+	}
+	var at []string
+	for _, p := range f.Trace[:min(len(f.Trace), maxTrace)] {
+		at = append(at, p.String())
+	}
+	if n := len(f.Trace) - maxTrace; n > 0 {
+		at = append(at, fmt.Sprintf("%d more", n))
+	}
+	return s + " (called at " + strings.Join(at, ", ") + ")"
+}
 
 func faultf(p Pos, format string, args ...any) *Fault {
-	return &Fault{p, fmt.Sprintf(format, args...)}
+	return &Fault{Pos: p, Msg: fmt.Sprintf(format, args...)}
 }
 
 // Func is a function defined in puff.
@@ -555,7 +574,7 @@ func fill(t *thread, fr *frame, inits []expr) (*frame, error) {
 type letBinding struct {
 	init  expr
 	match matcher
-	pos   Pos
+	pat   *Form
 	off   int
 }
 
@@ -580,7 +599,7 @@ func (c *compiler) let(f *Form, s *scope, tail bool) (expr, error) {
 		if err != nil {
 			return nil, err
 		}
-		bs = append(bs, letBinding{x, m, items[i].Pos, len(ls.names)})
+		bs = append(bs, letBinding{x, m, items[i], len(ls.names)})
 		ls.names = append(ls.names, names...)
 	}
 	body, err := c.body("let", f.Pos, f.Items[2:], ls, tail)
@@ -596,7 +615,7 @@ func (c *compiler) let(f *Form, s *scope, tail bool) (expr, error) {
 				return nil, err
 			}
 			if !b.match(v, lf.vals[b.off:]) {
-				return nil, faultf(b.pos, "let: no match for %s", Print(v))
+				return nil, &Fault{Pos: b.pat.Pos, Msg: mismatch("let", b.pat, v)}
 			}
 		}
 		return body(t, lf)
@@ -760,7 +779,7 @@ func (c *compiler) fn(name string, pos Pos, params, body []*Form, s *scope) (exp
 	type destructure struct {
 		param int
 		match matcher
-		pos   Pos
+		pat   *Form
 	}
 	var ds []destructure
 
@@ -770,7 +789,7 @@ func (c *compiler) fn(name string, pos Pos, params, body []*Form, s *scope) (exp
 			if err != nil {
 				return nil, err
 			}
-			ds = append(ds, destructure{i, m, p.Pos})
+			ds = append(ds, destructure{i, m, p})
 			fs.names = append(fs.names, p.String()) // no symbol can look it up
 			continue
 		}
@@ -810,7 +829,7 @@ func (c *compiler) fn(name string, pos Pos, params, body []*Form, s *scope) (exp
 			pf := &frame{vals: make([]Value, slots), parent: fr}
 			for _, d := range ds {
 				if !d.match(fr.vals[d.param], pf.vals) {
-					return nil, faultf(d.pos, "%s: no match for %s", what, Print(fr.vals[d.param]))
+					return nil, &Fault{Pos: d.pat.Pos, Msg: mismatch(what, d.pat, fr.vals[d.param])}
 				}
 			}
 			return inner(t, pf)
@@ -926,17 +945,35 @@ func (c *compiler) logic(f *Form, s *scope, stop bool) (expr, error) {
 	}, nil
 }
 
+// call compiles a call. An (unwrap x) that faults names x's source and
+// the short locals in it. A fault from inside the function called notes
+// this call in its trace.
 func (c *compiler) call(f *Form, s *scope) (expr, error) {
 	xs, err := c.exprs(f.Items, s)
 	if err != nil {
 		return nil, err
+	}
+	var ls []local
+	unwrapping := len(f.Items) == 2 && f.Items[0].Kind == FormSymbol && f.Items[0].Name == "unwrap"
+	if unwrapping {
+		ls = locals(f.Items[1], s)
 	}
 	return func(t *thread, fr *frame) (Value, error) {
 		vs, err := evalAll(t, fr, xs)
 		if err != nil {
 			return nil, err
 		}
-		return t.call(f.Pos, vs[0], vs[1:])
+		if b, ok := vs[0].(*Builtin); ok && unwrapping && b.Name == "unwrap" {
+			if v, ok, _ := unwrapped(vs[1]); ok {
+				return v, nil
+			}
+			return nil, unwrapFault(f.Pos, f.Items[1], ls, fr, vs[1])
+		}
+		v, err := t.call(f.Pos, vs[0], vs[1:])
+		if fault, ok := err.(*Fault); ok && fault.Pos != f.Pos {
+			fault.Trace = append(fault.Trace, f.Pos)
+		}
+		return v, err
 	}, nil
 }
 

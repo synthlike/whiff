@@ -14,8 +14,8 @@ func TestTry(t *testing.T) {
 		{"(def (f) (try (ok 1)) (ok 2)) (f)", "(ok 2)"},
 		{"(err 1)", "(err 1)"},
 
-		{"(def (f) (try 1)) (f)", "1:10: try wants (ok v) or (err e), got 1"},
-		{"(def (f) (err :x) 1) (f)", "1:10: dropped an err: (err :x)"},
+		{"(def (f) (try 1)) (f)", "1:10: try wants (ok v) or (err e), got 1 (called at 1:19)"},
+		{"(def (f) (err :x) 1) (f)", "1:10: dropped an err: (err :x) (called at 1:22)"},
 		{"(let [a 1] (err a) a)", "1:12: dropped an err: (err 1)"},
 		{"(err 1) 2", "1:1: dropped an err: (err 1)"},
 		{`(fail "boom")`, "1:1: fail: boom"},

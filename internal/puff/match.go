@@ -28,7 +28,7 @@ func (c *compiler) match(f *Form, s *scope, tail bool) (expr, error) {
 		}
 		r, ok, err := t.arms(arms, v, fr)
 		if err == nil && !ok {
-			err = faultf(f.Pos, "no match for %s", Print(v))
+			err = faultf(f.Pos, "no match for %s", short(Print(v)))
 		}
 		return r, err
 	}, nil

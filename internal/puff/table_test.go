@@ -139,7 +139,7 @@ func TestWithMark(t *testing.T) {
 	}{
 		{read, `(match (file/read-text "` + file + `") [(err {:kind k}) k])`, `:not-found`},
 		{read, `(file/write "` + file + `" "x")`, `1:1: file/write is :write, and :a/f is :read`},
-		{read, `(vector/map ["x"] (fn (s) (file/write "` + file + `" s)))`, `1:27: file/write is :write, and :a/f is :read`},
+		{read, `(vector/map ["x"] (fn (s) (file/write "` + file + `" s)))`, `1:27: file/write is :write, and :a/f is :read (called at 1:1)`},
 		{WithMark(read, ":a/g", MarkWrite), `(file/write "` + file + `" "x")`, `(ok :done)`},
 		// proc/run runs a read-only command under :read, and only that.
 		{read, `(match (proc/run ["pwd"] {:dir "/"}) [(ok {:stdout out}) out])`, `"/\n"`},
