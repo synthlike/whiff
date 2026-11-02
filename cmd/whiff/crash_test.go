@@ -33,26 +33,7 @@ func TestCrash(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(services, "waiter.puff"), []byte(src), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	daemon := func() (*exec.Cmd, *rpc.Client) {
-		t.Helper()
-		os.Remove(rpc.SocketPath(dir))
-		cmd := exec.Command(os.Args[0], "daemon")
-		cmd.Env = append(os.Environ(), "WHIFF_TEST_DIR="+dir)
-		if err := cmd.Start(); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { cmd.Process.Kill() })
-		for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-			c, err := rpc.Dial(dir, nil)
-			if err == nil {
-				t.Cleanup(func() { c.Close() })
-				return cmd, c
-			}
-			if time.Now().After(deadline) {
-				t.Fatalf("no daemon: %v", err)
-			}
-		}
-	}
+	daemon := func() (*exec.Cmd, *rpc.Client) { return testDaemon(t, dir) }
 	cmd, c := daemon()
 	agent, err := rpc.Dial(dir, nil)
 	if err != nil {
@@ -123,5 +104,28 @@ func TestCrash(t *testing.T) {
 	}
 	if text, err := c.Inbox("me"); err != nil || !strings.HasPrefix(text, fmt.Sprintf("%s  client -> :me/ask", asked)) {
 		t.Errorf("your inbox = %q %v", text, err)
+	}
+}
+
+// testDaemon runs a real daemon on dir, with env added to its environment,
+// and connects to it. The test's cleanup kills it.
+func testDaemon(t *testing.T, dir string, env ...string) (*exec.Cmd, *rpc.Client) {
+	t.Helper()
+	os.Remove(rpc.SocketPath(dir))
+	cmd := exec.Command(os.Args[0], "daemon")
+	cmd.Env = append(append(os.Environ(), env...), "WHIFF_TEST_DIR="+dir)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cmd.Process.Kill() })
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		c, err := rpc.Dial(dir, nil)
+		if err == nil {
+			t.Cleanup(func() { c.Close() })
+			return cmd, c
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no daemon: %v", err)
+		}
 	}
 }
