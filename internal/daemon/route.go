@@ -112,22 +112,25 @@ type caller struct {
 
 // state is what the route goroutine owns.
 type state struct {
-	db      *bbolt.DB // whiff.db: see store.go
-	log     io.Writer
-	addrs   map[string]*service
-	history []entry    // oldest first
-	asked   []*asked   // every service's inbox, oldest first
-	timers  []*timer   // what load read, until resume takes it up
-	lost    []*job     // what load read, until resume takes it up
-	owed    []answered // results for services that aren't loaded, until they are
-	cut     []ticket   // what load read, until resume takes it up: accepted as whiff went
-	jobs    map[int64]*job
-	nextID  int64                       // the last id given to a message answered later, or a job
-	lastMsg int64                       // the last id given to a message or an eval in history: see msgID
-	waiters map[int64][]chan puff.Value // whiff waits, by the id they wait for
-	subs    map[*watcher]bool           // clients' subscriptions: whiff sub
-	tracers map[*tracer]bool            // clients following history: whiff history -f
-	modes   map[string]*mode            // agent sessions that aren't gated, by address
+	db       *bbolt.DB // whiff.db: see store.go
+	log      io.Writer
+	addrs    map[string]*service
+	history  []entry         // the last historySize entries, oldest first
+	unstored []entry         // history the writer hasn't taken: see record
+	dropped  int             // entries left out of unstored since it was last taken
+	kick     chan<- struct{} // wakes the history writer
+	asked    []*asked        // every service's inbox, oldest first
+	timers   []*timer        // what load read, until resume takes it up
+	lost     []*job          // what load read, until resume takes it up
+	owed     []answered      // results for services that aren't loaded, until they are
+	cut      []ticket        // what load read, until resume takes it up: accepted as whiff went
+	jobs     map[int64]*job
+	nextID   int64                       // the last id given to a message answered later, or a job
+	lastMsg  int64                       // the last id given to a message or an eval in history: see msgID
+	waiters  map[int64][]chan puff.Value // whiff waits, by the id they wait for
+	subs     map[*watcher]bool           // clients' subscriptions: whiff sub
+	tracers  map[*tracer]bool            // clients following history: whiff history -f
+	modes    map[string]*mode            // agent sessions that aren't gated, by address
 }
 
 // watcher is a client subscribed to topics, every topic if topics is nil.
@@ -139,9 +142,14 @@ type watcher struct {
 }
 
 // route owns the state until the daemon stops; others reach it through do.
+// Its history writer stores what is left once it stops, before whiff.db
+// closes.
 func (d *daemon) route() {
-	st := &state{db: d.db, log: d.log, addrs: map[string]*service{}, jobs: map[int64]*job{}, waiters: map[int64][]chan puff.Value{},
+	kick, final := make(chan struct{}, 1), make(chan batch, 1)
+	d.wg.Go(func() { d.writeHistory(kick, final) })
+	st := &state{db: d.db, log: d.log, kick: kick, addrs: map[string]*service{}, jobs: map[int64]*job{}, waiters: map[int64][]chan puff.Value{},
 		subs: map[*watcher]bool{}, tracers: map[*tracer]bool{}, modes: map[string]*mode{}}
+	defer func() { final <- st.takeUnstored() }()
 	st.load()
 	for {
 		select {
