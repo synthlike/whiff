@@ -272,6 +272,22 @@
         (detail {:status :waiting :exit 1}) (detail {:status :stray :pid 7})]
       [["Stop" "Restart" "Logs"] ["Start" "Logs"] "exited 1, starting again in 2s" "may still run from before whiff died: kill -- -7"]))
 
+  ; run-of is name, p, as runs shows it: the fields its status is about.
+  (def (run-of name p)
+    (let [s (map/get-or p :status :down)
+          shown (cond
+                  [(= s :stray) [:job :pid]]
+                  [(vector/contains? [:exited :waiting :failed] s) [:job :exit]]
+                  [_ [:job]])]
+      (map/merge {:proc name :status s}
+        (map/from-entries (vector/filter (map/entries p) (fn ([k _]) (vector/contains? shown k)))))))
+
+  (test "runs shows a stray's pid and an exit code only while they say how it is"
+    (= [(run-of :a/b {:status :down :job 3 :pid 9 :exit 1}) (run-of :a/b {:status :stray :job 3 :pid 9})
+        (run-of :a/b {:status :running :job 4 :exit 1}) (run-of :a/b {:status :waiting :job 4 :exit 1})]
+      [{:proc :a/b :status :down :job 3} {:proc :a/b :status :stray :job 3 :pid 9}
+       {:proc :a/b :status :running :job 4} {:proc :a/b :status :waiting :job 4 :exit 1}]))
+
   (on (up state which) :write :update
     "Starts which, a process (:shop/api) or every one of a project (:shop), in the order listed, unless it runs: (ok {name status}). One whose process group from before whiff died may still run stays :stray; a container still running is stopped first (:clearing)."
     (each state which
@@ -301,12 +317,8 @@
             [_ (bring s name)])))))
 
   (on (runs state) :read
-    "Every process in procs.puff, in order: {:proc :status :job :pid :exit}, with :status one of :running, :stopping, :clearing, :waiting (to start again), :exited, :failed, :stray (may still run from before whiff died) or :down."
-    (ok (vector/map table
-          (fn ([name _])
-            (map/merge {:proc name :status :down}
-              (map/from-entries (vector/filter (map/entries (proc state name))
-                                  (fn ([k _]) (vector/contains? [:status :job :pid :exit] k)))))))))
+    "Every process in procs.puff, in order: {:proc :status :job}, with :status one of :running, :stopping, :clearing, :waiting (to start again), :exited, :failed, :stray (may still run from before whiff died) or :down; :pid for a stray, and :exit once it exited."
+    (ok (vector/map table (fn ([name _]) (run-of name (proc state name))))))
 
   (on (view state) :read
     "The processes as a view: Stop, Restart and Logs for one that runs; Start and Logs for one that doesn't."
