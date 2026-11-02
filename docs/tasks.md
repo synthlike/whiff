@@ -47,6 +47,7 @@ Every result carries how it ended:
 | `(err {:kind :expired :outcome :not-started})` | Nobody answered in time |
 | `(err {:kind :cancelled :outcome :not-started})` | Cancelled before it started |
 | `(err {:kind :cancelled :outcome :stopped})` | Cancelled and killed |
+| `(err {:kind :cancelled :outcome :unknown})` | Your accept was cancelled while what it let through ran |
 | `(err {:kind :timeout :outcome :stopped})` | Timed out and killed |
 | `(err {:kind :interrupted :outcome :stopped})` | Killed by `whiff stop` |
 | `(err {:kind :interrupted :outcome :unknown})` | whiff died while it ran; has `:pid` if it may still run |
@@ -118,15 +119,16 @@ the end is dropped, and history says so.
 
 | Spec | Today |
 | --- | --- |
-| Pending means accepted and stored | Yes for jobs, asks and held messages (`jobs` and `inbox` buckets) |
-| A result is stored before anyone is told | **No.** It's in memory, so `whiff wait` after a restart says `:no-id` |
-| A service gets its result until handled | **No.** `whiff/done` sits in a mailbox, in memory, and the job's record is gone already: a crash there loses a finished job, and its pipeline run stays on its step for ever |
+| Pending means accepted and stored | Yes for jobs, asks and held messages (`tasks` and `inbox` buckets) |
+| A result is stored before anyone is told | Yes, in `tasks`, for 30 days: `whiff wait` reads it after a restart |
+| A service gets its result until handled | **No.** `whiff/done` sits in a mailbox, in memory: a crash there loses it, though `whiff wait` still has it, and a pipeline run waiting for it stays on its step for ever |
 | One id from held to ended | **No.** A held job's id answers `(err {:kind :pending :id m})`, then `m` answers: two ids, two `whiff/done`s |
-| `:outcome` on every failure | Only `:interrupted` |
+| `:outcome` on every failure | Yes |
 | Cancelling any task | Only jobs, `:jobs/cancel`, and rejecting what's held |
 | Attempts and retries | None; services retry by hand |
 
-`whiff try` is unchanged: a trial stores nothing, tasks included.
+`whiff try` is unchanged: a trial's state, inbox and timers aren't stored. A
+task a trial starts is, as it was, so `whiff wait` finds its result.
 
 ## Order to build it
 

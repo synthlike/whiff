@@ -103,12 +103,12 @@ func TestInboxesSurviveRestart(t *testing.T) {
 	done = start(t, dir)
 	c = dial(t, dir)
 	// It passed while whiff was down, and the answer finds its sender.
-	first := `(err {:kind :expired :message ":box/hour waited longer than 1h0m0s"})` + "\n"
+	first := `(err {:kind :expired :message ":box/hour waited longer than 1h0m0s" :outcome :not-started})` + "\n"
 	eventually(t, "the ask that expired while whiff was down", answers, first)
 	if text, _ := c.Inbox("box"); !strings.Contains(text, q+"  :asker -> :box/q") || strings.Contains(text, hour+"  ") {
 		t.Errorf("inbox of :box = %q", text)
 	}
-	eventually(t, "the ask that expired after", answers, first+`(err {:kind :expired :message ":box/later waited longer than 1s"})`+"\n")
+	eventually(t, "the ask that expired after", answers, first+`(err {:kind :expired :message ":box/later waited longer than 1s" :outcome :not-started})`+"\n")
 	if text, _ := c.Inbox("box"); strings.Contains(text, later+"  ") {
 		t.Errorf("expired, it is still in the inbox: %q", text)
 	}
@@ -126,13 +126,23 @@ func TestInboxesSurviveRestart(t *testing.T) {
 	}
 	stopDaemon(t, c, done)
 	writeServices(t, dir, map[string]string{"box": box})
-	start(t, dir)
+	done = start(t, dir)
 	c = dial(t, dir)
 	before := answers()
 	if _, err := c.Message("reply", "", "["+q+` (ok "yes")]`, ""); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "your answer", answers, before+`(ok "yes")`+"\n")
+
+	// Its result outlives the daemon too, for whiff wait.
+	stopDaemon(t, c, done)
+	start(t, dir)
+	c = dial(t, dir)
+	for id, want := range map[string]string{q: `(ok "yes")`, hour: first[:len(first)-1]} {
+		if r, err := c.Message("wait", "", "["+id+"]", ""); err != nil || r.Value != want {
+			t.Errorf("wait %s after a restart = %+v %v, want %s", id, r, err, want)
+		}
+	}
 }
 
 // What the review gate holds outlives the daemon, as it was sent: accepting
@@ -519,12 +529,13 @@ func TestJobsInterrupted(t *testing.T) {
 		}
 		return pendingOf(t, r.Value)
 	}
-	// One that ended is told once, and is gone from the store.
+	// One that ended is told once, and its result stays stored.
 	r, err := c.Message("call", "waiter/quick", "[]", dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	quick := pendingOf(t, r.Value) + ` (ok "")` + "\n"
+	quickID := pendingOf(t, r.Value)
+	quick := quickID + ` (ok "")` + "\n"
 	eventually(t, "the job that ended", answers, quick)
 	mine, passed := begin(), begin()
 	if r, err := agent.Message("call", "waiter/pass", "["+passed+"]", dir); err != nil || !strings.Contains(r.Value, ":pending") {
@@ -536,7 +547,7 @@ func TestJobsInterrupted(t *testing.T) {
 		t.Helper()
 		n, _ := strconv.ParseInt(id, 10, 64)
 		err := db.View(func(tx *bbolt.Tx) (err error) {
-			j, err = storedJob(n, string(tx.Bucket(jobsBucket).Get(idKey(n))))
+			j, err = storedJob(n, string(tx.Bucket(tasksBucket).Get(idKey(n))))
 			return err
 		})
 		if err != nil {
@@ -565,6 +576,9 @@ func TestJobsInterrupted(t *testing.T) {
 	if r, err := c.Message("wait", "", "["+passed+"]", dir); err != nil || !strings.Contains(r.Value, ":interrupted") {
 		t.Errorf("wait for a job handed on: %+v %v", r, err)
 	}
+	if r, err := c.Message("wait", "", "["+quickID+"]", dir); err != nil || r.Value != `(ok "")` {
+		t.Errorf("wait for a job that ended before the restart: %+v %v", r, err)
+	}
 
 	// What a crash leaves: no answer, and a process that may still run.
 	stopDaemon(t, c, done)
@@ -589,18 +603,32 @@ func TestJobsInterrupted(t *testing.T) {
 		{ticket: sender, cmd: cmd, pid: running.Process.Pid},
 		{ticket: sender, cmd: cmd},
 	}
+	// 950 ended long ago: its result goes at start.
+	old, _ := puff.NewMap(
+		puff.Entry{Key: puff.Keyword("status"), Val: puff.Keyword("ended")},
+		puff.Entry{Key: puff.Keyword("ended"), Val: puff.NewTime(time.Now().Add(-resultKept - time.Hour))},
+		puff.Entry{Key: puff.Keyword("result"), Val: puff.Ok(puff.Int(1))},
+		puff.Entry{Key: puff.Keyword("told"), Val: puff.Bool(true)},
+	)
 	withDB(t, dir, func(db *bbolt.DB) {
 		err := db.Update(func(tx *bbolt.Tx) error {
-			b := tx.Bucket(jobsBucket)
+			b := tx.Bucket(tasksBucket)
 			for i, j := range jobs {
 				j.id = int64(900 + i)
 				if err := b.Put(idKey(j.id), []byte(puff.Print(j.stored()))); err != nil {
 					return err
 				}
 			}
+			if err := b.Put(idKey(950), []byte(puff.Print(old))); err != nil {
+				return err
+			}
 			return b.Put(idKey(990), []byte("(not read"))
 		})
 		if err != nil {
+			t.Fatal(err)
+		}
+		// 900 finished as whiff stopped, before its sender was told.
+		if err := endTask(db, jobs[0].ticket, "jobs", jobs[0].result, false); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -613,7 +641,10 @@ func TestJobsInterrupted(t *testing.T) {
 		fmt.Sprintf(`902 (err {:kind :interrupted :message "job 902 was running when whiff died: how far it got is unknown, and process group %d may still be running" :outcome :unknown :pid %d})`,
 			running.Process.Pid, running.Process.Pid) + "\n" + unknown(903)
 	eventually(t, "the jobs a crash left", answers, want)
-	historyHas(t, c, "job 990 can't be read, and stays stored")
+	historyHas(t, c, "task 990 can't be read, and stays stored")
+	if r, err := c.Message("wait", "", "[950]", dir); err != nil || !strings.Contains(r.Value, ":no-id") {
+		t.Errorf("wait for a result past its time: %+v %v", r, err)
+	}
 	if err := syscall.Kill(-running.Process.Pid, 0); err != nil {
 		t.Errorf("whiff killed what may not be its own: %v", err)
 	}
@@ -627,8 +658,9 @@ func TestJobsInterrupted(t *testing.T) {
 	withDB(t, dir, func(db *bbolt.DB) {
 		for _, j := range jobs {
 			db.View(func(tx *bbolt.Tx) error {
-				if p := tx.Bucket(jobsBucket).Get(idKey(j.id)); p != nil {
-					t.Errorf("job %d, answered, is still stored: %s", j.id, p)
+				p := tx.Bucket(tasksBucket).Get(idKey(j.id))
+				if get, err := fields(string(p)); err != nil || !puff.Equal(get("told"), puff.Bool(true)) {
+					t.Errorf("job %d, answered, is stored as %s", j.id, p)
 				}
 				return nil
 			})
@@ -645,18 +677,18 @@ func TestJobsInterrupted(t *testing.T) {
 }
 
 func TestStoredJob(t *testing.T) {
-	j := &job{ticket: ticket{id: 7, from: "plan", dir: "/x", user: true, session: "agent/2"}, cmd: puff.NewVector(puff.String("go")), pid: 42, result: puff.Ok(puff.Int(1))}
+	j := &job{ticket: ticket{id: 7, from: "plan", dir: "/x", user: true, session: "agent/2"}, cmd: puff.NewVector(puff.String("go")), pid: 42}
 	got, err := storedJob(7, puff.Print(j.stored()))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.id != 7 || got.from != "plan" || got.dir != "/x" || !got.user || got.session != "agent/2" || got.pid != 42 ||
-		puff.Print(got.cmd) != `["go"]` || puff.Print(got.result) != "(ok 1)" {
+		puff.Print(got.cmd) != `["go"]` || got.result != nil {
 		t.Errorf("storedJob = %+v", got)
 	}
-	// Only a stored :user is yours; no :result is no answer.
-	got, err = storedJob(7, `{:cmd ["go"]}`)
-	if err != nil || got.user || got.result != nil {
+	// Only a stored :user is yours; a :result is the answer it had.
+	got, err = storedJob(7, `{:cmd ["go"] :result (ok 1)}`)
+	if err != nil || got.user || puff.Print(got.result) != "(ok 1)" {
 		t.Errorf("storedJob = %+v %v", got, err)
 	}
 	for _, p := range []string{`[1]`, `{:cwd "/x"}`, `(not read`} {

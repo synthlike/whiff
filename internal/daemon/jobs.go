@@ -27,7 +27,7 @@ type job struct {
 	cmd    puff.Vector
 	cancel context.CancelFunc
 	pid    int        // its process group, as it is the group's leader
-	result puff.Value // read from the store: the answer it had when whiff stopped, if any
+	result puff.Value // read from the store: the answer it had as whiff stopped, if any
 }
 
 // jobsService is :jobs, whiff's own service for work longer than a call:
@@ -124,11 +124,11 @@ func (d *daemon) runJob(m message, args []puff.Value) (puff.Value, error) {
 		var exitErr *exec.ExitError
 		switch {
 		case errors.Is(ctx.Err(), context.DeadlineExceeded):
-			r = puff.Errorf("timeout", "job %d took longer than %v", j.id, timeout)
+			r = failed("timeout", "stopped", "job %d took longer than %v", j.id, timeout)
 		case ctx.Err() != nil && d.ctx.Err() != nil:
-			r = interrupted("stopped", fmt.Sprintf("job %d was killed when whiff stopped: what it had done stays done", j.id))
+			r = failed("interrupted", "stopped", "job %d was killed when whiff stopped: what it had done stays done", j.id)
 		case ctx.Err() != nil:
-			r = puff.Errorf("cancelled", "job %d was cancelled", j.id)
+			r = failed("cancelled", "stopped", "job %d was cancelled", j.id)
 		case err == nil, errors.As(err, &exitErr):
 			out, _ := puff.NewMap(
 				puff.Entry{Key: puff.Keyword("exit"), Val: puff.Int(cmd.ProcessState.ExitCode())},
@@ -154,13 +154,11 @@ func (d *daemon) runJob(m message, args []puff.Value) (puff.Value, error) {
 			d.answer(st, j.ticket, "jobs", r)
 		})
 		if !told {
-			j.result = r
-			if err := d.keepJob(j); err != nil {
+			if err := endTask(d.db, j.ticket, "jobs", r, false); err != nil {
 				fmt.Fprintf(d.log, "whiff: job %d's answer isn't stored: %v\n", j.id, err)
 			}
 			return
 		}
-		d.forgetJob(j)
 		d.publish(jobDone(j, r))
 	})
 	return pending(j.id, "job %d runs %s", j.id, argv[0]), nil
@@ -172,24 +170,15 @@ func jobDone(j *job, r puff.Value) message {
 	return message{cause: j.msg, from: "jobs", topic: "jobs/done", args: puff.Print(puff.NewVector(done)), dir: j.dir, user: j.user}
 }
 
-// interrupted is the (err {:kind :interrupted :outcome outcome}) of a job
-// whiff lost: :stopped, killed, or :unknown. Neither says its effects were
-// undone, and either way whiff doesn't run it again.
-func interrupted(outcome, msg string) puff.Value {
-	e := puff.Errorf("interrupted", "%s", msg).(puff.Tag).At(0).(puff.Map)
-	e, _ = e.With(puff.Keyword("outcome"), puff.Keyword(outcome))
-	return puff.NewTag("err", e)
-}
-
 // lost is what the sender of j, found stored at start with no answer, is
 // told: whiff died while it ran, so how it ended is unknown. It isn't killed
 // if it still runs, as a pid can be reused: it may be someone else's now.
 func lost(j *job) puff.Value {
 	msg := fmt.Sprintf("job %d was running when whiff died: how far it got is unknown", j.id)
 	if j.pid <= 1 || errors.Is(syscall.Kill(-j.pid, 0), syscall.ESRCH) {
-		return interrupted("unknown", msg)
+		return failed("interrupted", "unknown", "%s", msg)
 	}
-	r := interrupted("unknown", fmt.Sprintf("%s, and process group %d may still be running", msg, j.pid))
+	r := failed("interrupted", "unknown", "%s, and process group %d may still be running", msg, j.pid)
 	e, _ := r.(puff.Tag).At(0).(puff.Map).With(puff.Keyword("pid"), puff.Int(j.pid))
 	return puff.NewTag("err", e)
 }

@@ -83,7 +83,7 @@ func TestInbox(t *testing.T) {
 	for _, want := range []string{
 		`done  user   client -> client 1 (ok "yes")`,
 		`done  user   :todo -> :asker/whiff/done 2 (ok "done tests")  (ok :done)`,
-		`done  user   :todo -> client 3 (err {:kind :expired :message ":todo/quick waited longer than 50ms"})`,
+		`done  user   :todo -> client 3 (err {:kind :expired :message ":todo/quick waited longer than 50ms" :outcome :not-started})`,
 	} {
 		eventually(t, want, func() string {
 			if strings.Contains(history(), want) {

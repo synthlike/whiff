@@ -72,9 +72,9 @@ The CLI shares its history filters and can show message chains with `whiff
 history -c`.
 
 v0.6 will focus on reliable work and recovery: durable inboxes, timers and
-task results and safe retries. Service state, inboxes, the review queue and
-timers already survive restarts, and a job's sender hears that it was
-interrupted; history is still in memory.
+task results and safe retries. Service state, inboxes, the review queue,
+timers and results already survive restarts, and a job's sender hears that
+it was interrupted; history is still in memory.
 
 ## Inspirations
 
