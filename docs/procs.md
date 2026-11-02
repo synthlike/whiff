@@ -38,9 +38,9 @@ a map wouldn't. A name is `:project/process`. Each spec has:
 | --- | --- |
 | `:cmd` | The command, `[program args...]`, without a shell. |
 | `:dir` | Where it runs; your home unless given. `~/` works. |
-| `:ready` | When it's ready: a URL that must answer 2xx, or a command that must exit 0. Tried every second while it starts. Without one, it is ready once it starts. |
+| `:ready` | When it's ready: a URL that must answer 2xx, or a command that must exit 0. Tried every second while it starts, then every 10s while it runs. Without one, it is ready once it starts. |
 | `:after` | Processes that must be ready before it starts. `up` brings them up too. |
-| `:restart` | `#t` starts it again when it exits, 2s later, up to 3 exits in a minute. |
+| `:restart` | `#t` starts it again when it exits, 2s later, up to 3 exits in a minute; and restarts it when its `:ready` fails 3 times in a row as it runs. |
 | `:stop` | A command that runs after it stops, such as `["docker" "compose" "down"]`. A `docker run --name x` gets `docker stop x` unless you give one. |
 | `:url` | Its web UI: a link in the view, in sniff and in the CLI's lines. |
 
@@ -71,7 +71,7 @@ page with buttons, and each `:url` as a link.
 | `:queued` | Waiting for those it comes `:after` to be ready. |
 | `:starting` | Running, and its `:ready` hasn't passed yet. |
 | `:running` | Running and ready: those after it can start. It is on `:procs/ready`. |
-| `:unready` | Running, but its `:ready` didn't pass within 2m. You hear of it; those after it wait. |
+| `:unready` | Running, but its `:ready` didn't pass within 2m, or failed 3 times in a row since, without `:restart`. You hear of it; those after it wait. It is `:running` again once its `:ready` passes. |
 | `:waiting` | It exited and `:restart`s: it starts again in 2s. |
 | `:failed` | It exited 3 times in a minute, or didn't start. You hear of it, with Start and Logs. |
 | `:exited` | It exited and doesn't `:restart`. |
@@ -292,9 +292,9 @@ The helpers have tests in the lib, which run with the script's:
 - **Let an agent debug with you.** Over `whiff mcp`, an agent reads
   `procs/logs` and `procs/runs` freely; restarting or stopping waits for
   your review.
-- **A smoke check.** A service that `http/get`s each `/health` every few
-  minutes, with `send-after`, and tells you when one fails: a health
-  check over time, which procs leaves to you.
+- **A smoke check.** Beyond each process's own `:ready`, a service that
+  runs shop-test's cases every few minutes, with `send-after`, and tells
+  you when one fails.
 - **One-off setup.** A migration or seed as a process without `:restart`,
   `:after` the database: it runs once and shows `:exited 0`.
 
@@ -304,7 +304,6 @@ The helpers have tests in the lib, which run with the script's:
   stack per branch or worktree.
 - Ports are yours: one stack per set of ports, and no isolated copies side
   by side.
-- `:ready` is checked as a process starts, not as it runs.
 - `down` doesn't stop what comes after a process; a dependent keeps
   running.
 - whiff doesn't serve or proxy HTTP: you reach each process on its own

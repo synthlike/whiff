@@ -42,10 +42,13 @@ func TestProcs(t *testing.T) {
                     :demo/b {:cmd ["sh" "-c" "test -e a.ready || touch early; echo $$ > b.pid; echo b up; while :; do sleep 0.1; done"]
                              :dir "` + dir + `" :after [:demo/a]}
                     :demo/flaky {:cmd ["sh" "-c" "echo flaky; exit 3"] :restart #t}
-                    :other/slow {:cmd ["sleep" "60"] :ready ["false"]}])`
+                    :other/slow {:cmd ["sleep" "60"] :ready ["false"]}
+                    :health/again {:cmd ["sh" "-c" "touch again.ok; echo run >> again.runs; while :; do sleep 0.1; done"]
+                                   :dir "` + dir + `" :ready ["test" "-e" "again.ok"] :restart #t}
+                    :health/sick {:cmd ["sh" "-c" "touch sick.ok; while :; do sleep 0.1; done"] :dir "` + dir + `" :ready ["test" "-e" "sick.ok"]}])`
 	s := string(src)
 	for old, new := range map[string]string{"(def procs [])": table, "(def delay 2s)": "(def delay 50ms)",
-		"(def every 1s)": "(def every 50ms)", "(def ready-within 2m)": "(def ready-within 1s)"} {
+		"(def every 1s)": "(def every 50ms)", "(def ready-within 2m)": "(def ready-within 1s)", "(def checking 10s)": "(def checking 50ms)"} {
 		if strings.Count(s, old) != 1 {
 			t.Fatalf("procs.puff should have %s once", old)
 		}
@@ -118,6 +121,27 @@ func TestProcs(t *testing.T) {
 	}
 	call("procs/down", "[:other]")
 	until("slow down", runs(":proc :other/slow :status :down"))
+	// A running one whose :ready stops passing, 3 times in a row: with
+	// :restart #t it is started again; without, it is :unready until it
+	// passes again.
+	call("procs/up", "[:health]")
+	until("health up", runs(":proc :health/again :status :running", ":proc :health/sick :status :running"))
+	os.Remove(filepath.Join(dir, "again.ok"))
+	os.Remove(filepath.Join(dir, "sick.ok"))
+	until("sick unready", runs(":proc :health/sick :status :unready"))
+	until("again restarted", func() bool {
+		b, _ := os.ReadFile(filepath.Join(dir, "again.runs"))
+		return string(b) == "run\nrun\n"
+	})
+	until("again back", runs(":proc :health/again :status :running"))
+	if inbox := call("me/inbox", "[]"); !strings.Contains(inbox, "procs: health/again failed its :ready 3 times in a row, so it was restarted.") ||
+		!strings.Contains(inbox, "procs: health/sick failed its :ready 3 times in a row.") {
+		t.Errorf("your inbox = %s", inbox)
+	}
+	os.WriteFile(filepath.Join(dir, "sick.ok"), nil, 0o600)
+	until("sick well", runs(":proc :health/sick :status :running"))
+	call("procs/down", "[:health]")
+	until("health down", runs(":proc :health/again :status :down", ":proc :health/sick :status :down"))
 	// flaky exits, and is started again, until its third exit.
 	until("flaky giving up", runs(":proc :demo/flaky :status :failed"))
 	if inbox := call("me/inbox", "[]"); !strings.Contains(inbox, "procs: demo/flaky exited 3 times in a minute") ||
