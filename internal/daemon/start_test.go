@@ -3,6 +3,7 @@ package daemon
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -70,5 +71,28 @@ func TestStartReload(t *testing.T) {
 	time.Sleep(400 * time.Millisecond)
 	if got := exists("v1"); got != "missing" {
 		t.Errorf("v1's mark after v2 replaced it: %s, want missing", got)
+	}
+}
+
+// A timer :start sets for its service that comes due before the service
+// has its address waits for it, rather than failing :no-address: so a
+// loop's first tick isn't lost to a slow load. TestGhWatch lost gh's
+// tick so under load.
+func TestStartTimerBeforeAddress(t *testing.T) {
+	dir := tempDir(t)
+	writeServices(t, dir, map[string]string{
+		"loop": `(service loop :state 0
+  :start (fn (n) (do (send-after 0s :tick) (proc/run ["sleep" "0.3"]) (ok n)))
+  (on (tick n) :update "Counts." (ok [n (+ n 1)]))
+  (on (count n) "The ticks." (ok n)))`,
+	})
+	start(t, dir)
+	c := dial(t, dir)
+	eventually(t, "the tick", func() string {
+		resp, _ := c.Eval(`(call :loop/count)`, "")
+		return resp.Value
+	}, "(ok 1)")
+	if h, _ := historyOf(c); strings.Contains(h, "no-address") {
+		t.Errorf("history:\n%s\nwant no :no-address", h)
 	}
 }

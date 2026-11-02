@@ -161,7 +161,8 @@ subscribers and private `def`s.
   so a caller never sees a reply whose state was lost. A reload or restart
   starts from the last committed state; `whiff reset` forgets it.
 - **`:start`** runs after a service loads, as you: a service that polls
-  sends itself its first `:tick` there.
+  sends itself its first `:tick` there, with `send-after`, which waits
+  for the service to have its address however soon it is due.
 - **Jobs.** Anything outside puff that takes a while runs as a job,
   `(call :jobs/run ["go" "test" "./..."] {:dir ... :timeout 10m})`: pending
   at once, `{:exit :stdout :stderr}` as its `whiff/done`, the last 64KiB of

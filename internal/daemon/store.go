@@ -440,7 +440,7 @@ func (d *daemon) resume() {
 				}
 				stop = s.quit
 			}
-			d.arm(t, stop)
+			d.arm(t, stop, nil)
 		}
 		for _, addr := range slices.Sorted(maps.Keys(dropped)) {
 			st.note(fmt.Sprintf(":%s's :start set its timers again, so whiff dropped %d stored", addr, dropped[addr]))
@@ -722,8 +722,10 @@ func (d *daemon) forgetTimer(t *timer) {
 // whiff dies first, it fires again at start; anything else ends its delivery
 // at once, as an inbox stores it, or history has why it failed. It goes
 // unsent if stop closes first, the version of the service that set it
-// having gone, and stays stored if whiff is stopping.
-func (d *daemon) arm(t *timer, stop <-chan struct{}) {
+// having gone, and stays stored if whiff is stopping. One due before
+// placed closes, as a :start's can be while its service loads, waits for
+// it: the service has its address only then.
+func (d *daemon) arm(t *timer, stop, placed <-chan struct{}) {
 	time.AfterFunc(time.Until(t.due), func() {
 		if d.ctx.Err() != nil {
 			return
@@ -733,6 +735,16 @@ func (d *daemon) arm(t *timer, stop <-chan struct{}) {
 			d.forgetTimer(t)
 			return
 		default:
+		}
+		if placed != nil {
+			select {
+			case <-placed:
+			case <-stop:
+				d.forgetTimer(t)
+				return
+			case <-d.ctx.Done():
+				return
+			}
 		}
 		m := t.m
 		m.kept.timer = string(t.key)

@@ -82,13 +82,20 @@ func TestState(t *testing.T) {
 
 	// So does a reload, whatever init now says; :start runs again on it.
 	becomes(`(call :started/get)`, `(ok [:started])`)
+	// reload puts src in place at once, its newer time with it: written
+	// and then touched, the supervisor could load it twice, running
+	// :start once more.
 	reload := func(name, src string) {
 		path := filepath.Join(dir, "services", name+".puff")
-		if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
+		tmp := path + ".new"
+		if err := os.WriteFile(tmp, []byte(src), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		at := time.Now().Add(time.Second)
-		if err := os.Chtimes(path, at, at); err != nil {
+		if err := os.Chtimes(tmp, at, at); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(tmp, path); err != nil {
 			t.Fatal(err)
 		}
 	}
