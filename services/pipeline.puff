@@ -124,15 +124,27 @@
   (test "a check's output is cut to its last 4000 characters"
     (= [(string/length (tail (string/join (vector/map (vector/range 0 5000) (fn (i) "x")) ""))) (tail "abc")] [4000 "abc"]))
 
+  ; commit commits the run's work in dir, from base, as task. whiff dying
+  ; between the commit and the run's state being stored has it run again:
+  ; the review saw a diff, so a clean tree past base has it already, and it
+  ; isn't committed twice.
+  (def (commit dir base task)
+    (let [clean (= (try (git dir ["status" "--porcelain"])) "")
+          head (try (git dir ["rev-parse" "HEAD"]))
+          from (try (git dir ["rev-parse" base]))]
+      (if (and clean (not (= head from)))
+        (ok :committed)
+        (git dir ["commit" "-q" "-m" (subject task) "-m" task]))))
+
   (def (reviewed state n text)
-    (let [{:round round :checked checked :dir dir :task task :branch branch} (run-of state n)
+    (let [{:round round :checked checked :dir dir :task task :branch branch :base base} (run-of state n)
           ; A retried run has rounds more than it had.
           limit (map/get-or (run-of state n) :limit rounds)
           state (set-run state n {:review text})
           approved (string/contains? text "VERDICT: approve")]
       (cond
         [(and (passed? checked) approved)
-         (do (try (git dir ["commit" "-q" "-m" (subject task) "-m" task]))
+         (do (try (commit dir base task))
            (finish state n :ready (str "Committed on " branch " in " dir ", after " round " rounds. The last review:\n\n" text)))]
         [(>= round limit)
          (finish state n :gave-up (str "Not approved after " round " rounds; the work is in " dir ". The last review:\n\n" text))]
