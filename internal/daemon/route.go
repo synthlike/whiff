@@ -132,6 +132,7 @@ type state struct {
 	tracers  map[*tracer]bool            // clients following history: whiff history -f
 	modes    map[string]*mode            // agent sessions that aren't gated, by address
 	grants   map[string]grant            // agent turns' session tokens: see grant
+	health   map[string]*health          // by service file's name: see whiff services
 }
 
 // grant is what an agent turn's session token lets its whiff mcp claim:
@@ -157,7 +158,7 @@ func (d *daemon) route() {
 	kick, final := make(chan struct{}, 1), make(chan batch, 1)
 	d.wg.Go(func() { d.writeHistory(kick, final) })
 	st := &state{db: d.db, log: d.log, kick: kick, addrs: map[string]*service{}, jobs: map[int64]*job{}, waiters: map[int64][]chan puff.Value{},
-		subs: map[*watcher]bool{}, tracers: map[*tracer]bool{}, modes: map[string]*mode{}, grants: map[string]grant{}}
+		subs: map[*watcher]bool{}, tracers: map[*tracer]bool{}, modes: map[string]*mode{}, grants: map[string]grant{}, health: map[string]*health{}}
 	defer func() { final <- st.takeUnstored() }()
 	st.load()
 	for {
@@ -326,6 +327,17 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 					}
 				})
 				return puff.Ok(puff.NewVector(addrs...)), nil
+			}},
+		{Name: "service/list", Mark: puff.MarkRead,
+			Doc: "(ok services): each service file, what needs you first, as {:service :agent :status :note}: :status one of :failed, :faulting, :over-budget, :waiting, :thinking, :busy, :idle or :ok, and :note what is most worth knowing, or \"\".",
+			Fn: func(_ *puff.Call, _ []puff.Value) (puff.Value, error) {
+				var all []puff.Value
+				d.do(func(st *state) {
+					for _, s := range st.statuses(time.Now()) {
+						all = append(all, s.value())
+					}
+				})
+				return puff.Ok(puff.NewVector(all...)), nil
 			}},
 		{Name: "service/state", Args: "service", Mark: puff.MarkRead,
 			Doc: "(ok state): service's state as it last committed it; (err {:kind :stateless}) for a service without :state, (err {:kind :no-address}) if there is none.",

@@ -135,6 +135,7 @@ func (sv *supervisor) scan() {
 			if w.s != nil {
 				sv.d.remove(w.s)
 			}
+			sv.d.do(func(st *state) { delete(st.health, serviceName(file)) })
 			delete(sv.files, file)
 		}
 	}
@@ -149,9 +150,11 @@ func (sv *supervisor) load(file string, w *watched) error {
 	s, err := sv.d.loadService(file)
 	switch {
 	case err != nil && w.s != nil:
+		sv.d.loadFailed(file, err)
 		sv.d.note("%v; :%s keeps running as it was", err, w.s.name)
 		return err
 	case err != nil:
+		sv.d.loadFailed(file, err)
 		sv.d.note("%v", err)
 		return err
 	}
@@ -174,6 +177,7 @@ func (sv *supervisor) load(file string, w *watched) error {
 	if held {
 		close(s.quit) // drops the timers its :start set
 		err := fmt.Errorf("%s: :%s is held by a client, so the service isn't loaded", file, s.name)
+		sv.d.loadFailed(file, err)
 		sv.d.note("%v", err)
 		return err
 	}
@@ -181,6 +185,7 @@ func (sv *supervisor) load(file string, w *watched) error {
 		sv.d.stop(old)
 	}
 	w.s = s
+	sv.d.loadedOK(file)
 	sv.d.wg.Go(func() { s.run(sv.d.ctx) })
 	return nil
 }

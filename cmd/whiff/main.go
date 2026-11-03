@@ -49,6 +49,7 @@ const usage = `usage:
   whiff history -c [query]        print it as chains: each message that began one, newest first, then what it led to, indented
                                   query: to:plan from:agent origin:user kind:err 'time:>500ms' mark:write
                                   gate:held, a word, -term for what must not match
+  whiff services                  list the services, what needs you first: failed, faulting, waiting for you, busy, then the rest
   whiff ls                        list every address's functions and their marks, each agent session's mode, then the :read overrides
   whiff state service             print a service's state, as it last committed it
   whiff reset service             forget a service's stored state, so it starts from its :state again
@@ -131,6 +132,8 @@ func run(args []string, dir, services string, stdout, stderr io.Writer) int {
 			flag, args = args[1], args[1:]
 		}
 		return history(dir, flag, strings.Join(args[1:], " "), stdout, stderr)
+	case len(args) == 1 && args[0] == "services":
+		return listServices(dir, stdout, stderr)
 	case len(args) == 1 && args[0] == "ls":
 		return text(dir, (*rpc.Client).Ls, stdout, stderr)
 	case len(args) == 2 && (args[0] == "reset" || args[0] == "state"):

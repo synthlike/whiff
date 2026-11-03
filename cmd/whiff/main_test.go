@@ -44,6 +44,10 @@ func TestRun(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(services, "greet.puff"), []byte(greet), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// A file that doesn't load, for whiff services.
+	if err := os.WriteFile(filepath.Join(services, "broke.puff"), []byte("(service broke (on (x) \"x\" (ok 1))\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	// A greet being tried, beside the installed one.
 	trial, broken := filepath.Join(dir, "greet.puff"), filepath.Join(dir, "x", "greet.puff")
 	os.Mkdir(filepath.Join(dir, "x"), 0o700)
@@ -74,6 +78,7 @@ func TestRun(t *testing.T) {
 	}{
 		{name: "not running", args: []string{"stop"}, wantErr: "whiff isn't running\n"},
 		{name: "eval starts the daemon", args: []string{"eval", `(io/println "hi") (+ 1 2)`}, wantOut: "hi\n3\n"},
+		{name: "services", args: []string{"services"}, wantOut: "broke  failed  broke.puff:1:1: no closing ')'\n\ngreet  ok\n"},
 		{name: "eval a call", args: []string{"eval", `(call :greet/hello "ann")`}, wantOut: "(ok \"hello, ann\")\n"},
 		{name: "an err's actions", args: []string{"call", "greet/stuck"}, code: 1,
 			wantErr: "whiff: {:kind :not-now}\n  Greet x\t[:greet/hello \"x\"]\n  Greet someone\t[:greet/hello \"\"]\n"},

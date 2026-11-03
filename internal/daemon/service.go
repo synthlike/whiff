@@ -30,6 +30,7 @@ type service struct {
 	// agent is a service an (agent name ...) file expands to: its turns,
 	// the jobs it runs, pass the review gate, as what they do is gated.
 	agent   bool
+	dayUSD  float64 // an agent's :limits :day
 	env     *puff.Env
 	fns     map[string]handler
 	subs    map[string]subscriber   // by topic
@@ -254,6 +255,11 @@ func (d *daemon) loadSource(file, dir, src, addr string, start bool) (*service, 
 	if start && startFn != nil {
 		if err := s.start(ctx, startFn); err != nil {
 			return nil, err
+		}
+	}
+	if v, ok := s.env.Lookup("day-usd"); ok && s.agent {
+		if f, ok := v.(puff.Float); ok {
+			s.dayUSD = float64(f)
 		}
 	}
 	return s, nil
@@ -567,6 +573,7 @@ func (s *service) serve(ctx context.Context, m message) {
 		m.reply <- r
 	}
 	if faulted {
+		s.d.do(func(st *state) { st.faulted(s) })
 		select {
 		case s.d.restarts <- s:
 		default: // the supervisor has restarts waiting; this one can wait for the next fault

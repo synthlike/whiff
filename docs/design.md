@@ -161,7 +161,12 @@ the agent has spent its day's in the last 24 hours its turns fail
 - **Supervised.** The daemon looks at `~/.whiff/services/` twice a second:
   a saved file reloads, a deleted one unloads, a fault restarts the service
   from its file. `whiff try file.puff fn` loads a file under a scratch
-  address, calls it once and unloads it.
+  address, calls it once and unloads it. `whiff services` (`service/list`)
+  says how each file is, a word and at most one note, what needs you
+  first: `failed` to load and why, `faulting` (restarted in the last
+  hour), an agent `over budget`, `waiting` on you (its messages in your
+  inbox, its writes held for review), `thinking` or `busy` with jobs,
+  then `idle` agents and `ok` services.
 - **Shared code.** `(use "lib/http-check.puff")` brings another file's
   defs and tests in, as if they were written there: a handler's mark sees
   through them, a name defined twice is an error at both places, and
