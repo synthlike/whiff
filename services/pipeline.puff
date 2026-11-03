@@ -33,8 +33,9 @@
   (def dev-system """
     You are the developer in a small pipeline. Make the change you are asked
     for in this repository, keeping to its style, and add or update tests.
-    You can read and edit files, run the check command, and go vet, go
-    build, gofmt and git status, diff and log. Don't commit: the pipeline
+    You can read and edit files, run the check command with any arguments
+    (as go test -race), and go vet, go build, gofmt and git status, diff
+    and log; Claude's permissions refuse other commands. Don't commit: the pipeline
     commits your work once its reviewer approves. End with a short summary
     of what you changed.
     """)
@@ -77,6 +78,10 @@
 
   (def (git dir args) (proc/output (vector/concat ["git" "-C" dir] args)))
 
+  ; heard is a publish's result, r, as one a run goes on after: a refused
+  ; publish (nobody reviews, say) mustn't leave a run where it was.
+  (def (heard r) (or-else r :unheard))
+
   (def (run-of state n) (unwrap (map/get-in state [:runs n])))
 
   ; set-run sets run n's fields to those of m.
@@ -86,10 +91,19 @@
   ; waiting notes that run n waits for job id at step, and says so on
   ; :pipeline/step.
   (def (waiting state n step id)
-    (do (publish :pipeline/step {:run n :step step})
+    (do (heard (publish :pipeline/step {:run n :step step}))
       (-> state
         (map/set-in [:jobs id] [n step])
         (set-run n {:step step :job id}))))
+
+  ; check-prefix is what of the check the dev may run with any arguments:
+  ; its program and first argument, so go test with -race or -run too. A
+  ; check runs the repository's own code, which the dev writes, so this
+  ; gives it nothing it hadn't.
+  (def (check-prefix check) (string/join (vector/slice check 0 (min 2 (vector/length check))) " "))
+
+  (test "the dev may run the check's program and first argument with any arguments"
+    (= [(check-prefix ["go" "test" "./..."]) (check-prefix ["make"])] ["go test" "make"]))
 
   ; dev-cmd is the dev's claude, on the run's :model if it has one: its
   ; session's first turn, or a later one once a turn has ended in it,
@@ -106,10 +120,10 @@
            ["" []]
            [_ ["--mcp-config" (json/to-string {:mcpServers {:whiff {:command "whiff" :args ["mcp"]}}})]])
          ["--strict-mcp-config" "--tools" "Read,Edit,Write,Glob,Grep,Bash"
-          "--allowedTools" (str "Bash(" (string/join check " ") ")") (str "Bash(" (string/join check " ") ":*)")
+          "--allowedTools" (str "Bash(" (string/join check " ") ")") (str "Bash(" (check-prefix check) ":*)")
           "Bash(go vet:*)" "Bash(go build:*)" "Bash(gofmt:*)" "Bash(git status:*)" "Bash(git diff:*)" "Bash(git log:*)"]
          (match (map/get-or run :lead "") ["" []] [_ ["mcp__whiff"]])
-         ["--permission-mode" "acceptEdits" "--append-system-prompt" dev-system]
+         ["--permission-mode" "acceptEdits" "--output-format" "json" "--append-system-prompt" dev-system]
          (match (map/get-or run :model "") ["" []] [m ["--model" m]])
          (if (map/get-or run :resumable #f) ["--resume" s] ["--session-id" s]))]))
 
@@ -232,7 +246,7 @@
     (let [{:repo repo :dir dir :branch b} (run-of state n)]
       (do (or-else (git repo ["worktree" "remove" "--force" dir]) "")
         (or-else (git repo ["branch" "-D" b]) "")
-        (publish :pipeline/step {:run n :step step})
+        (heard (publish :pipeline/step {:run n :step step}))
         (set-run state n {:step step}))))
 
   ; finish ends run n as status, telling you in your inbox unless it is
@@ -240,17 +254,42 @@
   ; the step it ended at.
   (def (finish state n status note)
     (let [{:task task :branch branch :dir dir :quiet quiet} (run-of state n)
-          from (map/get-or (run-of state n) :step :none)]
+          from (map/get-or (run-of state n) :step :none)
+          note (str note (refused-text (map/get-or (run-of state n) :denied [])))]
       ; :me/tell answers pending, as it waits in your inbox.
       (do (if quiet :quiet (or-else (call :me/tell (str "pipeline " n ", " task ": " (keyword/name status) ". " note) {:actions (actions n status branch from)}) :told))
         ; A build's asker hears how it ended.
         (match (map/get (run-of state n) :asker)
           [(some a) (or-else (reply a (ok {:run n :status status :branch branch :dir dir :note note})) :gone)]
           [(none) :none])
-        (publish :pipeline/done {:run n :status status :branch branch :dir dir :note note :from from})
+        (heard (publish :pipeline/done {:run n :status status :branch branch :dir dir :note note :from from}))
         ; After :pipeline/done, so a planner hears of the end first.
-        (publish :pipeline/step {:run n :step status})
+        (heard (publish :pipeline/step {:run n :step status}))
         (ok (set-run state n {:step status :from from})))))
+
+  ; denied are the tool calls the dev's Claude's own permissions refused,
+  ; from out, its JSON result: "Bash go test -race ./...", or the tool's
+  ; name. None if out isn't its JSON.
+  (def (denied out)
+    (match (json/parse out)
+      [(ok res) when (= (value/type res) :map)
+       (vector/map (map/get-or res :permission_denials [])
+         (fn (d) (match (map/get-in d [:tool_input :command])
+                   [(some c) (str (map/get-or d :tool_name "a tool") " " c)]
+                   [(none) (map/get-or d :tool_name "a tool")])))]
+      [_ []]))
+
+  ; refused-text is what a run's note says of what Claude refused its dev:
+  ; nothing if it refused nothing. whiff refused none of it.
+  (def (refused-text calls)
+    (if (vector/empty? calls) ""
+      (str "\n\nThe developer's Claude refused it these, by the permissions pipeline gives it (whiff's review wasn't asked): "
+        (string/join (vector/map calls (fn (c) (str "`" c "`"))) ", ") ".")))
+
+  (test "a dev's refused calls, from its JSON, and what the note says of them"
+    (= [(denied "{\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"go test -race ./...\"}},{\"tool_name\":\"WebFetch\",\"tool_input\":{}}]}")
+        (denied "a summary") (refused-text [])]
+      [["Bash go test -race ./..." "WebFetch"] [] ""]))
 
   ; why is e, an err, for people: its message, with the end of what it
   ; printed, as a command that failed says why there; or e as puff.
@@ -287,7 +326,8 @@
         [(not (= (map/get-or run :step :none) step)) (ok state)]
         [(= step :dev)
          (match r
-           [(ok _) (check (set-run state n {:resumable #t}) n)]
+           [(ok out) (check (set-run state n {:resumable #t
+                                              :denied (vector/concat (map/get-or run :denied []) (denied out))}) n)]
            [(err e) (finish state n :failed (failure "The developer failed" round id e))])]
         [(= step :check)
          (match r

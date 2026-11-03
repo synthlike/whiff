@@ -76,7 +76,7 @@
     [(some last)
      (match [(asked last) (call :jobs/list)]
        [[(some [a _]) _] (and (not (vector/contains? (read-lines deferred) last))
-                              (vector/any? (inbox) (fn ({:id i}) (= (int/to-string i) a))))]
+                           (vector/any? (inbox) (fn ({:id i}) (= (int/to-string i) a))))]
        [[(none) (ok js)] (vector/any? js (fn ({:id i}) (= (int/to-string i) last)))]
        [_ #f])]))
 
