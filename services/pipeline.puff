@@ -192,7 +192,7 @@
           from (map/get-or (run-of state n) :step :none)]
       ; :me/tell answers pending, as it waits in your inbox.
       (do (if quiet :quiet (or-else (call :me/tell (str "pipeline " n ", " task ": " (keyword/name status) ". " note) {:actions (actions n status branch from)}) :told))
-        (publish :pipeline/done {:run n :status status :branch branch :dir dir :note note})
+        (publish :pipeline/done {:run n :status status :branch branch :dir dir :note note :from from})
         ; After :pipeline/done, so a planner hears of the end first.
         (publish :pipeline/step {:run n :step status})
         (ok (set-run state n {:step status :from from})))))
@@ -291,9 +291,11 @@
     (begin state repo base task check #t))
 
   (on (runs state) :read
-    "Every run, oldest first: {:run :task :step :round :branch :dir}, with :step one of :dev, :check, :review, :ready, :gave-up, :failed, :cancelled, :merged or :discarded."
+    "Every run, oldest first: {:run :task :step :round :branch :dir :from}, with :step one of :dev, :check, :review, :ready, :gave-up, :failed, :cancelled, :merged or :discarded, and :from the step an ended run ended at (:none while it runs)."
     (ok (vector/map (map/entries (map/get-or state :runs {}))
-          (fn ([n {:task t :step s :round r :branch b :dir d}]) {:run n :task t :step s :round r :branch b :dir d}))))
+          (fn ([n run])
+            (let [{:task t :step s :round r :branch b :dir d} run]
+              {:run n :task t :step s :round r :branch b :dir d :from (map/get-or run :from :none)})))))
 
   (on (view state) :read
     "The runs as a view: each shows its last review and diff, cancels it while it runs, and merges it once ready or retries it once it ended otherwise, unless a planner runs it."

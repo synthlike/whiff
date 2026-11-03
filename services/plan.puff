@@ -11,6 +11,7 @@
 ;   whiff call plan/edit 3 2 "store todos in a map"        ; a drafted plan's task 2
 ;   whiff call plan/approve 3      ; build a drafted plan's tasks
 ;   whiff call plan/retry 1 "store todos in a map"   ; after a task's run gave up
+;   whiff call plan/review-again 1  ; after a task's reviewer failed
 ;   whiff call plan/merge 1        ; once done: its last branch, fast-forward only
 ;   whiff call plan/discard 2      ; or throw its runs away, worktrees and branches
 ;   whiff call plan/plans          ; each plan, its tasks and where it is
@@ -84,6 +85,14 @@
 
   (def (discard-action n) {:label "Discard" :action [:plan/discard n]})
 
+  ; stopped-actions are what plan n offers once the run of its task, run,
+  ; ended as status at step from: one whose reviewer failed can be reviewed
+  ; again, as Retry would rerun the dev.
+  (def (stopped-actions n run status from)
+    (vector/concat [(show-action run)]
+      (if (and (= status :failed) (= from :review)) [{:label "Review again" :action [:plan/review-again n]}] [])
+      [(retry-action n) (discard-action n)]))
+
   (def (approve-action n) {:label "Build it" :action [:plan/approve n]})
 
   (def (edit-action n i) {:label "Edit" :action [:plan/edit n i] :ask "The task, as it should be"})
@@ -152,15 +161,16 @@
                         [(some r) (vector/find runs (fn ({:run x}) (= x r)))]
                         [_ (none)])]
               (match run
-                [(some {:run r :step s :round rd :branch b})
-                 {:step s :item {:label task :detail (str where ", round " rd ", " b)
-                                 :actions (cond
-                                            [(vector/contains? [:dev :check :review] s)
-                                             [(show-action r) {:label "Cancel the run" :action [:pipeline/cancel r]}]]
-                                            [(and (= i stopped) (vector/contains? [:gave-up :failed :cancelled] s))
-                                             [(show-action r) (retry-action n) (discard-action n)]]
-                                            [(and (= step :done) (= i (- total 1))) [(show-action r) (merge-action n b)]]
-                                            [_ [(show-action r)]])}}]
+                [(some rn)
+                 (let [{:run r :step s :round rd :branch b} rn]
+                   {:step s :item {:label task :detail (str where ", round " rd ", " b)
+                                   :actions (cond
+                                              [(vector/contains? [:dev :check :review] s)
+                                               [(show-action r) {:label "Cancel the run" :action [:pipeline/cancel r]}]]
+                                              [(and (= i stopped) (vector/contains? [:gave-up :failed :cancelled] s))
+                                               (stopped-actions n r s (map/get-or rn :from :none))]
+                                              [(and (= step :done) (= i (- total 1))) [(show-action r) (merge-action n b)]]
+                                              [_ [(show-action r)]])}})]
                 [_ (if (= step :proposed)
                      ; A drafted plan's tasks can be edited; the first ticket
                      ; builds or discards it.
@@ -183,6 +193,11 @@
                               :actions [{:label "Show review and diff" :action [:pipeline/show 5]}
                                         {:label "Retry with a note" :action [:plan/retry 4] :ask "A note for the developer, if any"}
                                         {:label "Discard" :action [:plan/discard 4]}]}}]))
+
+  (test "a task whose reviewer failed can be reviewed again"
+    (= (match (tickets 4 {:goal "g" :step :failed :task 0 :tasks ["a"] :built [5]} [{:run 5 :step :failed :from :review :round 1 :branch "whiff/5"}])
+         [[{:item {:actions as}}] (vector/map as (fn ({:label l}) l))])
+      ["Show review and diff" "Review again" "Retry with a note" "Discard"]))
 
   (test "a done plan's last task can be merged"
     (= (vector/map (tickets 5 {:goal "g" :step :done :task 1 :tasks ["a" "b"] :built [6 7]}
@@ -260,7 +275,7 @@
               (cond
                 [(not (= status :ready))
                  (finish state n :failed (str "Task " (+ i 1) " of " (vector/length ts) " ended " (keyword/name status) ": " note)
-                   [(show-action run) (retry-action n) (discard-action n)])]
+                   (stopped-actions n run status (map/get-or v :from :none)))]
                 [last
                  (finish state n :done (str "All " (vector/length ts) " tasks built; " branch " has them all.")
                    [(show-action run) (merge-action n branch)])]
@@ -315,4 +330,12 @@
       [(some {:step :failed :run run})
        (let [_ (try (call :pipeline/retry run note))]
          (moved n (ok [:retrying (-> state (set-plan n {:step :building}) (map/set-in [:runs run] n))])))]
-      [_ (err {:kind :no-plan :message (str "plan " n " didn't stop at a task's run: nothing to retry")})])))
+      [_ (err {:kind :no-plan :message (str "plan " n " didn't stop at a task's run: nothing to retry")})]))
+
+  (on (review-again state n) :write :update
+    "Takes plan n on after the reviewer of the task it stopped at failed, as by a timeout: only the reviewer runs again, as :pipeline/review-again does, and the plan goes on from there. (ok :reviewing); (err {:kind :no-plan}) unless plan n stopped at a task's run, and :pipeline/review-again's (err {:kind :no-run}) unless its reviewer failed."
+    (match (map/get-in state [:plans n])
+      [(some {:step :failed :run run})
+       (let [_ (try (call :pipeline/review-again run))]
+         (moved n (ok [:reviewing (-> state (set-plan n {:step :building}) (map/set-in [:runs run] n))])))]
+      [_ (err {:kind :no-plan :message (str "plan " n " didn't stop at a task's run: nothing to review again")})])))

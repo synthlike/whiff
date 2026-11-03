@@ -608,7 +608,7 @@ echo "changed things"
 	if got := done(); !strings.Contains(got, ":status :gave-up") {
 		t.Errorf("done = %s", got)
 	}
-	if got := call("runs", "[]"); !strings.Contains(got, `{:branch "whiff/1" :dir "`+wt+`" :round 2 :run 1 :step :ready :task "add a feature"}`) ||
+	if got := call("runs", "[]"); !strings.Contains(got, `{:branch "whiff/1" :dir "`+wt+`" :from :review :round 2 :run 1 :step :ready :task "add a feature"}`) ||
 		!strings.Contains(got, ":round 3 :run 2 :step :gave-up") {
 		t.Errorf("runs = %s", got)
 	}
@@ -733,8 +733,9 @@ func TestPlanService(t *testing.T) {
 	os.Mkdir(bin, 0o700)
 	claude := `#!/bin/sh
 case "$4" in
-  Read,Glob,Grep) cat > /dev/null; printf 'Here is the plan:\n` + "```" + `json\n["one", "two"]\n` + "```" + `\n' ;;
-  "") cat > /dev/null; if [ -f "$HOME/picky" ]; then echo "VERDICT: changes"; else echo "VERDICT: approve"; fi ;;
+  Read,Glob,Grep) cat > /dev/null; if [ -f "$HOME/tasks" ]; then cat "$HOME/tasks"; else printf 'Here is the plan:\n` + "```" + `json\n["one", "two"]\n` + "```" + `\n'; fi ;;
+  "") cat > /dev/null; if [ -f "$HOME/broken" ]; then echo "stuck" >&2; exit 1; fi
+     if [ -f "$HOME/picky" ]; then echo "VERDICT: changes"; else echo "VERDICT: approve"; fi ;;
   *) task=$(sed -n 's/^Task: //p'); echo "$task" > "$task.txt"; echo "wrote $task.txt" ;;
 esac
 `
@@ -920,6 +921,28 @@ esac
 	}
 	if got := call("edit", `[3 1 "x"]`); !strings.Contains(got, ":no-plan") {
 		t.Errorf("edit of a built plan = %s", got)
+	}
+
+	// A reviewer that fails stops the plan, which offers Review again: only
+	// the reviewer runs again, and the plan goes on.
+	os.WriteFile(filepath.Join(dir, "tasks"), []byte(`["four"]`), 0o600)
+	os.WriteFile(filepath.Join(dir, "broken"), nil, 0o600)
+	if got := call("start", `["reviewed" ["true"]]`); got != "(ok 4)" {
+		t.Fatalf("plan/start = %s", got)
+	}
+	again := `{:action [:plan/review-again 4] :label "Review again"}`
+	inboxHas("the failed review", `"plan 4, reviewed: failed. Task 1 of 1 ended failed: The reviewer failed`)
+	inboxHas("Review again", `[{:action [:pipeline/show 7] :label "Show review and diff"} `+again+` {:action [:plan/retry 4]`)
+	if got := call("board", "[]"); !strings.Contains(got, `{:action [:pipeline/show 7] :label "Show review and diff"} `+again) {
+		t.Errorf("board of a plan whose reviewer failed = %s", got)
+	}
+	os.Remove(filepath.Join(dir, "broken"))
+	if got := call("review-again", "[4]"); got != "(ok :reviewing)" {
+		t.Fatalf("plan/review-again = %s", got)
+	}
+	inboxHas("the plan reviewed again", `"plan 4, reviewed: done. All 1 tasks built; whiff/7 has them all."`)
+	if got := call("review-again", "[4]"); !strings.Contains(got, ":no-plan") {
+		t.Errorf("review-again of a done plan = %s", got)
 	}
 }
 
