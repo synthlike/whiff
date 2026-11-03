@@ -178,6 +178,13 @@
     [(some [_ a k _]) (some [a k])]
     [(none) (none)]))
 
+; taken-by are the messages turn id took, ints: one, or the results it
+; took together.
+(def (taken-by id)
+  (vector/reduce (ask-turns) []
+    (fn (all [t a _ _])
+      (if (= t id) (vector/append all (unwrap (int/from-string a))) all))))
+
 ; root-of is turn id's root, as text: itself unless it was a result's.
 (def (root-of id)
   (match (vector/find (ask-turns) (fn ([t _ _ _]) (= t id)))
@@ -206,25 +213,48 @@
 (def wake-text (str "This is your scheduled turn; you have one every " (value/to-string every)
                  ". Look again at what the user asked you to keep track of. If there is nothing worth telling them, answer only: nothing"))
 
-; result-text is a turn's text for task t, which an earlier turn of the
-; agent's started, for root, and which ended with r. For an ask that
-; waits, the answer is the ask's, once nothing else started for it runs.
-(def (result-text t r root)
-  (let [ended (str "Task " (int/to-string t) ", which you started in an earlier turn, has ended: " (value/to-string r) ". ")
-        others (vector/filter (open-for root) (fn (o) (not (= o t))))]
+; held? is whether inbox item m is a result whose turn started other
+; tasks that haven't ended: it waits for them, so that their results
+; take one turn together rather than one each.
+(def (held? m)
+  (match m
+    [{:fn :whiff/result :args [t _]}
+     (let [by (turn-of t)]
+       (vector/any? (or-else (session/tasks) []) (fn (o) (and (not (= o t)) (= (turn-of o) by)))))]
+    [_ #f]))
+
+; results-with are the results in waiting, inbox items, of the tasks the
+; turn that started task t started, t's among them: what one turn takes.
+(def (results-with waiting t)
+  (let [by (turn-of t)]
+    (vector/filter waiting
+      (fn (m) (match m [{:fn :whiff/result :args [o _]} (= (turn-of o) by)] [_ #f])))))
+
+; result-text is a turn's text for results, inbox items of the tasks an
+; earlier turn of the agent's started, for root. For an ask that waits,
+; the answer is the ask's, once nothing else started for it runs.
+(def (result-text results root)
+  (let [ids (vector/map results (fn ({:args [t _]}) t))
+        ended (string/join
+                (vector/map results
+                  (fn ({:args [t r]}) (str "Task " (int/to-string t) ", which you started in an earlier turn, has ended: " (value/to-string r) ".")))
+                " ")
+        others (vector/filter (open-for root) (fn (o) (not (vector/contains? ids o))))]
     (match (asked root)
       [(some [a "ask"]) when (and (waits? a) (vector/empty? others))
-       (str ended "Carry on with what it was for: your answer now goes to whoever asked you, as your answer to their message.")]
+       (str ended " Carry on with what it was for: your answer now goes to whoever asked you, as your answer to their message.")]
       [(some [a "ask"]) when (waits? a)
-       (str ended "Tasks " (string/join (vector/map others int/to-string) ", ")
+       (str ended " Tasks " (string/join (vector/map others int/to-string) ", ")
          " you started for the same message haven't ended: you'll answer once they have. For now answer only: nothing")]
-      [_ (str ended "Carry on with what it was for. If the user should hear of it, say so in your answer; otherwise answer only: nothing")])))
+      [_ (str ended " Carry on with what it was for. If the user should hear of it, say so in your answer; otherwise answer only: nothing")])))
 
 ; paused? is whether you paused the agent: its messages wait.
 (def (paused?) (= (read-file paused-file) "paused"))
 
 ; next-ask starts a turn for the oldest message in the inbox, a tell, an
 ; ask, a wake or a result, that hasn't one, unless a turn is running or
+; the agent is paused. A result waits for the others its turn started,
+; then takes one turn with them, its root's; so it is unless
 ; the agent is paused: (ok :waiting), (ok :paused), (ok :idle) or (ok
 ; :thinking). One whose turn can't start, as the review
 ; gate or the day's budget refuses it, is answered with why: (ok
@@ -235,19 +265,21 @@
   (let [taken (ask-turns)
         waiting (vector/filter (inbox)
                   (fn ({:id i}) (not (vector/any? taken (fn ([_ a _ _]) (= a (int/to-string i)))))))]
-    (match (vector/first waiting)
+    (match (vector/find waiting (fn (m) (not (held? m))))
       [(none) (ok :idle)]
       [_ when (paused?) (ok :paused)]
       [_ when (busy?) (ok :waiting)]
       [(some {:id i :fn f :args args})
        (let [_ (if (= f :wake) (send-after every :wake) (ok :done))
              root (match [f args] [[:whiff/result [t _]] (root-of (turn-of t))] [_ ""])
+             batch (match [f args] [[:whiff/result [t _]] (results-with waiting t)] [_ [{:id i}]])
              text (match [f args]
-                    [[:whiff/result [t r]] (result-text t r root)]
+                    [[:whiff/result _] (result-text batch root)]
                     [[_ [t]] t]
                     [_ wake-text])]
          (match (start text)
-           [(ok t) (do (try (file/append asks (str t " " (int/to-string i) " " (keyword/name f) (if (= root "") "" (str " " root)) "\n")))
+           [(ok t) (do (vector/each batch
+                         (fn ({:id m}) (try (file/append asks (str t " " (int/to-string m) " " (keyword/name f) (if (= root "") "" (str " " root)) "\n")))))
                      (ok :thinking))]
            [(err e) (do (reply i (err e)) (ok :refused))]))])))
 
@@ -272,13 +304,14 @@
        (do (begun) (try (file/append deferred (str turn "\n"))) (ok :deferred))]
       ["ask" (reply-ask i o)]
       ["whiff/result"
-       (let [root (root-of turn)]
+       (let [root (root-of turn)
+             done (fn () (vector/each (taken-by turn) (fn (m) (reply m (ok :done)))))]
          (match (asked root)
            [(some [ra "ask"]) when (waits? ra)
             (if (vector/empty? (open-for root))
-              (let [_ (reply-ask (unwrap (int/from-string ra)) o)] (reply i (ok :done)))
-              (do (begun) (reply i (ok :done))))]
-           [_ (let [_ (answered o #t)] (reply i (ok :done)))]))]
+              (let [_ (reply-ask (unwrap (int/from-string ra)) o)] (done))
+              (do (begun) (done)))]
+           [_ (let [_ (answered o #t)] (done))]))]
       ; answered's is your inbox's pending: what the sender hears is reply's.
       ["tell" (let [_ (answered o #t)] (reply i (match o [(ok _) (ok :told)] [e e])))]
       [_ (let [_ (answered o #t)] (reply i (ok :done)))])))

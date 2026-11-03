@@ -402,7 +402,7 @@ answer() { printf '{"type":"result","subtype":"success","is_error":false,"result
 msg=$(cat)
 case "$*" in *--mcp-config*)
   case "$*" in *"--strict-mcp-config --allowedTools mcp__whiff"*) ;; *) echo "want whiff mcp alone, got $*" >&2; exit 9 ;; esac
-  echo "$WHIFF_SESSION" > token; printf '%s\n' "$@" > args ;;
+  printf '%s\n' "$@" > args; echo "$WHIFF_SESSION" > token ;;
 esac
 case "$msg" in *"scheduled turn"*)
   case "$sys" in *"Watch the thread."*) ;; *) echo "no prompt in $sys" >&2; exit 9 ;; esac
@@ -1462,17 +1462,31 @@ func TestAgentDelegate(t *testing.T) {
 		t.Fatalf("helper/ask = %+v", r)
 	}
 	task := strings.Fields(strings.TrimPrefix(r.Value, "(err {:id "))[0]
+	r, _ = turn.Message("call", "helper/ask", `["and this"]`, "")
+	if !strings.HasPrefix(r.Value, "(err {:id ") {
+		t.Fatalf("second helper/ask = %+v", r)
+	}
+	second := strings.Fields(strings.TrimPrefix(r.Value, "(err {:id "))[0]
 	// helper answers while lead's turn still runs; lead hears once it ends.
 	if r, err := c.Message("wait", "", "["+task+"]", ""); err != nil || r.Value != `(ok "new in helper: sum it up")` {
 		t.Fatalf("helper's answer = %+v %v", r, err)
 	}
 	os.WriteFile(filepath.Join(home, "go"), nil, 0o600)
 	turn.Close()
-	want := "Task " + task + `, which you started in an earlier turn, has ended: (ok \"new in helper: sum it up\")`
-	eventually(t, "lead's turn on helper's answer", func() string {
+	// Both answers take one turn, once the second has come too.
+	want := "Task " + task + `, which you started in an earlier turn, has ended: (ok \"new in helper: sum it up\"). ` +
+		"Task " + second + `, which you started in an earlier turn, has ended: (ok \"resume in helper: and this\")`
+	eventually(t, "lead's turn on helper's answers", func() string {
 		text, _ := c.Inbox("me")
 		return fmt.Sprint(strings.Contains(text, "resume in lead: "+want))
 	}, "true")
+	if b, _ := os.ReadFile(filepath.Join(home, "turns")); strings.Count(string(b), "\n") != 2 {
+		t.Errorf("lead took these turns, want the tell's and one for both results:\n%s", b)
+	}
+	eventually(t, "lead's inbox, both results answered", func() string {
+		text, _ := c.Inbox("lead")
+		return text
+	}, "")
 	if text, _ := c.Inbox("review"); strings.Contains(text, "jobs/run") {
 		t.Errorf("an agent's turn waits for review:\n%s", text)
 	}

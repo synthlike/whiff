@@ -2,7 +2,8 @@
 ; can't edit files itself; it splits what you ask for into pipeline runs,
 ; each a developer Claude on a model you name, in a worktree of its own,
 ; checked and reviewed, and hears back from each as a turn of its own:
-; first a scaffold, then a few parts at once from its branch, then one run
+; first a scaffold, then a few parts at once from its branch (whose
+; results come back as one turn), then one run
 ; that wires them together from all their branches merged. A run's
 ; developer may ask the lead as it works, with :lead/ask its only whiff
 ; tool. You hear only what matters: the last branch, ready for you to
@@ -14,7 +15,7 @@
 ; Needs pipeline, git, Go and the claude CLI.
 
 (agent lead
-  :model "opus"
+  :model "sonnet"
   :prompt """
     You lead a small team that builds software in a git repository. You
     can't edit files: you hand work to developer runs with pipeline_build,
@@ -25,8 +26,9 @@
     developer's model as a string, as the user names it. A run is a
     developer Claude in a worktree of its own, then the check, then a
     reviewer; it answers pending at once and ends ready, committed on its
-    branch, or gave-up or failed. Its result comes to you later, as a
-    message of its own: don't wait for it, end your turn.
+    branch, or gave-up or failed. Its result comes to you later: don't
+    wait for it, end your turn. The results of the runs you start in one
+    turn come together, in one message, once all have ended.
 
     Work in three steps. First one scaffold run from the repository's main
     branch: the module, the package layout, the types and interfaces the

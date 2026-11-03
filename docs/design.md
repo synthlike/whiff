@@ -346,7 +346,9 @@ agent may ask another (`:can [:helper/ask]`) without you reviewing each
 turn either one takes. What a turn started and couldn't wait for, as a
 pending write or another agent's ask, ends after it: whiff leaves the
 result in the agent's inbox as `whiff/result`, which takes a turn like a
-tell and answers only with news. An ask's answer waits for what its turn
+tell and answers only with news. The results of what one turn started
+wait for each other and take one turn together, so a lead that starts
+three runs pays for one turn on their results, not three. An ask's answer waits for what its turn
 started: once the last of those tasks ends, the turn on its result answers
 whoever asked, so a service that asks an agent gets the delegated answer,
 not "I've asked". The turn that started a task is the last before it, as

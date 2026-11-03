@@ -31,7 +31,7 @@ Or try one without installing it: `whiff try services/git.puff status`.
   diff; until both pass, the review goes back to the dev, up to 3 rounds,
   then it is committed on the branch and you hear in your inbox. `runs`,
   `view`, `cancel n`; `:pipeline/done` as each run ends. Needs the claude CLI.
-- `lead`: an Opus agent that builds software with `pipeline/build`, an ask
+- `lead`: a Sonnet agent that builds software with `pipeline/build`, an ask
   that answers when a run ends: a scaffold run, a few parts at once on a
   model you name (haiku), then one run from all their branches merged. Its
   workers may ask it questions with `:lead/ask`, their only whiff tool, and
@@ -47,7 +47,8 @@ Or try one without installing it: `whiff try services/git.puff status`.
   agent is another file, with its own `:prompt`, and `:model`, `:can
   [:gh/prs]` for the functions it may use as tools, `:limits {:day 2}` and
   `:every 1d` if you like; `:can [:assistant/ask]` lets it delegate to
-  another agent, whose answer comes back as a turn of its own. `usage` says what it spent, `stop` ends the
+  another agent, whose answer comes back as a turn of its own (one turn for all
+  that a turn started). `usage` says what it spent, `stop` ends the
   turn running now, and `pause`/`resume` hold its turns while messages wait. Needs the claude CLI.
 - `digest`: an agent that briefs you on this repository once a day: open
   pull requests and their checks, open TODO items and uncommitted work, in
