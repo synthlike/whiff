@@ -1514,3 +1514,55 @@ func TestAgentPause(t *testing.T) {
 	}, "true")
 	eventually(t, "napper, its answers waiting for you", line, `{:agent #t :note "2 answers in your inbox" :service :napper :status :waiting}`)
 }
+
+// TestAgentDelegateAsk asks lead, which asks helper in its turn and ends
+// it: lead's answer waits until helper's has come back, and is its turn on
+// that, not the first turn's.
+func TestAgentDelegateAsk(t *testing.T) {
+	dir := tempDir(t)
+	fakeClaude(t, dir)
+	writeServices(t, dir, map[string]string{
+		"lead":   `(agent lead :prompt "Delegate." :can [:helper/ask])`,
+		"helper": `(agent helper :prompt "Help.")`,
+	})
+	start(t, dir)
+	c := dial(t, dir)
+	resp, err := c.Eval(`(call :lead/ask "hold")`, "")
+	if err != nil || !strings.HasPrefix(resp.Value, "(err {:id ") {
+		t.Fatalf("ask = %+v %v", resp, err)
+	}
+	asked := strings.Fields(strings.TrimPrefix(resp.Value, "(err {:id "))[0]
+	agents := filepath.Join(dir, ".whiff", "agents")
+	var token string
+	eventually(t, "lead's turn's token", func() string {
+		b, _ := os.ReadFile(filepath.Join(agents, "lead", "token"))
+		token = strings.TrimSpace(string(b))
+		return fmt.Sprint(len(token))
+	}, "32")
+	turn := dial(t, dir)
+	turn.Agent = true
+	if r, err := turn.ClaimSession(token, ""); err != nil || !strings.HasPrefix(r.Value, "(ok [:agent/lead") {
+		t.Fatalf("claim = %+v %v", r, err)
+	}
+	r, _ := turn.Message("call", "helper/ask", `["hold"]`, "")
+	task := strings.Fields(strings.TrimPrefix(r.Value, "(err {:id "))[0]
+	// lead's turn ends while helper's runs: its answer waits.
+	os.WriteFile(filepath.Join(agents, "lead", "go"), nil, 0o600)
+	turn.Close()
+	turns, _ := os.ReadFile(filepath.Join(agents, "lead", "turns"))
+	eventually(t, "lead's ask deferred", func() string {
+		b, _ := os.ReadFile(filepath.Join(agents, "lead", "deferred"))
+		return string(b)
+	}, string(turns))
+	if text, _ := c.Inbox("lead"); !strings.Contains(text, `"hold"`) {
+		t.Errorf("lead's ask left its inbox before helper answered:\n%s", text)
+	}
+	os.WriteFile(filepath.Join(agents, "helper", "go"), nil, 0o600)
+	want := `(ok "resume in lead: Task ` + task + `, which you started in an earlier turn, has ended: (ok \"new in helper: hold\"). Carry on with what it was for: your answer now goes to whoever asked you, as your answer to their message.")`
+	if r, err := c.Message("wait", "", "["+asked+"]", ""); err != nil || r.Value != want {
+		t.Errorf("lead's answer = %+v %v\nwant %s", r, err, want)
+	}
+	if text, _ := c.Inbox("me"); text != "" {
+		t.Errorf("an ask's answers reached your inbox:\n%s", text)
+	}
+}

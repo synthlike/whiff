@@ -22,7 +22,8 @@
 (def session-file (path/join home "session")) ; the conversation's id
 (def started (path/join home "started"))      ; the id once it has begun
 (def turns (path/join home "turns"))          ; each turn's job id, a line each
-(def asks (path/join home "asks"))            ; "turn message kind" for each turn: kind is ask, tell, wake or whiff/result
+(def asks (path/join home "asks"))            ; "turn message kind [root]" for each turn: kind is ask, tell, wake or whiff/result
+(def deferred (path/join home "deferred"))    ; each ask turn whose answer waits for the tasks it started
 (def costs (path/join home "costs"))          ; "time usd" for each turn, the last 24 hours'
 (def paused-file (path/join home "paused"))   ; "paused" while it takes no turns
 (def day-usd (unwrap (map/get limits :day)))
@@ -65,14 +66,16 @@
     (if (= (read-file started) id) ["--resume" id] ["--session-id" id])))
 
 ; busy? is whether the last turn runs: its message is in the inbox until
-; the agent has its answer, after its job ends. A turn from before turns
+; the agent has its answer, after its job ends, unless it is an ask whose
+; answer waits for the tasks the turn started. A turn from before turns
 ; kept their message runs while its job does.
 (def (busy?)
   (match (vector/last (read-lines turns))
     [(none) #f]
     [(some last)
      (match [(asked last) (call :jobs/list)]
-       [[(some [a _]) _] (vector/any? (inbox) (fn ({:id i}) (= (int/to-string i) a)))]
+       [[(some [a _]) _] (and (not (vector/contains? (read-lines deferred) last))
+                              (vector/any? (inbox) (fn ({:id i}) (= (int/to-string i) a))))]
        [[(none) (ok js)] (vector/any? js (fn ({:id i}) (= (int/to-string i) last)))]
        [_ #f])]))
 
@@ -155,30 +158,66 @@
 ; begun marks the session begun, once a turn has run in it.
 (def (begun) (try (file/write started (try (session)))))
 
-; ask-turns are [turn message kind] for each turn a message in the inbox
-; began, ids as text and kind "ask", "tell" or "wake".
+; ask-turns are [turn message kind root] for each turn a message in the
+; inbox began, ids as text and kind "ask", "tell", "wake" or
+; "whiff/result". A result's root is the turn the task it tells of was
+; started for, followed back through results; any other's is itself.
 (def (ask-turns)
   (vector/reduce (read-lines asks) []
     (fn (all line)
       (match (string/split line " ")
-        [[t a k] (vector/append all [t a k])]
-        [[t a] (vector/append all [t a "ask"])] ; from before tells queued
+        [[t a k r] (vector/append all [t a k r])]
+        [[t a k] (vector/append all [t a k t])]
+        [[t a] (vector/append all [t a "ask" t])] ; from before tells queued
         [_ all]))))
 
 ; asked is what turn id answers: (some [message kind]), or (none).
 (def (asked id)
-  (match (vector/find (ask-turns) (fn ([t _ _]) (= t id)))
-    [(some [_ a k]) (some [a k])]
+  (match (vector/find (ask-turns) (fn ([t _ _ _]) (= t id)))
+    [(some [_ a k _]) (some [a k])]
     [(none) (none)]))
+
+; root-of is turn id's root, as text: itself unless it was a result's.
+(def (root-of id)
+  (match (vector/find (ask-turns) (fn ([t _ _ _]) (= t id)))
+    [(some [_ _ _ r]) r]
+    [(none) id]))
+
+; turn-of is the turn that started task id, an int, as text: the last
+; before it, as whiff numbers tasks and jobs alike, and the agent's
+; session lasts a turn. "" for one from before its first turn.
+(def (turn-of id)
+  (vector/reduce (read-lines turns) ""
+    (fn (last t)
+      (match (int/from-string t)
+        [(ok n) when (< n id) t]
+        [_ last]))))
+
+; open-for are the tasks that haven't ended which were started for root,
+; a turn: by it, or by the turns of their results.
+(def (open-for root)
+  (vector/filter (or-else (session/tasks) [])
+    (fn (t) (= (root-of (turn-of t)) root))))
+
+; waits? is whether ask a is still in the inbox, its answer to come.
+(def (waits? a) (vector/any? (inbox) (fn ({:id i}) (= (int/to-string i) a))))
 
 (def wake-text (str "This is your scheduled turn; you have one every " (value/to-string every)
                  ". Look again at what the user asked you to keep track of. If there is nothing worth telling them, answer only: nothing"))
 
 ; result-text is a turn's text for task t, which an earlier turn of the
-; agent's started, and which ended with r.
-(def (result-text t r)
-  (str "Task " (int/to-string t) ", which you started in an earlier turn, has ended: " (value/to-string r)
-    ". Carry on with what it was for. If the user should hear of it, say so in your answer; otherwise answer only: nothing"))
+; agent's started, for root, and which ended with r. For an ask that
+; waits, the answer is the ask's, once nothing else started for it runs.
+(def (result-text t r root)
+  (let [ended (str "Task " (int/to-string t) ", which you started in an earlier turn, has ended: " (value/to-string r) ". ")
+        others (vector/filter (open-for root) (fn (o) (not (= o t))))]
+    (match (asked root)
+      [(some [a "ask"]) when (and (waits? a) (vector/empty? others))
+       (str ended "Carry on with what it was for: your answer now goes to whoever asked you, as your answer to their message.")]
+      [(some [a "ask"]) when (waits? a)
+       (str ended "Tasks " (string/join (vector/map others int/to-string) ", ")
+         " you started for the same message haven't ended: you'll answer once they have. For now answer only: nothing")]
+      [_ (str ended "Carry on with what it was for. If the user should hear of it, say so in your answer; otherwise answer only: nothing")])))
 
 ; paused? is whether you paused the agent: its messages wait.
 (def (paused?) (= (read-file paused-file) "paused"))
@@ -194,19 +233,21 @@
 (def (next-ask)
   (let [taken (ask-turns)
         waiting (vector/filter (inbox)
-                  (fn ({:id i}) (not (vector/any? taken (fn ([_ a _]) (= a (int/to-string i)))))))]
+                  (fn ({:id i}) (not (vector/any? taken (fn ([_ a _ _]) (= a (int/to-string i)))))))]
     (match (vector/first waiting)
       [(none) (ok :idle)]
       [_ when (paused?) (ok :paused)]
       [_ when (busy?) (ok :waiting)]
       [(some {:id i :fn f :args args})
        (let [_ (if (= f :wake) (send-after every :wake) (ok :done))
+             root (match [f args] [[:whiff/result [t _]] (root-of (turn-of t))] [_ ""])
              text (match [f args]
-                    [[:whiff/result [t r]] (result-text t r)]
+                    [[:whiff/result [t r]] (result-text t r root)]
                     [[_ [t]] t]
                     [_ wake-text])]
          (match (start text)
-           [(ok t) (do (try (file/append asks (str t " " (int/to-string i) " " (keyword/name f) "\n"))) (ok :thinking))]
+           [(ok t) (do (try (file/append asks (str t " " (int/to-string i) " " (keyword/name f) (if (= root "") "" (str " " root)) "\n")))
+                     (ok :thinking))]
            [(err e) (do (reply i (err e)) (ok :refused))]))])))
 
 ; reply-ask answers ask i with an ask turn's result r.
@@ -217,13 +258,26 @@
      (do (begun) (reply i (err {:kind :session :outcome :not-started :message "the session had already begun, so the message was lost; ask again"})))]
     [(err e) (reply i (err e))]))
 
-; finished answers message a, of kind, with its turn's outcome o: an ask's
-; sender gets the answer; a tell's answer goes to your inbox and its sender
-; hears it was told; a wake's or a result's, if it has news, to your inbox.
-(def (finished a kind o)
+; finished answers message a, of kind, with turn's outcome o: an ask's
+; sender gets the answer, once the tasks the turn started have ended; a
+; tell's answer goes to your inbox and its sender hears it was told; a
+; wake's, if it has news, to your inbox. A result's answers the ask it
+; was for, if that waits and nothing else started for it runs; else, if
+; it has news, it goes to your inbox.
+(def (finished turn a kind o)
   (let [i (unwrap (int/from-string a))]
     (match kind
+      ["ask" when (match o [(ok _) (not (vector/empty? (open-for turn)))] [_ #f])
+       (do (begun) (try (file/append deferred (str turn "\n"))) (ok :deferred))]
       ["ask" (reply-ask i o)]
+      ["whiff/result"
+       (let [root (root-of turn)]
+         (match (asked root)
+           [(some [ra "ask"]) when (waits? ra)
+            (if (vector/empty? (open-for root))
+              (let [_ (reply-ask (unwrap (int/from-string ra)) o)] (reply i (ok :done)))
+              (do (begun) (reply i (ok :done))))]
+           [_ (let [_ (answered o #t)] (reply i (ok :done)))]))]
       ; answered's is your inbox's pending: what the sender hears is reply's.
       ["tell" (let [_ (answered o #f)] (reply i (match o [(ok _) (ok :told)] [e e])))]
       [_ (let [_ (answered o #t)] (reply i (ok :done)))])))
@@ -290,7 +344,7 @@
       [(vector/contains? (read-lines turns) i)
        (let [o (outcome i r)]
          (match (asked i)
-           [(some [a k]) (finished a k o)]
+           [(some [a k]) (finished i a k o)]
            [(none) (answered o #f)]))] ; a turn from before tells queued
       ; Your reply to an answer is a tell, which waits its turn.
       [_ (match r

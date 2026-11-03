@@ -221,6 +221,7 @@ mark rather than `:write`, and `publish` to a literal topic as its subscribers'.
 - `(inbox [fn])`: This service's messages waiting for a reply, oldest first, each {:id :fn :args :from :cwd :at}; only fn's, a keyword, if given.
 - `(reply id result)`: Answer the message id in this service's inbox with result: its sender gets [:whiff/done id result]. (err {:kind :no-id}) if it isn't there.
 - `(self)`: This service's address, as a keyword: :assistant, or :try/3/assistant in whiff try.
+- `(session/tasks)`: (ok ids): for an agent, the tasks its turns' session started that haven't ended, oldest first: its messages waiting in an inbox or for your review. (err {:kind :no-session}) for a service that isn't an agent.
 - `(session/mode)`: (ok m): this agent session's mode, {:mode :gated}, {:mode :free} or {:mode :trusted :services [:todo ...]}, with :until, a time, if it runs out. (err {:kind :no-session}) for anyone else.
 - `(hand-on r)`: r; if r is the pending of a job or ask this service started, its answer goes to the caller of the message being handled instead. (err {:kind :no-id}) for another pending.
 - `(submitted r)`: (ok id) if r is a pending, of a job, an ask or a message the review gate holds: it was accepted, and [:whiff/done id result] answers it; else r, so a failure to submit stays an err. hand-on wants the pending itself.

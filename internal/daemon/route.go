@@ -398,6 +398,25 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 				}
 				return puff.Keyword(cur.addr), nil
 			}},
+		{Name: "session/tasks", Mark: puff.MarkRead,
+			Doc: "(ok ids): for an agent, the tasks its turns' session started that haven't ended, oldest first: its messages waiting in an inbox or for your review. (err {:kind :no-session}) for a service that isn't an agent.",
+			Fn: func(_ *puff.Call, _ []puff.Value) (puff.Value, error) {
+				var r puff.Value
+				d.do(func(st *state) {
+					if s := st.addrs[cur.addr]; s == nil || !s.agent {
+						r = puff.Errorf("no-session", ":%s isn't an agent", cur.addr)
+						return
+					}
+					var ids []puff.Value
+					for _, a := range st.asked {
+						if a.from == "agent/"+cur.addr {
+							ids = append(ids, puff.Int(a.id))
+						}
+					}
+					r = puff.Ok(puff.NewVector(ids...))
+				})
+				return r, nil
+			}},
 		{Name: "session/mode", Mark: puff.MarkRead,
 			Doc: "(ok m): this agent session's mode, {:mode :gated}, {:mode :free} or {:mode :trusted :services [:todo ...]}, with :until, a time, if it runs out. (err {:kind :no-session}) for anyone else.",
 			Fn: func(_ *puff.Call, _ []puff.Value) (puff.Value, error) {
