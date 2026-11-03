@@ -12,6 +12,7 @@
 ;   whiff call plan/approve 3      ; build a drafted plan's tasks
 ;   whiff call plan/retry 1 "store todos in a map"   ; after a task's run gave up
 ;   whiff call plan/review-again 1  ; after a task's reviewer failed
+;   whiff call plan/replan 1        ; after its planner failed, as when whiff stopped
 ;   whiff call plan/merge 1        ; once done: its last branch, fast-forward only
 ;   whiff call plan/discard 2      ; or throw its runs away, worktrees and branches
 ;   whiff call plan/plans          ; each plan, its tasks and where it is
@@ -20,6 +21,9 @@
 ;   whiff sub pipeline/done        ; each task's run as it ends
 
 (service plan :state {:next 1 :plans {} :jobs {} :runs {}}
+  ; A run that ended while whiff stopped may not have told it: see settle.
+  :start (fn (state) (do (send-after 1s :settle) (ok state)))
+
   (def most 4) ; tasks a plan may have
 
   (def prompt """
@@ -149,6 +153,14 @@
     (do (publish :plan/changed {:plan n})
       r))
 
+  ; ask-planner has a planner Claude, which only reads, plan n's goal in
+  ; its repository: its answer is the plan's whiff/done.
+  (def (ask-planner state n)
+    (let [{:goal goal :check check :repo repo} (plan-of state n)
+          id (try (submitted (call :jobs/run ["claude" "-p" "--strict-mcp-config" "--tools" "Read,Glob,Grep" "--no-session-persistence"]
+                               {:stdin (planner-input goal check) :dir repo :as :text :timeout 10m})))]
+      (ok (-> state (set-plan n {:step :planning}) (map/set-in [:jobs id] n)))))
+
   ; begin plans goal with check as plan n, (ok [n state]); a draft waits
   ; for your approval once planned.
   (def (begin state goal check draft)
@@ -156,13 +168,11 @@
           base (string/trim (try (proc/output ["git" "-C" repo "rev-parse" "HEAD"])))
           branch (string/trim (try (proc/output ["git" "-C" repo "rev-parse" "--abbrev-ref" "HEAD"])))
           n (map/get-or state :next 1)
-          id (try (submitted (call :jobs/run ["claude" "-p" "--strict-mcp-config" "--tools" "Read,Glob,Grep" "--no-session-persistence"]
-                               {:stdin (planner-input goal check) :dir repo :as :text :timeout 10m})))]
-      (moved n (ok [n (-> state
-                        (map/set :next (+ n 1))
-                        (map/set-in [:plans n] {:goal goal :repo repo :base base :check check :step :planning :tasks [] :draft draft
-                                                :where (where repo branch base)})
-                        (map/set-in [:jobs id] n))]))))
+          state (-> state
+                  (map/set :next (+ n 1))
+                  (map/set-in [:plans n] {:goal goal :repo repo :base base :check check :step :planning :tasks [] :draft draft
+                                          :where (where repo branch base)}))]
+      (moved n (ok [n (try (ask-planner state n))]))))
 
   (on (start state goal check) :write :update
     "Plans goal in the repository here with a planner Claude, then builds its tasks one after another as :pipeline runs, each from the last one's branch, with check (a command, like [\"go\" \"test\" \"./...\"]). (ok n), the plan's number; how it went lands in your inbox."
@@ -291,7 +301,9 @@
                                  [e e])]
                     [e e])]
          (moved n (catch step
-                    [e (ok (or-else (finish state n :failed (str "The planner failed: " (value/to-string e)) [(discard-action n)]) state))])))]))
+                    [e (ok (or-else (finish state n :failed (str "The planner failed: " (value/to-string e))
+                                      [{:label "Plan again" :action [:plan/replan n]} (discard-action n)])
+                             state))])))]))
 
   ; A run of a plan took a step: its ticket moved.
   (on :pipeline/step (state v) :update
@@ -302,8 +314,10 @@
          [(none) (ok state)])]
       [_ (ok state)]))
 
-  ; A run of a plan ended: the next task from its branch, or the plan ends.
-  (on :pipeline/done (state v) :update
+  ; run-ended takes a plan on once v, {:run :status :branch :note :from},
+  ; says how the run of its task ended: the next task from its branch, or
+  ; the plan ends. A run no plan waits for is left alone.
+  (def (run-ended state v)
     (match v
       [{:run run :status status :branch branch :note note}
        (match (map/get-in state [:runs run])
@@ -322,7 +336,33 @@
                    [(show-action run) (merge-action n branch)])]
                 [_
                  (catch (next-run state n (+ i 1) branch)
-                   [e (finish state n :failed (str "Task " (+ i 2) " didn't start: " (value/to-string e)) [(discard-action n)])])])))])]))
+                   [e (finish state n :failed (str "Task " (+ i 2) " didn't start: " (value/to-string e)) [(discard-action n)])])])))])]
+      [_ (ok state)]))
+
+  (on :pipeline/done (state v) :update
+    (run-ended state v))
+
+  ; whiff stopping after a run ended but before :pipeline/done reached the
+  ; plan leaves the plan building for good: at start, settle asks pipeline
+  ; how each run a plan waits for is, and takes on those that ended.
+  (on (settle state) :write :update
+    "Takes on each plan whose run ended while it wasn't listening, as when whiff stopped between the run's end and :pipeline/done reaching the plan; plan sends it to itself at start. (ok :settled)."
+    (let [runs (try (call :pipeline/runs))]
+      (ok [:settled
+           (vector/reduce (map/entries (map/get-or state :runs {})) state
+             (fn (st [run n])
+               (match (vector/find runs (fn ({:run r}) (= r run)))
+                 [(some {:step s :branch b :from f}) when (vector/contains? [:ready :failed :gave-up :cancelled] s)
+                  (or-else (run-ended st {:run run :status s :branch b :from f
+                                          :note (str "it ended while whiff was stopped; pipeline/show " run " says how")})
+                    st)]
+                 [_ st])))])))
+
+  (on (replan state n) :write :update
+    "Plans failed plan n's goal again after its planner failed, as when whiff stopped while it ran: the planner only reads, so it is safe to run again. (ok :planning); (err {:kind :no-plan}) unless plan n's planner failed."
+    (match (map/get-in state [:plans n])
+      [(some {:step :failed :tasks []}) (moved n (ok [:planning (try (ask-planner state n))]))]
+      [_ (no-plan state n (str "plan " n "'s planner didn't fail: nothing to plan again"))]))
 
   (on (merge state n) :write :update
     "Merges done plan n's last branch, which holds every task, into the branch checked out in its repository, only as a fast-forward, as :pipeline/merge does, then removes every run's worktree and branch; it leaves the board. (ok branch); (err {:kind :no-plan}) unless plan n is done."
