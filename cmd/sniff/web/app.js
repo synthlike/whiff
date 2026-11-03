@@ -688,6 +688,32 @@ function serviceLines(st) {
   return lines;
 }
 
+// workText is a task an agent handed out, as its Status lists it: who has
+// it, and where it is or how it came back, as "ready whiff/7, $0.31".
+function workText(w) {
+  if (w.status !== "ended") return [`:${w.to}/${w.fn}`, w.status === "held" ? "held for your review" : "waiting"];
+  const r = w.result, v = r?.value;
+  let how = typeof v === "string" ? v : "";
+  if (r && !r.ok) how = "failed: " + (v?.message ?? JSON.stringify(v));
+  else if (v && typeof v === "object") {
+    how = [v.status, v.branch].filter(Boolean).join(" ");
+    if (parseFloat(v.cost) > 0) how += ", $" + parseFloat(v.cost).toFixed(2);
+  }
+  return [`:${w.to}`, how];
+}
+
+// workList is an agent's work, newest first: one row a task.
+function workList(work) {
+  const ol = el("ol", "svc-work");
+  for (const w of [...work].reverse()) {
+    const [who, how] = workText(w);
+    const li = el("li", w.status === "ended" ? (w.result?.ok ? "ok" : "failed") : "open");
+    li.append(el("span", "work-id", String(w.id)), el("span", "work-to", who), el("span", "work-how", how), el("span", "hint", ago(w.at)));
+    ol.append(li);
+  }
+  return ol;
+}
+
 // statusBox is the Status section of an address's details: its state and
 // note, then serviceLines.
 async function statusBox(name) {
@@ -700,6 +726,7 @@ async function statusBox(name) {
     const dl = el("dl");
     for (const [k, v] of serviceLines(st)) dl.append(el("dt", "", k), el("dd", "", v));
     box.replaceChildren(head, dl);
+    if (st.work?.length) box.append(el("h4", "", "Work"), workList(st.work));
     // An agent pauses and resumes here, as you.
     if (st.agent) {
       const paused = st.status === "paused";

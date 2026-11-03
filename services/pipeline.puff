@@ -260,7 +260,8 @@
       (do (if quiet :quiet (or-else (call :me/tell (str "pipeline " n ", " task ": " (keyword/name status) ". " note) {:actions (actions n status branch from)}) :told))
         ; A build's asker hears how it ended.
         (match (map/get (run-of state n) :asker)
-          [(some a) (or-else (reply a (ok {:run n :status status :branch branch :dir dir :note note})) :gone)]
+          [(some a) (or-else (reply a (ok {:run n :status status :branch branch :dir dir :note note
+                                           :cost (map/get-or (run-of state n) :cost 0.0)})) :gone)]
           [(none) :none])
         (heard (publish :pipeline/done {:run n :status status :branch branch :dir dir :note note :from from}))
         ; After :pipeline/done, so a planner hears of the end first.
@@ -278,6 +279,17 @@
                    [(some c) (str (map/get-or d :tool_name "a tool") " " c)]
                    [(none) (map/get-or d :tool_name "a tool")])))]
       [_ []]))
+
+  ; dev-cost is what a dev turn cost, from out, its JSON result: 0.0 if
+  ; out isn't that.
+  (def (dev-cost out)
+    (match (json/parse out)
+      [(ok res) when (= (value/type res) :map)
+       (match (map/get-or res :total_cost_usd 0.0) [c when (= (value/type c) :float) c] [c (float/from-int c)])]
+      [_ 0.0]))
+
+  (test "a dev turn's cost, from its JSON"
+    (= [(dev-cost "{\"total_cost_usd\":0.25}") (dev-cost "{\"total_cost_usd\":0}") (dev-cost "a summary")] [0.25 0.0 0.0]))
 
   ; refused-text is what a run's note says of what Claude refused its dev:
   ; nothing if it refused nothing. whiff refused none of it.
@@ -327,7 +339,8 @@
         [(= step :dev)
          (match r
            [(ok out) (check (set-run state n {:resumable #t
-                                              :denied (vector/concat (map/get-or run :denied []) (denied out))}) n)]
+                                              :denied (vector/concat (map/get-or run :denied []) (denied out))
+                                              :cost (+ (map/get-or run :cost 0.0) (dev-cost out))}) n)]
            [(err e) (finish state n :failed (failure "The developer failed" round id e))])]
         [(= step :check)
          (match r
@@ -409,7 +422,7 @@
     (begin state repo base task check #t {}))
 
   (ask (build repo base task check model)
-    "Runs task as start-on does, in the repository at repo, from base (a commit or branch, or a vector of them, merged), with the dev Claude on model (\"\" for the default): pending at once, and once the run ends (ok {:run :status :branch :dir :note}), :status :ready, :gave-up or :failed. How an agent hands work to smaller ones and hears back.")
+    "Runs task as start-on does, in the repository at repo, from base (a commit or branch, or a vector of them, merged), with the dev Claude on model (\"\" for the default): pending at once, and once the run ends (ok {:run :status :branch :dir :note :cost}), :status :ready, :gave-up or :failed, :cost what its dev turns cost in dollars. How an agent hands work to smaller ones and hears back.")
 
   (on (whiff/asked state id) :update
     "A build waits in the inbox: its run starts now, unless it has. whiff's own; call build instead."

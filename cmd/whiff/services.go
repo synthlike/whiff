@@ -170,6 +170,21 @@ func showService(dir, name string, stdout, stderr io.Writer) int {
 	if e, ok := get(m, "every").(puff.Duration); ok {
 		line("every", puff.Print(e))
 	}
+	if w, ok := get(m, "work").(puff.Vector); ok {
+		width := 0
+		for i := range w.Len() {
+			it, _ := w.At(i).(puff.Map)
+			width = max(width, len(puff.Print(get(it, "id"))))
+		}
+		for i := range w.Len() {
+			it, _ := w.At(i).(puff.Map)
+			label := ""
+			if i == 0 {
+				label = "work"
+			}
+			fmt.Fprintf(stdout, "  %-7s %s\n", label, workLine(it, width, now))
+		}
+	}
 	if n, ok := get(m, "inbox").(puff.Int); ok && n > 0 {
 		line("inbox", fmt.Sprintf("%d waiting", n))
 	}
@@ -196,4 +211,64 @@ func roughly(d time.Duration) string {
 		return fmt.Sprintf("%dh", int(d.Hours()))
 	}
 	return fmt.Sprintf("%dd", int(d.Hours()/24))
+}
+
+// workLine is a task an agent handed out, for whiff services: its id, who
+// has it, and where it is or how it ended, its id padded to width, as
+// "7  :pipeline  ready whiff/7, $0.31, 3m ago".
+func workLine(it puff.Map, width int, now time.Time) string {
+	get := func(m puff.Map, k string) puff.Value { v, _ := m.Get(puff.Keyword(k)); return v }
+	when := ""
+	if t, ok := get(it, "at").(puff.Time); ok {
+		when = ", " + roughly(now.Sub(t.Go())) + " ago"
+	}
+	to := puff.Print(get(it, "to"))
+	switch status := puff.Print(get(it, "status")); status {
+	case ":waiting", ":held":
+		what := "waiting"
+		if status == ":held" {
+			what = "held for your review"
+		}
+		return fmt.Sprintf("%-*s  %s/%s  %s%s", width, puff.Print(get(it, "id")), to, strings.TrimPrefix(puff.Print(get(it, "fn")), ":"), what, when)
+	}
+	return fmt.Sprintf("%-*s  %s  %s%s", width, puff.Print(get(it, "id")), to, resultLine(get(it, "result")), when)
+}
+
+// resultLine is a task's result, cut down, in a few words: a run's status,
+// branch and cost, an answer's text, or an err's message.
+func resultLine(r puff.Value) string {
+	tag, ok := r.(puff.Tag)
+	if !ok || tag.Len() != 1 {
+		return puff.Print(r)
+	}
+	v := tag.At(0)
+	m, isMap := v.(puff.Map)
+	switch {
+	case tag.Name() == "err" && isMap:
+		if msg, ok := m.Get(puff.Keyword("message")); ok {
+			return "failed: " + string(msg.(puff.String))
+		}
+		return "failed: " + puff.Print(v)
+	case isMap:
+		var parts []string
+		for _, k := range []string{"status", "branch"} {
+			if x, ok := m.Get(puff.Keyword(k)); ok {
+				parts = append(parts, strings.TrimPrefix(strings.Trim(puff.Print(x), `"`), ":"))
+			}
+		}
+		line := strings.Join(parts, " ")
+		if c, ok := m.Get(puff.Keyword("cost")); ok {
+			if f, ok := c.(puff.Float); ok && f > 0 {
+				line += fmt.Sprintf(", $%.2f", float64(f))
+			}
+		}
+		if line != "" {
+			return line
+		}
+	case tag.Name() == "ok":
+		if s, ok := v.(puff.String); ok {
+			return string(s)
+		}
+	}
+	return puff.Print(r)
 }

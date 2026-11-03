@@ -334,6 +334,7 @@ func (d *daemon) serviceStatus(name string) puff.Value {
 		if !sp.last.IsZero() {
 			add("last-turn", puff.NewTime(sp.last))
 		}
+		add("work", d.agentWork(name, now))
 	}
 	m, err := puff.NewMap(es...)
 	if err != nil {

@@ -1487,6 +1487,17 @@ func TestAgentDelegate(t *testing.T) {
 		text, _ := c.Inbox("lead")
 		return text
 	}, "")
+	// whiff services lead shows what it handed out, and how each came back.
+	r, _ = c.Eval("(service/status :lead)", "")
+	_, work, _ := strings.Cut(r.Value, ":work [")
+	for _, want := range []string{
+		":id " + task + " :result (ok \"new in helper: sum it up\") :status :ended :to :helper}",
+		":id " + second + " :result (ok \"resume in helper: and this\") :status :ended :to :helper}",
+	} {
+		if !strings.Contains(work, want) {
+			t.Errorf("lead's work = %s\nwant %s", work, want)
+		}
+	}
 	if text, _ := c.Inbox("review"); strings.Contains(text, "jobs/run") {
 		t.Errorf("an agent's turn waits for review:\n%s", text)
 	}

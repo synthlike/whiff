@@ -538,7 +538,23 @@ func (s *server) service(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
-	writeJSON(w, plain(v))
+	st := plain(v)
+	// An agent's work: each result as {"ok": bool, "value": ...}, for the
+	// page to say how it came back.
+	if m, ok := v.(puff.Map); ok {
+		if work, ok := m.Get(puff.Keyword("work")); ok {
+			items := st.(map[string]any)["work"].([]any)
+			for i := range work.(puff.Vector).Len() {
+				it, _ := work.(puff.Vector).At(i).(puff.Map)
+				if r, ok := it.Get(puff.Keyword("result")); ok {
+					if tag, ok := r.(puff.Tag); ok && tag.Len() == 1 {
+						items[i].(map[string]any)["result"] = map[string]any{"ok": tag.Name() == "ok", "value": plain(tag.At(0))}
+					}
+				}
+			}
+		}
+	}
+	writeJSON(w, st)
 }
 
 // session answers what the agent session address did, as whiff session

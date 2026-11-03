@@ -172,10 +172,13 @@ the agent has spent its day's in the last 24 hours its turns fail
   (`service/status`) is one in full: its file, its load error, its
   faults today and the last one's message, the last message it handled,
   its inbox and timers, and for an agent its turns and dollars of the
-  last 24 hours against `:day`, and its `:every`. sniff's sidebar shows
+  last 24 hours against `:day`, its `:every`, its session's mode, and
+  its work: what its turns handed out today, each waiting, held for your
+  review, or how it came back (`ready whiff/7, $0.31` for a pipeline
+  run, with what its dev turns cost). sniff's sidebar shows
   the same: a service's dot and word only when it isn't `ok` or `idle`,
   a file that failed to load among the addresses, and the details under
-  Status when you click one.
+  Status when you click one, an agent's work as a list under them.
 - **Shared code.** `(use "lib/http-check.puff")` brings another file's
   defs and tests in, as if they were written there: a handler's mark sees
   through them, a name defined twice is an error at both places, and
