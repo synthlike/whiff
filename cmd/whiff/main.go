@@ -16,6 +16,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/term"
+
 	"github.com/synthlike/whiff/internal/daemon"
 	"github.com/synthlike/whiff/internal/puff"
 	"github.com/synthlike/whiff/internal/rpc"
@@ -532,16 +534,19 @@ func eval(dir, src string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// terminal says whether f is a terminal: /dev/null is a character device
+// too, but gets no prompt.
+func terminal(f *os.File) bool {
+	return term.IsTerminal(int(f.Fd()))
+}
+
 // repl reads puff from in a line at a time and evaluates it in the daemon,
 // in one env for the session, printing each value; it keeps reading while a
 // form or string is still open. An interrupt cancels the evaluation, or ends
 // the REPL at its prompt.
 func repl(dir string, in io.Reader, stdout, stderr io.Writer) int {
-	interactive := false
-	if f, ok := in.(*os.File); ok {
-		fi, err := f.Stat()
-		interactive = err == nil && fi.Mode()&os.ModeCharDevice != 0
-	}
+	f, ok := in.(*os.File)
+	interactive := ok && terminal(f)
 	wd, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintf(stderr, "whiff: %v\n", err)
