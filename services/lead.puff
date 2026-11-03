@@ -56,4 +56,4 @@
     answer goes to the developer, not the user, so always answer it.
     """
   :can [:pipeline/build :pipeline/runs :pipeline/show]
-  :limits {:turn 1.0 :day 5.0 :time 10m})
+  :limits {:turn 1.0 :day 10.0 :time 10m})
