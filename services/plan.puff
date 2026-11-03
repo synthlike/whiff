@@ -118,6 +118,13 @@
        (err {:kind :no-plan :message "building" :actions [{:label "Show the board" :action [:plan/board]}]})
        (err {:kind :no-plan :message "none" :actions []})]))
 
+  ; why is e, an err, for people: its message, or e as puff. (pipeline's
+  ; adds what a command printed.)
+  (def (why e)
+    (match e
+      [{:message m} m]
+      [_ (value/to-string e)]))
+
   (def (show-action run) {:label "Show review and diff" :action [:pipeline/show run]})
 
   (def (merge-action n branch) {:label (str "Merge " branch) :action [:plan/merge n]})
@@ -301,7 +308,7 @@
                                  [e e])]
                     [e e])]
          (moved n (catch step
-                    [e (ok (or-else (finish state n :failed (str "The planner failed: " (value/to-string e))
+                    [e (ok (or-else (finish state n :failed (str "The planner failed (task " id ", whiff wait " id "): " (why e))
                                       [{:label "Plan again" :action [:plan/replan n]} (discard-action n)])
                              state))])))]))
 
@@ -329,7 +336,7 @@
             (moved n
               (cond
                 [(not (= status :ready))
-                 (finish state n :failed (str "Task " (+ i 1) " of " (vector/length ts) " ended " (keyword/name status) ": " note)
+                 (finish state n :failed (str "Task " (+ i 1) " of " (vector/length ts) ", run " run ", ended " (keyword/name status) ": " note)
                    (stopped-actions n run status (map/get-or v :from :none)))]
                 [last
                  (finish state n :done (str "All " (vector/length ts) " tasks built; " branch " has them all.")

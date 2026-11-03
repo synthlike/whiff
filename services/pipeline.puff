@@ -209,36 +209,51 @@
         (publish :pipeline/step {:run n :step status})
         (ok (set-run state n {:step status :from from})))))
 
-  ; failure is a run's note when a step failed with e, what saying which;
-  ; and, if the step may still be running after whiff died, how to stop it.
-  (def (failure what e)
-    (str what ": " (value/to-string e)
+  ; why is e, an err, for people: its message, with the end of what it
+  ; printed, as a command that failed says why there; or e as puff.
+  (def (why e)
+    (match e
+      [{:message m}
+       (let [out (string/trim (str (map/get-or e :stderr "") "\n" (map/get-or e :stdout "")))]
+         (if (= out "") m (str m ":\n\n" (string/slice out (max 0 (- (string/length out) 600))))))]
+      [_ (value/to-string e)]))
+
+  (test "why a step failed: its message and what it printed, or the err"
+    (= [(why {:kind :exit :message "git exited 1" :stderr "" :stdout "nothing to commit\n"}) (why {:kind :start})]
+      ["git exited 1:\n\nnothing to commit" "{:kind :start}"]))
+
+  ; failure is a run's note when a step, what saying which, failed with e in
+  ; round, as task id, whose record whiff wait has: why, and, if the step
+  ; may still be running after whiff died, how to stop it.
+  (def (failure what round id e)
+    (str what " in round " round " (task " id ", whiff wait " id "): " (why e)
       (match e
         [{:pid pid} (str "\n\nIt may still be running, as process group " pid ", and Retry refuses until it isn't. To stop it: kill -- -" pid)]
         [_ ""])))
 
-  (test "a failure that may still be running says how to stop it"
-    (= [(failure "The check didn't run" {:kind :start}) (string/contains? (failure "The developer failed" {:kind :interrupted :pid 42}) "kill -- -42")]
-      ["The check didn't run: {:kind :start}" #t]))
+  (test "a failure says where, and if it may still be running, how to stop it"
+    (= [(failure "The check didn't run" 1 7 {:kind :start}) (string/contains? (failure "The developer failed" 2 8 {:kind :interrupted :pid 42}) "kill -- -42")]
+      ["The check didn't run in round 1 (task 7, whiff wait 7): {:kind :start}" #t]))
 
   ; step-done takes run n on from the result r of the job it waited for at
   ; step; a run cancelled meanwhile stays as it is.
-  (def (step-done state n step r)
-    (let [run (run-of state n)]
+  (def (step-done state n step id r)
+    (let [run (run-of state n)
+          round (map/get-or run :round 1)]
       (cond
         [(not (= (map/get-or run :step :none) step)) (ok state)]
         [(= step :dev)
          (match r
            [(ok _) (check (set-run state n {:resumable #t}) n)]
-           [(err e) (finish state n :failed (failure "The developer failed" e))])]
+           [(err e) (finish state n :failed (failure "The developer failed" round id e))])]
         [(= step :check)
          (match r
            [(ok checked) (review state n checked)]
-           [(err e) (finish state n :failed (failure "The check didn't run" e))])]
+           [(err e) (finish state n :failed (failure "The check didn't run" round id e))])]
         [_
          (match r
            [(ok text) (reviewed state n text)]
-           [(err e) (finish state n :failed (failure "The reviewer failed" e))])])))
+           [(err e) (finish state n :failed (failure "The reviewer failed" round id e))])])))
 
   ; stray is (ok (some pid)) if run's last job may still be running, in
   ; process group pid: whiff died while it ran, or it's being cancelled.
@@ -410,5 +425,6 @@
       [(none) (ok state)]
       [(some [n step])
        (let [state (map/update state :jobs (fn (js) (map/delete js id)))]
-         (catch (step-done state n step r)
-           [e (ok (or-else (finish state n :failed (value/to-string e)) state))]))])))
+         ; What fails after the job, as the commit after an approval, says so.
+         (catch (step-done state n step id r)
+           [e (ok (or-else (finish state n :failed (str "After the " (keyword/name step) " step's task " id ": " (why e))) state))]))])))

@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -682,7 +683,7 @@ echo "changed things"
 	if got := call("start", `["a third" `+check+`]`); got != "(ok 3)" {
 		t.Fatalf("start = %s", got)
 	}
-	if got := done(); !strings.Contains(got, ":status :failed") || !strings.Contains(got, "The reviewer failed") {
+	if got := done(); !strings.Contains(got, ":status :failed") || !regexp.MustCompile(`The reviewer failed in round 1 \(task (\d+), whiff wait \d+\): job \d+ exited 1:\\n\\nstuck`).MatchString(got) {
 		t.Errorf("done = %s", got)
 	}
 	again := `{:action [:pipeline/review-again 3] :label "Review again"}`
@@ -848,7 +849,7 @@ esac
 		t.Fatalf("plan/start = %s", got)
 	}
 	retry := `{:action [:plan/retry 2] :ask "A note for the developer, if any" :label "Retry with a note"} {:action [:plan/discard 2] :label "Discard"}`
-	inboxHas("the plan stopped", `"plan 2, more files: failed. Task 1 of 2 ended gave-up: `)
+	inboxHas("the plan stopped", `"plan 2, more files: failed. Task 1 of 2, run 3, ended gave-up: `)
 	inboxHas("its actions", `[{:action [:pipeline/show 3] :label "Show review and diff"} `+retry+`]`)
 	if got := call("board", "[]"); !strings.Contains(got, `:actions [{:action [:pipeline/show 3] :label "Show review and diff"} `+retry+`] :detail "plan 2, task 1 of 2, round 3, whiff/3"`) {
 		t.Errorf("board of a stopped plan = %s", got)
@@ -934,7 +935,7 @@ esac
 		t.Fatalf("plan/start = %s", got)
 	}
 	again := `{:action [:plan/review-again 4] :label "Review again"}`
-	inboxHas("the failed review", `"plan 4, reviewed: failed. Task 1 of 1 ended failed: The reviewer failed`)
+	inboxHas("the failed review", `"plan 4, reviewed: failed. Task 1 of 1, run 7, ended failed: The reviewer failed in round 1 (task `)
 	inboxHas("Review again", `[{:action [:pipeline/show 7] :label "Show review and diff"} `+again+` {:action [:plan/retry 4]`)
 	if got := call("board", "[]"); !strings.Contains(got, `{:action [:pipeline/show 7] :label "Show review and diff"} `+again) {
 		t.Errorf("board of a plan whose reviewer failed = %s", got)
@@ -1068,7 +1069,7 @@ echo "changed things"
 	c = dial(t, dir)
 	eventually(t, "the run failing", func() string { return strconv.FormatBool(strings.Contains(call("runs", "[]"), ":step :failed")) }, "true")
 	inbox, err := c.Message("call", "me/inbox", "[]", repo)
-	if err != nil || !strings.Contains(inbox.Value, "pipeline 1, add a feature: failed.") || !strings.Contains(inbox.Value, ":interrupted") ||
+	if err != nil || !strings.Contains(inbox.Value, "pipeline 1, add a feature: failed.") || !strings.Contains(inbox.Value, "The developer failed in round 1 (task 1, whiff wait 1): job 1 was killed when whiff stopped") ||
 		!strings.Contains(inbox.Value, "[:pipeline/retry 1]") || !strings.Contains(inbox.Value, "[:pipeline/discard 1]") {
 		t.Fatalf("your inbox = %+v %v", inbox, err)
 	}
