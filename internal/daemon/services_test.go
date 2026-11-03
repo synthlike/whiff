@@ -733,7 +733,7 @@ func TestPlanService(t *testing.T) {
 	os.Mkdir(bin, 0o700)
 	claude := `#!/bin/sh
 case "$4" in
-  Read,Glob,Grep) cat > /dev/null; if [ -f "$HOME/tasks" ]; then cat "$HOME/tasks"; else printf 'Here is the plan:\n` + "```" + `json\n["one", "two"]\n` + "```" + `\n'; fi ;;
+  Read,Glob,Grep) cat > "$HOME/planned"; if [ -f "$HOME/tasks" ]; then cat "$HOME/tasks"; else printf 'Here is the plan:\n` + "```" + `json\n["one", "two"]\n` + "```" + `\n'; fi ;;
   "") cat > /dev/null; if [ -f "$HOME/broken" ]; then echo "stuck" >&2; exit 1; fi
      if [ -f "$HOME/picky" ]; then echo "VERDICT: changes"; else echo "VERDICT: approve"; fi ;;
   *) task=$(sed -n 's/^Task: //p'); echo "$task" > "$task.txt"; echo "wrote $task.txt" ;;
@@ -899,7 +899,10 @@ esac
 	if got := call("draft", `["drafted" ["true"]]`); got != "(ok 3)" {
 		t.Fatalf("plan/draft = %s", got)
 	}
-	inboxHas("the draft", `"plan 3, drafted: proposed. Its tasks:\n\n1. one\n2. two" {:actions [{:action [:plan/approve 3] :label "Build it"} {:action [:plan/discard 3] :label "Discard"}]}`)
+	inboxHas("the draft", `"plan 3, drafted: proposed. Its tasks, in repo, on main:\n\n1. one\n2. two" {:actions [{:action [:plan/approve 3] :label "Build it"} {:action [:plan/discard 3] :label "Discard"}]}`)
+	if b, _ := os.ReadFile(filepath.Join(dir, "planned")); !strings.Contains(string(b), "The check: true\n\nGoal: drafted") {
+		t.Errorf("the planner read:\n%s", b)
+	}
 	if got := call("approve", "[1]"); !strings.Contains(got, ":no-plan") {
 		t.Errorf("approve of a merged plan = %s", got)
 	}
