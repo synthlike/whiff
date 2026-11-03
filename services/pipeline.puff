@@ -64,8 +64,10 @@
 
   (def review-prompt """
     You are the reviewer in a small pipeline. Below are the task, the result
-    of the project's check and the diff the developer made. You have no
-    tools: judge from these alone, and take the check's result as given.
+    of the project's check, the files the task names as they are with the
+    change, and the diff the developer made. You have no tools: judge from
+    these alone, and take the check's result as given. Where the task
+    points to a file as the spec, as a README, hold the work to it.
     The work is uncommitted on purpose: the pipeline commits it once you
     approve, so don't count that, or a task's asking for it, against it.
     List the real problems (bugs, missing tests, the task not done), most
@@ -150,13 +152,36 @@
       [{:exit 0} "passed"]
       [{:exit n :stdout out :stderr e} (str "failed with exit " n ":\n" (tail (str out e)))]))
 
+  ; head is s cut to its first k characters, saying so.
+  (def (head s k) (if (> (string/length s) k) (str (string/slice s 0 k) "\n[cut at " k " characters]") s))
+
+  ; named are the files in the repository at dir that task names by
+  ; path, as README.md, with what they hold with the change: [[path
+  ; text]], the first 5, each cut to 20000 characters.
+  (def (named dir task)
+    (let [hits (vector/filter (string/lines (or-else (git dir ["ls-files"]) ""))
+                 (fn (p) (and (not (= p "")) (string/contains? task p))))]
+      (vector/map (vector/slice hits 0 (min 5 (vector/length hits)))
+        (fn (p) [p (head (or-else (git dir ["show" (str ":" p)]) "") 20000)]))))
+
+  ; files-text is named's files for the reviewer.
+  (def (files-text files)
+    (if (vector/empty? files)
+      ""
+      (str "\n\nThe files the task names, with the change:"
+        (string/join (vector/map files (fn ([p text]) (str "\n\n--- " p "\n" text))) ""))))
+
+  (test "the reviewer gets the files the task names, each cut to its limit"
+    (= [(files-text []) (files-text [["README.md" "# x"]]) (head "abcdef" 3)]
+      ["" "\n\nThe files the task names, with the change:\n\n--- README.md\n# x" "abc\n[cut at 3 characters]"]))
+
   (def (review state n checked)
     (let [{:dir dir :base base :task task} (run-of state n)
           _ (try (git dir ["add" "-A"]))
           diff (try (git dir ["diff" "--cached" base]))]
       (if (= diff "")
         (finish state n :failed "The developer changed nothing.")
-        (let [input (str review-prompt "\n\nTask: " task "\n\nThe check " (check-text checked) "\n\nThe diff:\n" diff)
+        (let [input (str review-prompt "\n\nTask: " task "\n\nThe check " (check-text checked) (files-text (named dir task)) "\n\nThe diff:\n" diff)
               id (try (submitted (call :jobs/run ["claude" "-p" "--strict-mcp-config" "--tools" "" "--no-session-persistence"]
                                    {:stdin input :dir dir :as :text :timeout 10m})))]
           (ok (waiting (set-run state n {:checked checked :diff diff}) n :review id))))))
