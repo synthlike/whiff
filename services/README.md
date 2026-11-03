@@ -40,8 +40,9 @@ Or try one without installing it: `whiff try services/git.puff status`.
   is your next message; `ask text` answers whoever asked instead, so a
   service can use it. Its home is `~/.whiff/agents/assistant`. Another
   agent is another file, with its own `:prompt`, and `:model`, `:can
-  [:gh/prs]` for the functions it may use as tools, and `:every 1d` if you
-  like. Needs the claude CLI.
+  [:gh/prs]` for the functions it may use as tools, `:limits {:day 2}` and
+  `:every 1d` if you like. `usage` says what it spent, and `stop` ends the
+  turn running now. Needs the claude CLI.
 - `digest`: an agent that briefs you on this repository once a day: open
   pull requests and their checks, open TODO items and uncommitted work, in
   your inbox, and only what changed. `ask "brief me"` for one now. Its

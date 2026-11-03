@@ -146,11 +146,15 @@ only ever handling one message.
 A service is a file, `(service name forms...)`: `(on (fn params...) "doc"
 body...)` handlers, `(ask ...)` functions, `(on :topic (v) ...)`
 subscribers and private `def`s. An agent is a file too, `(agent name
-:prompt "..." [:model "..."] [:can [:addr/fn ...]] [:every d])`, which
-whiff runs as a service of
-its own turn loop (`internal/daemon/agent.puff`): `tell`, whose answer
+:prompt "..." [:model "..."] [:can [:addr/fn ...]] [:dir path] [:limits
+{:turn usd :day usd :time d}] [:every d])`, which whiff runs as a service
+of its own turn loop (`internal/daemon/agent.puff`): `tell`, whose answer
 lands in `:me`'s inbox, `ask`, whose answer goes back to whoever asked,
-`forget`, and a `wake` with `:every`.
+`forget`, `usage`, `stop`, and a `wake` with `:every`. Its turns are held
+to `:limits`, $1 and 10 minutes a turn and $5 a day unless it says
+otherwise: claude stops a turn at its dollars, whiff at its time, and once
+the agent has spent its day's in the last 24 hours its turns fail
+`:over-budget` until it has spent less, which you hear of once.
 
 - **Supervised.** The daemon looks at `~/.whiff/services/` twice a second:
   a saved file reloads, a deleted one unloads, a fault restarts the service

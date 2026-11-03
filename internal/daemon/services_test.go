@@ -377,9 +377,12 @@ echo "reviewed:"; grep '^+[^+]'
 	}
 }
 
-// fakeClaude puts a fake claude on PATH, with HOME at dir. It says whether
-// it starts or resumes the session and echoes the message; "slow" takes a
-// second, "fail" exits 1, and "hold" waits for a file go in its directory.
+// fakeClaude puts a fake claude on PATH, with HOME at dir. It answers in
+// --output-format json, at the cost in a file cost in its directory, or
+// $0.01. It says whether it starts or resumes the session and echoes the
+// message; "slow" takes a second, "fail" exits 1 saying so on stderr,
+// "spend" reaches its --max-budget-usd, and "hold" waits for a file go in
+// its directory.
 // A turn with whiff mcp's flags leaves its WHIFF_SESSION in a file token,
 // and its arguments, a line each, in args. A scheduled turn of an agent whose prompt is
 // "Watch the thread." has nothing to say the first time, then news from
@@ -392,7 +395,10 @@ func fakeClaude(t *testing.T, dir string) {
 [ "$1 $2 $3" = "-p --tools " ] || { echo "want no tools, got $*" >&2; exit 9; }
 case "$*" in *--session-id*) mode=new ;; *--resume*) mode=resume ;; esac
 model=default
-for a; do case "$prev" in --session-id|--resume) echo "$a" > last-id ;; --model) model=$a ;; --append-system-prompt) sys=$a ;; esac; prev=$a; done
+for a; do case "$prev" in --session-id|--resume) echo "$a" > last-id ;; --model) model=$a ;; --append-system-prompt) sys=$a ;; --max-budget-usd) budget=$a ;; esac; prev=$a; done
+case "$*" in *"--output-format json"*) ;; *) echo "want json, got $*" >&2; exit 9 ;; esac
+cost=$(cat cost 2>/dev/null || echo 0.01)
+answer() { printf '{"type":"result","subtype":"success","is_error":false,"result":"%s","total_cost_usd":%s}\n' "$1" "$cost"; }
 msg=$(cat)
 case "$*" in *--mcp-config*)
   case "$*" in *"--strict-mcp-config --allowedTools mcp__whiff"*) ;; *) echo "want whiff mcp alone, got $*" >&2; exit 9 ;; esac
@@ -400,11 +406,15 @@ case "$*" in *--mcp-config*)
 esac
 case "$msg" in *"scheduled turn"*)
   case "$sys" in *"Watch the thread."*) ;; *) echo "no prompt in $sys" >&2; exit 9 ;; esac
-  if [ -e told ]; then echo nothing; elif [ -e woke ]; then touch told; echo "news from $model"; else touch woke; echo " Nothing "; fi
+  if [ -e told ]; then answer nothing; elif [ -e woke ]; then touch told; answer "news from $model"; else touch woke; answer " Nothing "; fi
   exit ;;
 esac
+case "$msg" in spend)
+  printf '{"type":"result","subtype":"error_max_budget_usd","is_error":true,"errors":["Reached maximum budget ($%s)"],"total_cost_usd":%s}\n' "$budget" "$cost"
+  exit 1 ;;
+esac
 case "$msg" in slow) sleep 1 ;; fail) echo "it broke" >&2; exit 1 ;; hold) while [ ! -e go ]; do sleep 0.02; done ;; esac
-echo "$mode in $(basename "$PWD"): $msg"
+answer "$mode in $(basename "$PWD"): $msg"
 `
 	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(fake), 0o700); err != nil {
 		t.Fatal(err)
@@ -1317,5 +1327,90 @@ func TestAgentSession(t *testing.T) {
 	// Only a service's job gets a session.
 	if r, err := c.Eval(`(call :jobs/run ["true"] {:session [:notes/list]})`, ""); err != nil || !strings.Contains(r.Value, ":session is for an agent's turn") {
 		t.Errorf(":session from a client = %+v %v", r, err)
+	}
+}
+
+// TestAgentLimits holds agents to their :limits: a day's dollars, which
+// once spent tells you and refuses turns; a turn's, which claude stops at;
+// a turn's :time; and stop, which ends the turn running now.
+func TestAgentLimits(t *testing.T) {
+	dir := tempDir(t)
+	fakeClaude(t, dir)
+	for name, cost := range map[string]string{"cheap": "0.6", "capped": "0.3"} {
+		home := filepath.Join(dir, ".whiff", "agents", name)
+		os.MkdirAll(home, 0o700)
+		os.WriteFile(filepath.Join(home, "cost"), []byte(cost), 0o600)
+	}
+	writeServices(t, dir, map[string]string{
+		"cheap":  `(agent cheap :prompt "p" :limits {:day 1})`,
+		"capped": `(agent capped :prompt "p" :limits {:turn 0.5})`,
+		"quick":  `(agent quick :prompt "p" :limits {:time 1s})`,
+		"long":   `(agent long :prompt "p")`,
+	})
+	start(t, dir)
+	c := dial(t, dir)
+	ask := func(addr, q string) string {
+		t.Helper()
+		resp, err := c.Eval(`(call :`+addr+`/ask "`+q+`")`, "")
+		if err != nil || !strings.HasPrefix(resp.Value, "(err {:id ") {
+			t.Fatalf("%s/ask %s = %+v %v, want a pending", addr, q, resp, err)
+		}
+		r, err := c.Message("wait", "", "["+strings.Fields(strings.TrimPrefix(resp.Value, "(err {:id "))[0]+"]", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r.Value
+	}
+	eval := func(src string) string {
+		t.Helper()
+		resp, err := c.Eval(src, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.Value + resp.Error
+	}
+
+	// $0.60 a turn against $1 a day: the second turn crosses it, which
+	// you hear of once, and the third doesn't start.
+	if got := ask("cheap", "one"); got != `(ok "new in cheap: one")` {
+		t.Errorf("one = %s", got)
+	}
+	if got := eval(`(call :cheap/usage)`); got != "(ok {:day 1.0 :spent 0.6 :turns 1})" {
+		t.Errorf("usage = %s", got)
+	}
+	ask("cheap", "two")
+	historyHas(t, c, `:cheap -> :me/tell "cheap has spent $1.2 in the last 24 hours, its $1.0 a day`)
+	if got := ask("cheap", "three"); !strings.HasPrefix(got, `(err {:kind :over-budget :message "cheap has spent $1.2 in the last 24 hours, its $1.0 a day" :outcome :not-started`) {
+		t.Errorf("three = %s", got)
+	}
+	if text, _ := c.Inbox("me"); strings.Count(text, "cheap has spent") != 1 {
+		t.Errorf("want one notice:\n%s", text)
+	}
+
+	// A turn's own budget goes to claude, which stops at it.
+	if got := ask("capped", "spend"); got != `(err {:cost 0.3 :kind :over-budget :message "the turn reached its $0.5 and stopped: Reached maximum budget ($0.5)" :outcome :stopped})` {
+		t.Errorf("spend = %s", got)
+	}
+
+	// :time ends a turn that runs longer.
+	if got := ask("quick", "hold"); !strings.HasPrefix(got, "(err {:kind :timeout") {
+		t.Errorf("a turn past its :time = %s", got)
+	}
+
+	// stop ends the turn running now.
+	resp, err := c.Eval(`(call :long/ask "hold")`, "")
+	if err != nil || !strings.HasPrefix(resp.Value, "(err {:id ") {
+		t.Fatalf("long/ask = %+v %v", resp, err)
+	}
+	id := strings.Fields(strings.TrimPrefix(resp.Value, "(err {:id "))[0]
+	eventually(t, "long's turn", func() string { return fmt.Sprint(strings.Contains(eval(`(call :jobs/list)`), "claude")) }, "true")
+	if got := eval(`(call :long/stop)`); got != "(ok :done)" {
+		t.Errorf("stop = %s", got)
+	}
+	if r, err := c.Message("wait", "", "["+id+"]", ""); err != nil || !strings.HasPrefix(r.Value, "(err {:kind :cancelled") {
+		t.Errorf("a stopped turn = %+v %v", r, err)
+	}
+	if got := eval(`(call :long/stop)`); got != "(ok :idle)" {
+		t.Errorf("stop with no turn = %s", got)
 	}
 }

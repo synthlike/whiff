@@ -1,6 +1,7 @@
 ; whiff's turn loop, which an (agent name :prompt "..." ...) file runs as
 ; the service name. whiff adds prompt, model (or ""), can (or []), dir (or
-; "", an absolute path) and every (or 0s) as defs before these forms, and leaves out wake when there's no
+; "", an absolute path), limits ({:turn usd :day usd :time d}) and every
+; (or 0s) as defs before these forms, and leaves out wake when there's no
 ; :every. With :can, a turn's tools are those whiff functions, through
 ; whiff mcp acting as the agent's session, :agent/<name>; without, it has
 ; none.
@@ -9,10 +10,12 @@
 ; remembers the whole conversation, days apart. A tell's answer lands in
 ; your inbox, and replying to it is your next message; an ask's goes back
 ; to whoever asked, as a whiff/done. Asks wait in the agent's inbox, and it
-; takes them one at a time, oldest first. It has no tools.
+; takes them one at a time, oldest first. A turn stops at :limits' :turn
+; dollars or :time; once the agent has spent :day dollars in the last 24
+; hours it takes no more turns until it has spent less, and you hear once.
 ; Its home, ~/.whiff/agents/<its name>, holds its session's id (Claude keeps
-; sessions per directory) and the ids of the turns it started. Its turns are
-; :agent's.
+; sessions per directory), the ids of the turns it started and what each
+; cost. Its turns are :agent's.
 
 (def name (string/slice (value/to-string (self)) 1))
 (def home (path/join (os/home) ".whiff" "agents" name))
@@ -21,6 +24,9 @@
 (def turns (path/join home "turns"))          ; each turn's job id, a line each
 (def wakes (path/join home "wakes"))          ; the scheduled ones' ids
 (def asks (path/join home "asks"))            ; "turn ask" for each ask's turn
+(def costs (path/join home "costs"))          ; "time usd" for each turn, the last 24 hours'
+(def day-usd (unwrap (map/get limits :day)))
+(def turn-usd (unwrap (map/get limits :turn)))
 (def system (str "You are " name ", " """
   a long-running agent living in whiff, the user's personal message
   daemon. The user, and services of theirs, leave you messages, which
@@ -51,7 +57,8 @@
 (def mcp (json/to-string {:mcpServers {:whiff {:command "whiff" :args (if (= dir "") ["mcp"] ["mcp" "--dir" dir])}}}))
 
 (def (claude id)
-  (vector/concat ["claude" "-p" "--tools" "" "--append-system-prompt" system]
+  (vector/concat ["claude" "-p" "--tools" "" "--append-system-prompt" system
+                  "--output-format" "json" "--max-budget-usd" (float/to-string turn-usd)]
     (if (= model "") [] ["--model" model])
     (if (vector/empty? can) [] ["--mcp-config" mcp "--strict-mcp-config" "--allowedTools" "mcp__whiff"])
     (if (= (read-file started) id) ["--resume" id] ["--session-id" id])))
@@ -63,10 +70,42 @@
      (vector/any? js (fn ({:id i}) (= (int/to-string i) last)))]
     [_ #f]))
 
-; start starts a turn's job with text: (ok id), its id as text.
+; dollars is usd for people: $0.42.
+(def (dollars usd) (str "$" (float/to-string (float/div (float/round (* usd 100.0)) 100.0))))
+
+; spending are [time usd] for the turns of the last 24 hours.
+(def (spending)
+  (let [since (- (time/now) 1d)]
+    (vector/filter
+      (vector/map (read-lines costs)
+        (fn (line)
+          (match (string/split line " ")
+            [[t c] (match [(time/from-string t) (float/from-string c)]
+                     [[(ok at) (ok usd)] [at usd]]
+                     [_ [since 0.0]])]
+            [_ [since 0.0]])))
+      (fn ([at _]) (> at since)))))
+
+; spent is the dollars of the last 24 hours' turns.
+(def (spent) (vector/reduce (spending) 0.0 (fn (sum [_ usd]) (+ sum usd))))
+
+; spend keeps a turn's cost, and tells you once the day's budget is spent.
+(def (spend usd)
+  (let [before (spent)
+        kept (vector/map (spending) (fn ([at c]) (str (time/to-string at) " " (float/to-string c) "\n")))
+        _ (try (file/write costs (string/concat (vector/reduce kept "" string/concat) (time/to-string (time/now)) " " (float/to-string usd) "\n")))
+        after (+ before usd)]
+    (if (and (< before day-usd) (>= after day-usd))
+      (call :me/tell (str name " has spent " (dollars after) " in the last 24 hours, its " (dollars day-usd)
+                       " a day: it takes no more turns until it has spent less. (call :" name "/usage) says where it is."))
+      (ok :done))))
+
+; start starts a turn's job with text: (ok id), its id as text; (err
+; {:kind :over-budget}) once the day's budget is spent.
 (def (start text)
-  (let [_ (try (file/mkdir home))
-        opts {:stdin text :dir home :as :text :timeout 10m :origin :agent}
+  (let [_ (try (over-budget))
+        _ (try (file/mkdir home))
+        opts {:stdin text :dir home :timeout (unwrap (map/get limits :time)) :origin :agent}
         id (int/to-string (try (submitted (call :jobs/run (claude (try (session)))
                                             (if (vector/empty? can) opts (map/set opts :session can))))))]
     (do (try (file/append turns (str id "\n")))
@@ -80,6 +119,41 @@
     (let [id (try (start text))]
       (do (if wake (try (file/append wakes (str id "\n"))) (ok :done))
         (ok :thinking)))))
+
+; over-budget is (err {:kind :over-budget}) once the day's budget is
+; spent, else (ok :done).
+(def (over-budget)
+  (let [usd (spent)]
+    (if (>= usd day-usd)
+      (err {:kind :over-budget :outcome :not-started
+            :message (str name " has spent " (dollars usd) " in the last 24 hours, its " (dollars day-usd) " a day")})
+      (ok :done))))
+
+; number is a JSON number as a float.
+(def (number x) (if (= (value/type x) :int) (float/from-int x) x))
+
+; outcome is what turn i's job result r answers: (ok text), or (err e)
+; with :outcome. A turn's cost is kept, as what it spent is spent however
+; it ended.
+(def (outcome i r)
+  (match r
+    [(ok {:exit n :stdout out :stderr e})
+     (match (json/parse out)
+       [(ok res) when (= (map/get res :type) (some "result"))
+        (let [usd (number (map/get-or res :total_cost_usd 0))
+              _ (spend usd)
+              why (string/join (map/get-or res :errors []) "; ")]
+          (cond
+            [(not (map/get-or res :is_error #f)) (ok (map/get-or res :result ""))]
+            [(string/contains? why "already in use") ; as claude says it on stderr in text mode
+             (err {:kind :exit :exit n :message (str "job " i " exited " (int/to-string n)) :stderr why})]
+            [(= (map/get res :subtype) (some "error_max_budget_usd"))
+             (err {:kind :over-budget :outcome :stopped :cost usd
+                   :message (str "the turn reached its " (dollars turn-usd) " and stopped: " why)})]
+            [_ (err {:kind :turn :outcome :stopped :cost usd :message (str "the turn failed: " why)})]))]
+       [_ when (= n 0) (ok out)]
+       [_ (err {:kind :exit :exit n :message (str "job " i " exited " (int/to-string n)) :stderr e})])]
+    [(err e) (err e)]))
 
 ; begun marks the session begun, once a turn has run in it.
 (def (begun) (try (file/write started (try (session)))))
@@ -144,6 +218,16 @@
   "An ask waits in the inbox: its turn starts now, unless another is running. whiff's own; ask the agent instead."
   (next-ask))
 
+(on (usage) :read
+  "What the agent spent: {:spent usd :turns n :day usd}, the dollars and turns of the last 24 hours, and its :day limit."
+  (ok {:spent (spent) :turns (vector/length (spending)) :day day-usd}))
+
+(on (stop)
+  "Stops the turn running now: its job is cancelled, and whoever it answers hears (err {:kind :cancelled}). (ok :idle) if none runs."
+  (match (vector/last (read-lines turns))
+    [(some last) when (busy?) (call :jobs/cancel (unwrap (int/from-string last)))]
+    [_ (ok :idle)]))
+
 (on (forget)
   "Ends the conversation: the next message starts a new one, which remembers nothing."
   (do (try (file/write session-file ""))
@@ -164,9 +248,10 @@
   (let [i (int/to-string id)]
     (cond
       [(vector/contains? (read-lines turns) i)
-       (match (asked i)
-         [(some a) (reply-ask a r)]
-         [(none) (answered r (vector/contains? (read-lines wakes) i))])]
+       (let [o (outcome i r)]
+         (match (asked i)
+           [(some a) (reply-ask a o)]
+           [(none) (answered o (vector/contains? (read-lines wakes) i))]))]
       [_ (match r
            [(ok text) when (= (value/type text) :string)
             (match (turn text #f)
