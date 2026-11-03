@@ -705,14 +705,92 @@ function workText(w) {
   return [`:${w.to}`, how];
 }
 
-// workList is an agent's work, newest first: one row a task.
+// field is map tree m's value at keyword k, or undefined.
+function field(m, k) {
+  if (m?.t !== "map") return undefined;
+  return m.v.find(([key]) => key.t === "kw" && key.v === k)?.[1];
+}
+
+// jobName is a job's command, argv a tree, as a step says it: a claude by
+// its model, and whether it has tools, as "claude haiku" or "claude, no
+// tools"; any other as its words, "go test ./...".
+function jobName(argv) {
+  const a = (argv?.v || []).map((t) => t.v);
+  if (a[0] !== "claude") return a.join(" ");
+  const m = a.indexOf("--model"), tools = a.indexOf("--tools");
+  return "claude" + (m >= 0 ? " " + a[m + 1] : "") + (tools >= 0 && a[tools + 1] === "" ? ", no tools" : "");
+}
+
+// pendingOf is the task id in reply, a pending, as text; else undefined.
+function pendingOf(reply) {
+  return reply?.t === "tag" && reply.n === "err" ? field(reply.v[0], "id")?.v : undefined;
+}
+
+// stepsOf is the jobs the chain of the call that began task id ran, from history
+// as sniff has it, in the order they began: each {from, name, at, ms,
+// kind, cost}, kind "running", "ok" or "err", and cost the dollars a
+// claude's JSON says, if it says. null if the chain's first message is
+// gone from history. Task ids aren't message ids: a task's is in the
+// pending its call was answered with.
+function stepsOf(id) {
+  const led = new Map(), ended = new Map();
+  let head = -1;
+  entries.forEach((e, i) => {
+    if (e.kind === "call" && pendingOf(e.reply) === String(id)) head = i;
+    if (e.cause) (led.get(e.cause) || led.set(e.cause, []).get(e.cause)).push(i);
+    if (e.kind === "done" && e.to.endsWith("/whiff/done") && e.args?.v?.length === 2) ended.set(e.args.v[0].v, e);
+  });
+  if (head < 0) return null;
+  const steps = [];
+  const walk = (i) => {
+    const e = entries[i];
+    const job = pendingOf(e.reply);
+    if (e.kind === "call" && e.to === "jobs/run" && job) {
+      const done = ended.get(job), r = done?.args.v[1];
+      let kind = done ? kindOf(r) : "running";
+      const exit = field(r?.v?.[0], "exit");
+      if (kind === "ok" && exit && exit.v !== "0") kind = "err";
+      const out = r?.v?.[0]?.t === "str" ? r.v[0].v : field(r?.v?.[0], "stdout")?.v || "";
+      const cost = /"total_cost_usd":\s*([0-9.]+)/.exec(out)?.[1];
+      steps.push({ from: e.from, name: jobName(e.args.v[0]), at: e.at, ms: done ? Date.parse(done.at) - Date.parse(e.at) : Date.now() - Date.parse(e.at), kind, cost });
+    }
+    for (const j of led.get(e.id) || []) walk(j);
+  };
+  walk(head);
+  return steps.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+}
+
+// stepList is a task's steps, as stepsOf gives them, one line each:
+// who ran what, how long it took or has run, and what it cost.
+function stepList(steps) {
+  const ol = el("ol", "work-steps");
+  for (const s of steps) {
+    const li = el("li", s.kind === "running" ? "open" : s.kind === "ok" ? "ok" : "failed");
+    const how = (s.kind === "running" ? "running " : s.kind === "ok" ? "" : "failed, ") + roughly(s.ms) + (s.cost ? ", $" + parseFloat(s.cost).toFixed(2) : "");
+    li.append(el("span", "work-to", ":" + s.from), el("span", "work-how", s.name), el("span", "hint", how));
+    li.title = fullTime(s.at);
+    ol.append(li);
+  }
+  return ol;
+}
+
+// workList is an agent's work, newest first: one row a task, and under
+// it the jobs it led to, the steps of a pipeline run, as history has
+// them. Its id shows its whole chain in Activity.
 function workList(work) {
   const ol = el("ol", "svc-work");
   for (const w of [...work].reverse()) {
     const [who, how] = workText(w);
     const bad = !w.result?.ok || ["failed", "gave-up", "cancelled"].includes(w.result?.value?.status);
     const li = el("li", w.status === "ended" ? (bad ? "failed" : "ok") : "open");
-    li.append(el("span", "work-id", String(w.id)), el("span", "work-to", who), el("span", "work-how", how), el("span", "hint", ago(w.at)));
+    const id = el("button", "work-id", String(w.id));
+    id.type = "button";
+    id.title = "show its chain in Activity";
+    id.onclick = () => showOnly(w.id);
+    li.append(id, el("span", "work-to", who), el("span", "work-how", how), el("span", "hint", ago(w.at)));
+    const steps = stepsOf(w.id);
+    if (steps === null) li.append(el("span", "work-gone hint", "its steps are older than sniff's history"));
+    else if (steps.length) li.append(stepList(steps));
     ol.append(li);
   }
   return ol;

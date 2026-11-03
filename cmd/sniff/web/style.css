@@ -704,3 +704,8 @@ h1 a { color: inherit; text-decoration: none; }
 .svc-work li.open { border-left-color: var(--accent); }
 .svc-work .work-id, .svc-work .work-to { font-family: var(--mono); color: var(--muted); }
 .svc-work .work-how { overflow-wrap: anywhere; }
+.svc-work button.work-id { font: inherit; font-family: var(--mono); color: var(--muted); background: none; border: 0; padding: 0; text-align: left; cursor: pointer; text-decoration: underline dotted; }
+.svc-work button.work-id:hover { color: var(--accent); }
+.svc-work .work-steps, .svc-work .work-gone { grid-column: 2 / -1; }
+.work-steps { list-style: none; margin: 2px 0 4px; padding: 0; }
+.work-steps li { grid-template-columns: max-content 1fr max-content; border-left-width: 1px; }
