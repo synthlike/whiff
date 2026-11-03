@@ -87,7 +87,7 @@ func (d *daemon) jobsService() *service {
 	return &service{name: "jobs", d: d, cur: caller{addr: "jobs"},
 		fns: map[string]handler{
 			"run": {params: []string{"cmd", "opts"}, optional: 1, mark: puff.MarkWrite, marked: true, native: d.runJob, cmd: true,
-				doc: "Run cmd, [program args...], here; pending now, {:exit :stdout :stderr} when done. Options: :timeout (1h), or :none for a server; :stdin, a string; :dir, where it runs; :as :text answers (ok stdout), or (err {:kind :exit}) unless it exits 0; :origin :agent, for a job whose output a model writes, answers as :agent's; :retry n runs it again, up to n times, under its id, if a timeout or whiff stopped it, or whiff died while it ran, and only if it is :read or :idempotent #t says running it twice is safe; :session [:addr/fn ...], for an agent's turn, from its service: the job's whiff mcp acts as :agent/<service>, reaching only those functions, and it answers as :agent's. :read for a read-only command, as whiff ls lists them."},
+				doc: "Run cmd, [program args...], here; pending now, {:exit :stdout :stderr} when done. Options: :timeout (1h), or :none for a server; :stdin, a string; :dir, where it runs; :as :text answers (ok stdout), or (err {:kind :exit}) unless it exits 0; :origin :agent, for a job whose output a model writes, answers as :agent's; :retry n runs it again, up to n times, under its id, if a timeout or whiff stopped it, or whiff died while it ran, and only if it is :read or :idempotent #t says running it twice is safe; :session [:addr/fn ...], from a service: the job's whiff mcp acts as an agent session, :agent/<service> for an agent's turn or a new :agent/<n>, reaching only those functions, gated as any agent's, and it answers as :agent's. :read for a read-only command, as whiff ls lists them."},
 			"list": {mark: puff.MarkRead, marked: true, native: d.listJobs,
 				doc: "The running jobs, each {:id :cmd :cwd :from}."},
 			"cancel": {params: []string{"id"}, mark: puff.MarkWrite, marked: true, native: d.cancelJob,
@@ -215,8 +215,11 @@ func canSet(v puff.Value) (map[string]bool, error) {
 }
 
 // grantSession gives j a session token for its sender, a service: the
-// job's whiff mcp claims :agent/<sender> with it, fenced to j's :session
-// functions, until j ends. nil, or why it can't.
+// job's whiff mcp claims a session with it, fenced to j's :session
+// functions, until j ends: an agent's own, :agent/<sender>, for its turn,
+// or a new :agent/<n> for any other service's job, as a pipeline's dev.
+// Either reaches only what the service could call itself, and is gated as
+// any agent session is. nil, or why it can't.
 func (d *daemon) grantSession(j *job, m message) puff.Value {
 	token := make([]byte, 16)
 	if _, err := rand.Read(token); err != nil {
@@ -225,12 +228,16 @@ func (d *daemon) grantSession(j *job, m message) puff.Value {
 	var r puff.Value
 	d.do(func(st *state) {
 		s := st.addrs[m.from]
-		if s == nil || s.client || strings.Contains(m.from, "/") || !agentSession("agent/"+m.from) {
-			r = puff.Errorf("bad-call", ":session is for an agent's turn, from its service; :%s isn't one", m.from)
+		if s == nil || s.client || strings.Contains(m.from, "/") {
+			r = puff.Errorf("bad-call", ":session is for a service's job; :%s isn't a service", m.from)
 			return
 		}
+		session := "" // a new one as it is claimed
+		if s.agent {
+			session = "agent/" + m.from
+		}
 		j.opts.token = hex.EncodeToString(token)
-		st.grants[j.opts.token] = grant{session: "agent/" + m.from, can: j.opts.can}
+		st.grants[j.opts.token] = grant{session: session, can: j.opts.can}
 	})
 	return r
 }

@@ -31,6 +31,11 @@ Or try one without installing it: `whiff try services/git.puff status`.
   diff; until both pass, the review goes back to the dev, up to 3 rounds,
   then it is committed on the branch and you hear in your inbox. `runs`,
   `view`, `cancel n`; `:pipeline/done` as each run ends. Needs the claude CLI.
+- `lead`: an Opus agent that builds software with `pipeline/build`, an ask
+  that answers when a run ends: a scaffold run, a few parts at once on a
+  model you name (haiku), then one run from all their branches merged. Its
+  workers may ask it questions with `:lead/ask`, their only whiff tool, and
+  you hear only what matters. `whiff trust agent/lead pipeline` first.
 - `plan`: `start goal check` has a planner Claude split goal into a few
   tasks and builds them one after another as `pipeline` runs, each from the
   last one's branch. `plans` says where each is. Needs `pipeline`.

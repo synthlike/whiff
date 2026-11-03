@@ -81,6 +81,9 @@ func TestValueLib(t *testing.T) {
 		{`[(value/type 1) (value/type "s") (value/type +) (value/type (ok 1))]`, `[:int :string :function :tag]`},
 		{`(keyword/name :gave-up)`, `"gave-up"`},
 		{`(keyword/name "x")`, `1:1: keyword/name: want a keyword, got "x"`},
+		{`(keyword/from-string "lead/ask")`, `(ok :lead/ask)`},
+		{`(keyword/from-string "two words")`, `(err {:kind :parse :message "not a keyword's name: \"two words\""})`},
+		{`(keyword/from-string "")`, `(err {:kind :parse :message "not a keyword's name: \"\""})`},
 	})
 }
 

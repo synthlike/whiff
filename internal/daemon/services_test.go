@@ -1338,7 +1338,7 @@ func TestAgentSession(t *testing.T) {
 	os.WriteFile(filepath.Join(home, "go"), nil, 0o600)
 
 	// Only a service's job gets a session.
-	if r, err := c.Eval(`(call :jobs/run ["true"] {:session [:notes/list]})`, ""); err != nil || !strings.Contains(r.Value, ":session is for an agent's turn") {
+	if r, err := c.Eval(`(call :jobs/run ["true"] {:session [:notes/list]})`, ""); err != nil || !strings.Contains(r.Value, ":session is for a service's job") {
 		t.Errorf(":session from a client = %+v %v", r, err)
 	}
 }
@@ -1662,5 +1662,123 @@ echo done
 	}
 	if _, err := os.Stat(filepath.Join(dir, ".whiff", "pipelines", "repo-7")); err == nil {
 		t.Error("a build that couldn't start left its worktree")
+	}
+}
+
+// TestPipelineLead has an agent, lead, start a pipeline build in its turn,
+// trusted for :pipeline: the run's dev gets a session of its own, fenced
+// to :lead/ask, asks lead something and gets lead's answer, and the run's
+// end comes back to lead as a turn, which says nothing to you.
+func TestPipelineLead(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	src, err := os.ReadFile(filepath.Join("..", "..", "services", "pipeline.puff"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := tempDir(t)
+	fake, bin := filepath.Join(dir, "fake"), filepath.Join(dir, "bin")
+	os.Mkdir(fake, 0o700)
+	os.Mkdir(bin, 0o700)
+	// One claude for all three: the dev keeps its token and args and holds
+	// until $FAKE/go; the reviewer approves; lead keeps its turn's token,
+	// holds on "hold", says nothing of a run's end, and echoes the rest.
+	claude := `#!/bin/sh
+case "$*" in
+*"acceptEdits"*)
+  cat >/dev/null; echo "$WHIFF_SESSION" > "$FAKE/dev-token"; printf '%s\n' "$@" > "$FAKE/dev-args"
+  while [ ! -e "$FAKE/go" ]; do sleep 0.02; done
+  echo x > x.txt; echo done; exit 0 ;;
+"-p --strict-mcp-config --tools "*) cat >/dev/null; echo "VERDICT: approve"; exit 0 ;;
+esac
+msg=$(cat)
+echo "$WHIFF_SESSION" > token
+case "$msg" in hold) while [ ! -e go ]; do sleep 0.02; done ;; esac
+case "$msg" in *"has ended"*|quiet) out=nothing ;; *) out="lead: $msg" ;; esac
+printf '{"type":"result","subtype":"success","is_error":false,"result":"%s","total_cost_usd":0.01}\n' "$(printf '%s' "$out" | sed 's/["\\]/\\&/g')"
+`
+	os.WriteFile(filepath.Join(bin, "claude"), []byte(claude), 0o700)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("FAKE", fake)
+	t.Setenv("HOME", dir)
+	for _, k := range []string{"GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"} {
+		t.Setenv(k, "t")
+	}
+	for _, k := range []string{"GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"} {
+		t.Setenv(k, "t@example.com")
+	}
+	writeServices(t, dir, map[string]string{
+		"pipeline": string(src),
+		"lead":     `(agent lead :prompt "Lead." :can [:pipeline/build])`,
+	})
+	start(t, dir)
+	c := dial(t, dir)
+	repo := filepath.Join(dir, "repo")
+	os.Mkdir(repo, 0o700)
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"commit", "-q", "--allow-empty", "-m", "first"}} {
+		if out, err := exec.Command("git", append([]string{"-C", repo}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	if r, err := c.Mode("agent/lead", "trusted", []string{"pipeline"}, 0); err != nil || r.Value != "(ok :done)" {
+		t.Fatalf("trust = %+v %v", r, err)
+	}
+	c.Eval(`(call :lead/tell "hold")`, "")
+	home := filepath.Join(dir, ".whiff", "agents", "lead")
+	token := func(file string) string {
+		var tok string
+		eventually(t, file, func() string {
+			b, _ := os.ReadFile(file)
+			tok = strings.TrimSpace(string(b))
+			return fmt.Sprint(len(tok))
+		}, "32")
+		return tok
+	}
+	turn := dial(t, dir)
+	turn.Agent = true
+	if r, err := turn.ClaimSession(token(filepath.Join(home, "token")), ""); err != nil || !strings.HasPrefix(r.Value, "(ok [:agent/lead") {
+		t.Fatalf("lead's claim = %+v %v", r, err)
+	}
+	r, _ := turn.Message("call", "pipeline/build", fmt.Sprintf(`[%q "main" "do it" ["true"] "haiku"]`, repo), "")
+	if !strings.HasPrefix(r.Value, "(err {:id ") {
+		t.Fatalf("build = %+v", r)
+	}
+	os.WriteFile(filepath.Join(home, "go"), nil, 0o600)
+	turn.Close()
+
+	// The dev's session: a new one, reaching lead's ask alone.
+	dev := dial(t, dir)
+	dev.Agent = true
+	claim, err := dev.ClaimSession(token(filepath.Join(fake, "dev-token")), "")
+	if err != nil || !strings.HasPrefix(claim.Value, "(ok [:agent/") || !strings.HasSuffix(claim.Value, " [:lead/ask]])") || strings.HasPrefix(claim.Value, "(ok [:agent/lead") {
+		t.Fatalf("the dev's claim = %+v %v", claim, err)
+	}
+	if args, _ := os.ReadFile(filepath.Join(fake, "dev-args")); !strings.Contains(string(args), "--mcp-config") || !strings.Contains(string(args), "mcp__whiff") || !strings.Contains(string(args), "haiku") {
+		t.Errorf("the dev ran with:\n%s\nwant whiff mcp and haiku", args)
+	}
+	if r, _ := dev.Message("call", "pipeline/runs", "[]", ""); !strings.Contains(r.Error, "may call only :lead/ask") {
+		t.Errorf("the dev called pipeline/runs: %+v", r)
+	}
+	r, _ = dev.Message("call", "lead/ask", `["run 1: which port?"]`, "")
+	q := strings.Fields(strings.TrimPrefix(r.Value, "(err {:id "))[0]
+	if r, err := dev.Message("wait", "", "["+q+"]", ""); err != nil || r.Value != `(ok "lead: run 1: which port?")` {
+		t.Errorf("lead's answer to the dev = %+v %v", r, err)
+	}
+	os.WriteFile(filepath.Join(fake, "go"), nil, 0o600)
+	dev.Close()
+
+	// The run ends ready; lead's turn on it says nothing to you.
+	eventually(t, "lead's turn on the run's end", func() string {
+		b, _ := os.ReadFile(filepath.Join(home, "asks"))
+		return fmt.Sprint(strings.Contains(string(b), " whiff/result "))
+	}, "true")
+	// A tell answered nothing says nothing to you either.
+	if r, _ := c.Eval(`(call :lead/tell "quiet")`, ""); !strings.HasPrefix(r.Value, "(err {:id ") {
+		t.Fatalf("tell = %+v", r)
+	}
+	eventually(t, "lead's inbox empty", func() string { text, _ := c.Inbox("lead"); return text }, "")
+	if text, _ := c.Inbox("me"); strings.Contains(text, "nothing") || strings.Count(text, ":lead -> ") != 1 {
+		t.Errorf("your inbox:\n%s\nwant lead's answer to your first tell alone", text)
 	}
 }

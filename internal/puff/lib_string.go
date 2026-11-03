@@ -272,6 +272,12 @@ var valueFns = []*Builtin{
 		}
 		return String(k), nil
 	}},
+	{Name: "keyword/from-string", Args: "s", Doc: "(ok k): the keyword named s, :ready for \"ready\", as the reader reads it; (err {:kind :parse}) for a name it wouldn't read as one.", Fn: str1(func(s string) Value {
+		if v, err := ReadValue(":" + s); err == nil && Equal(v, Keyword(s)) {
+			return Ok(Keyword(s))
+		}
+		return Errorf("parse", "not a keyword's name: %q", s)
+	})},
 }
 
 // display is v as str and io/println show it: a string as it is, anything

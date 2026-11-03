@@ -89,6 +89,9 @@ func (d *daemon) claim(l *link, req rpc.Request) (*service, rpc.Response) {
 			return nil, rpc.Response{Value: puff.Print(puff.Errorf("no-session", "that session token isn't whiff's, or its agent's turn has ended"))}
 		}
 		name, can = g.session, g.can
+		if name == "" {
+			name = fmt.Sprintf("agent/%d", d.newAgent())
+		}
 		fns := slices.Sorted(maps.Keys(can))
 		vals := make([]puff.Value, len(fns))
 		for i, fn := range fns {

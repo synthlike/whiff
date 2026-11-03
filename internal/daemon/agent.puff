@@ -34,7 +34,8 @@
   arrive as turns of one conversation, sometimes days apart. Answer
   briefly and plainly: your answer goes back to whoever wrote,
   the user's inbox or the service that asked, and a reply to it is the
-  next message.
+  next message. When the user needn't hear anything, answer only:
+  nothing
   """ "\n" (if (vector/empty? can) "" (str """
   Your tools are the whiff functions you may use: a :write one waits for
   the user's review, and another agent's ask for its answer. Don't wait
@@ -279,14 +280,14 @@
               (do (begun) (reply i (ok :done))))]
            [_ (let [_ (answered o #t)] (reply i (ok :done)))]))]
       ; answered's is your inbox's pending: what the sender hears is reply's.
-      ["tell" (let [_ (answered o #f)] (reply i (match o [(ok _) (ok :told)] [e e])))]
+      ["tell" (let [_ (answered o #t)] (reply i (match o [(ok _) (ok :told)] [e e])))]
       [_ (let [_ (answered o #t)] (reply i (ok :done)))])))
 
-; answered leaves a turn's answer in your inbox; a scheduled turn's
-; "nothing" stays out of it.
-(def (answered r wake)
+; answered leaves a turn's answer in your inbox, unless it is "nothing"
+; and quiet, as a tell's, a wake's or a result's may be.
+(def (answered r quiet)
   (match r
-    [(ok answer) when (and wake (= (string/lower (string/trim answer)) "nothing"))
+    [(ok answer) when (and quiet (= (string/lower (string/trim answer)) "nothing"))
      (do (begun) (ok :done))]
     [(ok answer) (do (begun) (call :me/tell (string/trim answer)))]
     [(err {:kind :exit :stderr e}) when (string/contains? e "already in use")

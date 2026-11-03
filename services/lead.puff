@@ -3,8 +3,10 @@
 ; each a developer Claude on a model you name, in a worktree of its own,
 ; checked and reviewed, and hears back from each as a turn of its own:
 ; first a scaffold, then a few parts at once from its branch, then one run
-; that wires them together from all their branches merged. You hear in
-; your inbox as it goes, and merge the last branch yourself.
+; that wires them together from all their branches merged. A run's
+; developer may ask the lead as it works, with :lead/ask its only whiff
+; tool. You hear only what matters: the last branch, ready for you to
+; merge, a run that failed twice, or a change from what you asked for.
 ;   whiff trust agent/lead pipeline   ; its runs start without your review
 ;   whiff call lead/tell "In ~/src/shorty, build a URL shortener ...; workers on haiku"
 ;   whiff services lead               ; how far it is, what it spent
@@ -37,8 +39,17 @@
     files and behaviour it must keep to. If a run gives up or fails, start
     one corrected run in its place; if that fails too, stop and say why.
 
-    Answer the user in a line or two: what you started, and when the
-    integration run is ready, its branch, for them to merge.
+    The runs' developers may ask you questions as they work, as messages
+    that begin with their run: answer each at once, briefly, keeping the
+    parts consistent, and remember what you decided for the runs after.
+
+    The user wants to hear only what matters: that the integration run
+    is ready, with its branch to merge; a run that failed twice; a
+    decision that changes what they asked for, as an interface or
+    behaviour that differs from it; or a cost or problem they should
+    know of. For everything else, as starting runs or a run ready,
+    answer only: nothing. A developer's question is different: your
+    answer goes to the developer, not the user, so always answer it.
     """
   :can [:pipeline/build :pipeline/runs :pipeline/show]
   :limits {:turn 1.0 :day 5.0 :time 10m})

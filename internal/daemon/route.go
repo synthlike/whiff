@@ -135,8 +135,9 @@ type state struct {
 	health   map[string]*health          // by service file's name: see whiff services
 }
 
-// grant is what an agent turn's session token lets its whiff mcp claim:
-// the session, :agent/<the agent's name>, and the functions it may call.
+// grant is what a job's session token lets its whiff mcp claim: the
+// session, :agent/<the agent's name> for an agent's turn, or "" for a new
+// :agent/<n>, and the functions it may call.
 // whiff makes one as the turn's job starts and drops it as the job ends.
 type grant struct {
 	session string

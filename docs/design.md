@@ -332,6 +332,11 @@ other inbox, enforced by whiff, not by Claude's permissions. Its tools act
 in the agent's `:dir`, `whiff mcp --dir`, while its Claude session stays in
 its home. The fence
 holds because a turn has no shell: `--tools ""`, and `whiff mcp` alone.
+Any service's job may have such a session, as a new `:agent/<n>`: a
+pipeline run an agent started gives its dev Claude the agent's `ask`,
+and nothing else of whiff's, so a worker asks its lead and waits for the
+answer. It reaches only what the service could call itself, and it is
+gated as any agent session is.
 
 So a turn has no effects of its own: what it does is its tools' writes,
 which its session's mode gates, and its cost, which `:limits` caps. Its

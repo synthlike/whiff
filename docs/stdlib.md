@@ -94,6 +94,7 @@ In `puff` and in whiff alike. Names without a namespace are under core.
 ### keyword
 
 - `(keyword/name k)`: k's name, without its colon: "ready" for :ready.
+- `(keyword/from-string s)`: (ok k): the keyword named s, :ready for "ready", as the reader reads it; (err {:kind :parse}) for a name it wouldn't read as one.
 
 ### vector
 

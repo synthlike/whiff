@@ -37,6 +37,28 @@
     with a short summary of what you changed.
     """)
 
+  ; from-of is who sent build id, still in the inbox: its address, or :you
+  ; for a client's, which has none.
+  (def (from-of id)
+    (match (vector/find (inbox :build) (fn ({:id i}) (= i id)))
+      [(some m) (map/get-or m :from :you)]
+      [(none) :you]))
+
+  ; asks? is whether service name has an ask function, as an agent does.
+  (def (asks? name)
+    (match (keyword/from-string name)
+      [(ok k) (match (address/describe k)
+                [(ok fns) (vector/any? fns (fn (f) (= (map/get f :fn) (some :ask))))]
+                [_ #f])]
+      [_ #f]))
+
+  ; ask-text is what a dev whose run an agent started is told of asking it.
+  (def (ask-text lead n)
+    (str "You are run " n " of a pipeline :" lead " started, one of several working on parts of the same project. "
+      "If you need a decision the task and the repository don't settle, as a name or an interface another part depends on, "
+      "ask :" lead " with the " lead "_ask tool, saying which run you are, and wait for its answer with the wait tool, "
+      "for up to 600 seconds at a time. Otherwise decide yourself and go on.\n\n"))
+
   (def review-prompt """
     You are the reviewer in a small pipeline. Below are the task, the result
     of the project's check and the diff the developer made. List the real
@@ -69,19 +91,28 @@
   ; :resumable. It may run the check, as it is
   ; or with more arguments, and no MCP servers: none of your own Claude
   ; setup's.
+  ; A run an agent started has whiff mcp too, reaching only the agent's ask.
   (def (dev-cmd run)
     (match run
       [{:session s :check check}
        (vector/concat
-         ["claude" "-p" "--strict-mcp-config" "--tools" "Read,Edit,Write,Glob,Grep,Bash"
-          "--allowedTools" (str "Bash(" (string/join check " ") ")") (str "Bash(" (string/join check " ") ":*)")
-          "--permission-mode" "acceptEdits" "--append-system-prompt" dev-system]
+         ["claude" "-p"]
+         (match (map/get-or run :lead "")
+           ["" []]
+           [_ ["--mcp-config" (json/to-string {:mcpServers {:whiff {:command "whiff" :args ["mcp"]}}})]])
+         ["--strict-mcp-config" "--tools" "Read,Edit,Write,Glob,Grep,Bash"
+          "--allowedTools" (str "Bash(" (string/join check " ") ")") (str "Bash(" (string/join check " ") ":*)")]
+         (match (map/get-or run :lead "") ["" []] [_ ["--allowedTools" "mcp__whiff"]])
+         ["--permission-mode" "acceptEdits" "--append-system-prompt" dev-system]
          (match (map/get-or run :model "") ["" []] [m ["--model" m]])
          (if (map/get-or run :resumable #f) ["--resume" s] ["--session-id" s]))]))
 
   (def (dev state n input)
     (let [run (run-of state n)
-          id (try (submitted (call :jobs/run (dev-cmd run) {:stdin input :dir (map/get-or run :dir "") :as :text :timeout 30m})))]
+          opts {:stdin input :dir (map/get-or run :dir "") :as :text :timeout 30m}
+          lead (map/get-or run :lead "")
+          id (try (submitted (call :jobs/run (dev-cmd run)
+                               (if (= lead "") opts (map/set opts :session [(unwrap (keyword/from-string (str lead "/ask")))])))))]
       (ok (waiting state n :dev id))))
 
   (def (check state n)
@@ -316,7 +347,7 @@
           run (map/merge {:task task :repo repo :dir dir :branch branch :base base :check check :round 1 :session session :step :starting :quiet quiet} extra)
           state (-> state (map/set :next (+ n 1)) (map/set-in [:runs n] run))]
       ; A run that can't start leaves no worktree or branch behind.
-      (match (match merged [(ok _) (dev state n (str "Task: " task))] [e e])
+      (match (match merged [(ok _) (dev state n (str (match (map/get-or extra :lead "") ["" ""] [l (ask-text l n)]) "Task: " task))] [e e])
         [(ok s) (ok [n s])]
         [(err e)
          (do (or-else (git repo ["worktree" "remove" "--force" dir]) "")
@@ -341,7 +372,12 @@
       [_
        (match (vector/find (inbox :build) (fn ({:id i}) (= i id)))
          [(some {:args [repo base task check model]})
-          (match (begin state repo base task check #t {:model model :asker id})
+          ; An agent's turn asks from :agent/<name>: its devs may ask it.
+          (match (begin state repo base task check #t
+                   (map/merge {:model model :asker id}
+                     (match (string/split (value/to-string (from-of id)) "/")
+                       [[":agent" name] when (asks? name) {:lead name}]
+                       [_ {}])))
             [(ok [_ s]) (ok s)]
             [(err e) (let [_ (reply id (err e))] (ok state))])]
          [_ (ok state)])]))
