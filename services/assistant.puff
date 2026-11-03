@@ -1,8 +1,9 @@
 ; assistant: a resident agent you talk to by leaving it messages. Each
 ; message wakes Claude for one turn of the same session, so it remembers the
 ; whole conversation, days apart; its answer lands in your inbox. Replying
-; to an answer is your next message. It has no tools: it reads what you send
-; and answers. Needs the claude CLI.
+; to an answer is your next message, and messages that come while it answers
+; wait their turn. It has no tools: it reads what you send and answers.
+; Needs the claude CLI.
 ;   whiff call assistant/tell "the release is on Friday; remind me what's left"
 ;   whiff inbox                  ; its answer, from :assistant
 ;   whiff reply 7 "and the docs?"   ; the next message; or :seen to dismiss

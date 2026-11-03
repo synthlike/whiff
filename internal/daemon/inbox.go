@@ -104,7 +104,9 @@ func (d *daemon) ask(st *state, s *service, m message) puff.Value {
 			return puff.Errorf("bad-call", ":%s: %v", m.to(s.name), err)
 		}
 	}
-	a := &asked{ticket: ticket{id: st.newID(), msg: m.id, from: m.from, dir: m.dir, user: m.user, session: m.session}, addr: s.name, fn: m.fn, args: args, at: time.Now(), expires: h.expires}
+	// It keeps whether its chain was reviewed, for what whiff/asked leads
+	// to: your reply that a service sends on as a tell is still yours.
+	a := &asked{ticket: ticket{id: st.newID(), msg: m.id, from: m.from, dir: m.dir, user: m.user, reviewed: m.reviewed, session: m.session}, addr: s.name, fn: m.fn, args: args, at: time.Now(), expires: h.expires}
 	// An inbox survives a restart, so its sender hears only once this will.
 	if err := st.keep(a); err != nil {
 		return puff.Errorf("store", ":%s wasn't stored: %v", m.to(s.name), err)

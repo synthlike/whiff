@@ -95,7 +95,7 @@ func agentService(f *puff.Form, file string) (*puff.Form, error) {
 		items = append(items, list(sym("def"), sym(string(k)), opts[k]))
 	}
 	for _, g := range loop {
-		if !every && isList(g, "on") && len(g.Items) > 1 && isList(g.Items[1], "wake") {
+		if !every && isList(g, "ask") && len(g.Items) > 1 && isList(g.Items[1], "wake") {
 			continue
 		}
 		items = append(items, g)

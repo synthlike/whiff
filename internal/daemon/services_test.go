@@ -472,10 +472,15 @@ func TestAssistantService(t *testing.T) {
 		return id
 	}
 
-	if got := tell("hello"); got != "(ok :thinking)" {
-		t.Fatalf("tell = %s", got)
+	hello := tell("hello")
+	if !strings.HasPrefix(hello, "(err {:id ") {
+		t.Fatalf("tell = %s, want a pending", hello)
 	}
 	first := inboxed(`:assistant -> :me/tell "new in assistant: hello"`)
+	// Its sender hears it was told; the answer is in your inbox.
+	if r, err := c.Message("wait", "", "["+strings.Fields(strings.TrimPrefix(hello, "(err {:id "))[0]+"]", ""); err != nil || r.Value != "(ok :told)" {
+		t.Errorf("wait for the tell = %+v %v", r, err)
+	}
 
 	// Your reply to its answer is the next turn, in the same session.
 	if _, err := c.Message("reply", "", "["+first+` (ok "and more")]`, ""); err != nil {
@@ -483,23 +488,32 @@ func TestAssistantService(t *testing.T) {
 	}
 	second := inboxed(`:assistant -> :me/tell "resume in assistant: and more"`)
 
-	// One turn at a time.
+	// One turn at a time: a tell and a reply that come while one runs wait
+	// for it, and go in order.
 	tell("slow")
-	if got := tell("too soon"); !strings.HasPrefix(got, "(err {:kind :busy") {
-		t.Errorf("tell while busy = %s", got)
+	tell("too soon")
+	if _, err := c.Message("reply", "", "["+second+` (ok "meanwhile")]`, ""); err != nil {
+		t.Fatal(err)
 	}
 	inboxed(`"resume in assistant: slow"`)
+	soon := inboxed(`"resume in assistant: too soon"`)
+	inboxed(`"resume in assistant: meanwhile"`)
+	historyHas(t, c, `:assistant -> :me/tell "resume in assistant: meanwhile"`)
+	if h, _ := historyOf(c); strings.Index(h, `"resume in assistant: meanwhile"`) > strings.Index(h, `"resume in assistant: too soon"`) {
+		t.Errorf("meanwhile came before too soon:\n%s", h) // history is newest first
+	}
 
 	// Dismissing an answer starts nothing; a failed turn says so.
-	if _, err := c.Message("reply", "", "["+second+" (ok :seen)]", ""); err != nil {
+	if _, err := c.Message("reply", "", "["+soon+" (ok :seen)]", ""); err != nil {
 		t.Fatal(err)
 	}
 	tell("fail")
 	inboxed(`:assistant -> :me/tell "I couldn't answer: {:exit 1 :kind :exit :message \"job `)
 	inboxed(` exited 1\" :stderr \"it broke\\n\"}"`)
-	// The first was replied to and the second dismissed: slow's and fail's wait.
-	if text, _ := c.Inbox("me"); strings.Count(text, ":assistant -> ") != 2 {
-		t.Errorf("want two answers waiting:\n%s", text)
+	// hello's and the second were replied to and too soon's dismissed:
+	// slow's, meanwhile's and fail's wait.
+	if text, _ := c.Inbox("me"); strings.Count(text, ":assistant -> ") != 3 {
+		t.Errorf("want three answers waiting:\n%s", text)
 	}
 	// Its turns are the agent's, whoever wrote to it.
 	historyHas(t, c, `  call  agent  :assistant -> :me/tell "new in assistant: hello"`)
@@ -516,7 +530,7 @@ func TestAssistantService(t *testing.T) {
 		t.Errorf("session after forget = %q, before %q: want a new one", now, old)
 	}
 
-	if resp, err := c.Eval(`(call :helper/tell "hi")`, ""); err != nil || resp.Value != "(ok :thinking)" {
+	if resp, err := c.Eval(`(call :helper/tell "hi")`, ""); err != nil || !strings.HasPrefix(resp.Value, "(err {:id ") {
 		t.Fatalf("helper/tell = %+v %v", resp, err)
 	}
 	inboxed(`:helper -> :me/tell "resume in helper: hi"`)

@@ -9,8 +9,8 @@
 ; Each message wakes Claude for one turn of the same session, so the agent
 ; remembers the whole conversation, days apart. A tell's answer lands in
 ; your inbox, and replying to it is your next message; an ask's goes back
-; to whoever asked, as a whiff/done. Asks wait in the agent's inbox, and it
-; takes them one at a time, oldest first. A turn stops at :limits' :turn
+; to whoever asked, as a whiff/done. Tells, asks and scheduled wakes all
+; wait in the agent's inbox, and it takes them one at a time, oldest first. A turn stops at :limits' :turn
 ; dollars or :time; once the agent has spent :day dollars in the last 24
 ; hours it takes no more turns until it has spent less, and you hear once.
 ; Its home, ~/.whiff/agents/<its name>, holds its session's id (Claude keeps
@@ -22,8 +22,7 @@
 (def session-file (path/join home "session")) ; the conversation's id
 (def started (path/join home "started"))      ; the id once it has begun
 (def turns (path/join home "turns"))          ; each turn's job id, a line each
-(def wakes (path/join home "wakes"))          ; the scheduled ones' ids
-(def asks (path/join home "asks"))            ; "turn ask" for each ask's turn
+(def asks (path/join home "asks"))            ; "turn message kind" for each turn: kind is ask, tell or wake
 (def costs (path/join home "costs"))          ; "time usd" for each turn, the last 24 hours'
 (def day-usd (unwrap (map/get limits :day)))
 (def turn-usd (unwrap (map/get limits :turn)))
@@ -111,15 +110,6 @@
     (do (try (file/append turns (str id "\n")))
       (ok id))))
 
-; turn starts one turn with text, a scheduled one if wake: (ok :thinking),
-; or (err {:kind :busy}).
-(def (turn text wake)
-  (if (busy?)
-    (err {:kind :busy :message (string/concat name " is still answering your last message; send it again in a moment")})
-    (let [id (try (start text))]
-      (do (if wake (try (file/append wakes (str id "\n"))) (ok :done))
-        (ok :thinking)))))
-
 ; over-budget is (err {:kind :over-budget}) once the day's budget is
 ; spent, else (ok :done).
 (def (over-budget)
@@ -158,42 +148,64 @@
 ; begun marks the session begun, once a turn has run in it.
 (def (begun) (try (file/write started (try (session)))))
 
-; ask-turns are [turn ask] for each ask's turn, both ids as text.
+; ask-turns are [turn message kind] for each turn a message in the inbox
+; began, ids as text and kind "ask", "tell" or "wake".
 (def (ask-turns)
-  (vector/filter (vector/map (read-lines asks) (fn (line) (string/split line " ")))
-    (fn (p) (match p [[_ _] #t] [_ #f]))))
+  (vector/reduce (read-lines asks) []
+    (fn (all line)
+      (match (string/split line " ")
+        [[t a k] (vector/append all [t a k])]
+        [[t a] (vector/append all [t a "ask"])] ; from before tells queued
+        [_ all]))))
 
-; asked is the ask that turn id answers: (some ask), or (none).
+; asked is what turn id answers: (some [message kind]), or (none).
 (def (asked id)
-  (match (vector/find (ask-turns) (fn ([t _]) (= t id)))
-    [(some [_ a]) (some a)]
+  (match (vector/find (ask-turns) (fn ([t _ _]) (= t id)))
+    [(some [_ a k]) (some [a k])]
     [(none) (none)]))
 
-; next-ask starts a turn for the oldest ask in the inbox that hasn't one,
-; unless a turn is running: (ok :waiting), (ok :idle) or (ok :thinking);
-; an ask whose turn can't start, as the review gate refuses it, is answered
-; with why: (ok :refused). whiff tells the agent of its asks again as each
-; turn ends, each in its own sender's chain, which a turn's own must be.
+(def wake-text (str "This is your scheduled turn; you have one every " (value/to-string every)
+                 ". Look again at what the user asked you to keep track of. If there is nothing worth telling them, answer only: nothing"))
+
+; next-ask starts a turn for the oldest message in the inbox, a tell, an
+; ask or a wake, that hasn't one, unless a turn is running: (ok :waiting),
+; (ok :idle) or (ok :thinking). One whose turn can't start, as the review
+; gate or the day's budget refuses it, is answered with why: (ok
+; :refused). A wake sets the next as it leaves the queue. whiff tells the
+; agent of its messages again as each turn ends, each in its own sender's
+; chain, which a turn's own must be.
 (def (next-ask)
-  (let [pairs (ask-turns)
-        waiting (vector/filter (inbox :ask)
-                  (fn ({:id i}) (not (vector/any? pairs (fn ([_ a]) (= a (int/to-string i)))))))]
+  (let [taken (ask-turns)
+        waiting (vector/filter (inbox)
+                  (fn ({:id i}) (not (vector/any? taken (fn ([_ a _]) (= a (int/to-string i)))))))]
     (match (vector/first waiting)
       [(none) (ok :idle)]
       [_ when (busy?) (ok :waiting)]
-      [(some {:id i :args [text]})
-       (match (start text)
-         [(ok t) (do (try (file/append asks (str t " " i "\n"))) (ok :thinking))]
-         [(err e) (do (reply i (err e)) (ok :refused))])])))
+      [(some {:id i :fn f :args args})
+       (let [_ (if (= f :wake) (send-after every :wake) (ok :done))
+             text (match args [[t] t] [_ wake-text])]
+         (match (start text)
+           [(ok t) (do (try (file/append asks (str t " " (int/to-string i) " " (keyword/name f) "\n"))) (ok :thinking))]
+           [(err e) (do (reply i (err e)) (ok :refused))]))])))
 
-; reply-ask answers ask a, by its id, with an ask turn's result r.
-(def (reply-ask a r)
+; reply-ask answers ask i with an ask turn's result r.
+(def (reply-ask i r)
+  (match r
+    [(ok answer) (do (begun) (reply i (ok (string/trim answer))))]
+    [(err {:kind :exit :stderr e}) when (string/contains? e "already in use")
+     (do (begun) (reply i (err {:kind :session :outcome :not-started :message "the session had already begun, so the message was lost; ask again"})))]
+    [(err e) (reply i (err e))]))
+
+; finished answers message a, of kind, with its turn's outcome o: an ask's
+; sender gets the answer; a tell's answer goes to your inbox and its sender
+; hears it was told; a wake's, if it has news, to your inbox.
+(def (finished a kind o)
   (let [i (unwrap (int/from-string a))]
-    (match r
-      [(ok answer) (do (begun) (reply i (ok (string/trim answer))))]
-      [(err {:kind :exit :stderr e}) when (string/contains? e "already in use")
-       (do (begun) (reply i (err {:kind :session :outcome :not-started :message "the session had already begun, so the message was lost; ask again"})))]
-      [(err e) (reply i (err e))])))
+    (match kind
+      ["ask" (reply-ask i o)]
+      ; answered's is your inbox's pending: what the sender hears is reply's.
+      ["tell" (let [_ (answered o #f)] (reply i (match o [(ok _) (ok :told)] [e e])))]
+      [_ (let [_ (answered o #t)] (reply i (ok :done)))])))
 
 ; answered leaves a turn's answer in your inbox; a scheduled turn's
 ; "nothing" stays out of it.
@@ -207,15 +219,14 @@
        (call :me/tell "My session had already begun, so that message was lost; please send it again."))]
     [(err e) (call :me/tell (string/concat "I couldn't answer: " (value/to-string e)))]))
 
-(on (tell text)
-  "Leaves the agent a message: (ok :thinking) now, and its answer in your inbox; (err {:kind :busy}) while it answers the last one."
-  (turn text #f))
+(ask (tell text)
+  "Leaves the agent a message: pending at once, its answer in your inbox, and (ok :told) for the sender when its turn ends. Messages wait their turn, oldest first.")
 
 (ask (ask text)
   "Asks the agent: pending at once, and [:whiff/done id (ok answer)] when its turn ends, or (err e) with :outcome. Asks wait their turn, oldest first.")
 
 (on (whiff/asked id)
-  "An ask waits in the inbox: its turn starts now, unless another is running. whiff's own; ask the agent instead."
+  "A message waits in the inbox: its turn starts now, unless another is running. whiff's own; ask or tell the agent instead."
   (next-ask))
 
 (on (usage) :read
@@ -234,14 +245,8 @@
     (try (file/write started ""))
     (ok :forgotten)))
 
-(on (wake)
-  "A scheduled turn, which whiff sends every :every: it answers only if there's something to tell you. whiff's own loop: tell the agent instead."
-  (do (send-after every :wake)
-    (if (busy?)
-      (ok :busy)
-      (turn (str "This is your scheduled turn; you have one every " (value/to-string every)
-              ". Look again at what the user asked you to keep track of. If there is nothing worth telling them, answer only: nothing")
-        #t))))
+(ask (wake)
+  "A scheduled turn, which whiff sends every :every and which waits its turn: it answers only if there's something to tell you. whiff's own loop: tell the agent instead.")
 
 (on (whiff/done id r)
   "A turn's answer goes to whoever asked, or to your inbox for a tell; your reply to that, if it is text, is the next message."
@@ -250,11 +255,9 @@
       [(vector/contains? (read-lines turns) i)
        (let [o (outcome i r)]
          (match (asked i)
-           [(some a) (reply-ask a o)]
-           [(none) (answered o (vector/contains? (read-lines wakes) i))]))]
+           [(some [a k]) (finished a k o)]
+           [(none) (answered o #f)]))] ; a turn from before tells queued
+      ; Your reply to an answer is a tell, which waits its turn.
       [_ (match r
-           [(ok text) when (= (value/type text) :string)
-            (match (turn text #f)
-              [(err {:kind :busy}) (call :me/tell "I'm still answering your last message; reply again in a moment.")]
-              [res res])]
+           [(ok text) when (= (value/type text) :string) (send :tell text)]
            [_ (ok :done)])])))
