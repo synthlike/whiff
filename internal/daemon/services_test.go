@@ -1522,7 +1522,7 @@ func TestAgentPause(t *testing.T) {
 	eval(`(call :napper/tell "two")`)
 	line := func() string {
 		got := eval(`(service/list)`)
-		return got[strings.Index(got, "{"):strings.LastIndex(got, "}")+1]
+		return got[strings.Index(got, "{") : strings.LastIndex(got, "}")+1]
 	}
 	eventually(t, "napper, paused", line, `{:agent #t :note "2 queued" :service :napper :status :paused}`)
 	home := filepath.Join(dir, ".whiff", "agents", "napper")

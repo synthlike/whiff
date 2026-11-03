@@ -271,3 +271,21 @@ func TestMCPTurn(t *testing.T) {
 		t.Errorf("history has no call from :agent/scout to :greet/hello: %+v", hist)
 	}
 }
+
+// TestToolArg reads a tool's arguments as puff, then a JSON array or
+// object as a model writes one, then as a string.
+func TestToolArg(t *testing.T) {
+	for _, tt := range []struct{ in, want string }{
+		{`["go" "test" "./..."]`, `["go" "test" "./..."]`},
+		{`["go","test","./..."]`, `["go" "test" "./..."]`},
+		{` {"turn": 1, "day": 2.5} `, `{:day 2.5 :turn 1}`},
+		{`1d`, `1d`},
+		{`"quoted"`, `"quoted"`},
+		{`plain words`, `"plain words"`},
+		{`[1, 2`, `"[1, 2"`},
+	} {
+		if got := puff.Print(toolArg(tt.in)); got != tt.want {
+			t.Errorf("toolArg(%q) = %s, want %s", tt.in, got, tt.want)
+		}
+	}
+}

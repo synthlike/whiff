@@ -22,7 +22,7 @@ import (
 // mcpInstructions tells the agent what whiff is and how its tools behave.
 const mcpInstructions = `whiff is the user's message daemon: small services written in puff, a lisp, answer messages, and whiff keeps a history of every one. You are an agent here, with an address of your own (:agent/<n>).
 
-Each tool named address_fn calls that service function. Its arguments are puff values written as strings: 12, :key, [1 2], {:a 1}, "text" with quotes; anything that doesn't read as a value is taken as a string. A :read function answers at once. A :write one waits for the user to review it: you get a pending id at once, and wait gives you the result once they accept or reject it. So does an ask, which waits for a person to answer.
+Each tool named address_fn calls that service function. Its arguments are puff values written as strings: 12, :key, [1 2], {:a 1}, "text" with quotes; a JSON array or object reads as a vector or map; anything else that doesn't read as a value is taken as a string. A :read function answers at once. A :write one waits for the user to review it: you get a pending id at once, and wait gives you the result once they accept or reject it. So does an ask, which waits for a person to answer.
 
 eval runs puff code in the daemon, under the same rule: code that reaches anything :write waits for review as a whole. inbox lists the messages sent to you; answer one with eval (reply id (ok value)), which goes straight through.
 
@@ -32,7 +32,7 @@ The user may trust your session with some services, or free it, for a while: the
 // reaches only the functions its agent's :can names.
 const turnInstructions = `whiff is the user's message daemon: small services written in puff, a lisp, answer messages, and whiff keeps a history of every one. This is your turn as one of its agents, and your tools are the whiff functions you may use, nothing else.
 
-Each tool named address_fn calls that service function. Its arguments are puff values written as strings: 12, :key, [1 2], {:a 1}, "text" with quotes; anything that doesn't read as a value is taken as a string. A :read function answers at once. A :write one waits for the user to review it: you get a pending id at once, as you do for another agent's ask. Don't wait for it: end your turn, and its result comes to you later, as a message of its own.`
+Each tool named address_fn calls that service function. Its arguments are puff values written as strings: 12, :key, [1 2], {:a 1}, "text" with quotes; a JSON array or object reads as a vector or map; anything else that doesn't read as a value is taken as a string. A :read function answers at once. A :write one waits for the user to review it: you get a pending id at once, as you do for another agent's ask. Don't wait for it: end your turn, and its result comes to you later, as a message of its own.`
 
 // agentIface is what an agent's address offers others: messages to it wait
 // in its inbox.
@@ -300,7 +300,7 @@ func (a *agent) functions(mode sessionMode) ([]fnTool, error) {
 			for k := range ps.Len() {
 				p, _ := ps.At(k).(puff.Keyword)
 				t.params = append(t.params, string(p))
-				props[string(p)] = map[string]any{"type": "string", "description": "a puff value; text that doesn't read as one is a string"}
+				props[string(p)] = map[string]any{"type": "string", "description": "a puff value, or a JSON array or object; text that reads as neither is a string"}
 			}
 			how := "Answers at once."
 			switch {
@@ -320,6 +320,21 @@ func (a *agent) functions(mode sessionMode) ([]fnTool, error) {
 		}
 	}
 	return tools, nil
+}
+
+// toolArg is a tool's argument s as a puff value: as it reads, or, as
+// models write vectors and maps as JSON, ["go","test"], a JSON array or
+// object read as one; else s itself, a string.
+func toolArg(s string) puff.Value {
+	if v, err := puff.ReadValue(s); err == nil {
+		return v
+	}
+	if t := strings.TrimSpace(s); strings.HasPrefix(t, "[") || strings.HasPrefix(t, "{") {
+		if v, err := puff.ParseJSON(t); err == nil {
+			return v
+		}
+	}
+	return puff.String(s)
 }
 
 // toolName is address/fn as a tool's name: gh_prs, agent_2_tell; any
@@ -394,7 +409,7 @@ func (a *agent) callTool(f fnTool) mcp.ToolHandler {
 			if err := json.Unmarshal(raw, &s); err != nil {
 				return failed("%s: want a string holding a puff value, got %s", p, raw), nil
 			}
-			vals = append(vals, shellArg(s))
+			vals = append(vals, toolArg(s))
 		}
 		c, _, err := a.client()
 		if err != nil {

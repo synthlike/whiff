@@ -2,6 +2,7 @@ package puff
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"regexp"
@@ -90,16 +91,7 @@ var jsonFns = []*Builtin{
 		if _, err := options(args, 1); err != nil {
 			return nil, err
 		}
-		dec := json.NewDecoder(strings.NewReader(string(s)))
-		dec.UseNumber()
-		var x any
-		if err := dec.Decode(&x); err != nil {
-			return Errorf("parse", "%s", err), nil
-		}
-		if _, err := dec.Token(); err != io.EOF {
-			return Errorf("parse", "extra data after the value"), nil
-		}
-		v, err := fromJSON(x)
+		v, err := ParseJSON(string(s))
 		if err != nil {
 			return Errorf("parse", "%s", err), nil
 		}
@@ -130,6 +122,22 @@ var jsonFns = []*Builtin{
 		return String(strings.TrimSuffix(b.String(), "\n")), nil
 	}},
 	{Name: "json/null", Doc: "JSON's null: (null).", Fn: func(*Call, []Value) (Value, error) { return jsonNull, nil }},
+}
+
+// ParseJSON reads s, one JSON value, as json/parse does: objects are
+// maps, with keyword keys where the key is a name; null is (null); whole
+// numbers that fit stay ints.
+func ParseJSON(s string) (Value, error) {
+	dec := json.NewDecoder(strings.NewReader(s))
+	dec.UseNumber()
+	var x any
+	if err := dec.Decode(&x); err != nil {
+		return nil, err
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, errors.New("extra data after the value")
+	}
+	return fromJSON(x)
 }
 
 func fromJSON(x any) (Value, error) {
