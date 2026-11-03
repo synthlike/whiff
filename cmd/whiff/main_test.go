@@ -79,6 +79,8 @@ func TestRun(t *testing.T) {
 		{name: "not running", args: []string{"stop"}, wantErr: "whiff isn't running\n"},
 		{name: "eval starts the daemon", args: []string{"eval", `(io/println "hi") (+ 1 2)`}, wantOut: "hi\n3\n"},
 		{name: "services", args: []string{"services"}, wantOut: "broke  failed  broke.puff:1:1: no closing ')'\n\ngreet  ok\n"},
+		{name: "a service", args: []string{"services", "broke"}, outHas: "  error   broke.puff:1:1: no closing ')'"},
+		{name: "no service", args: []string{"services", "nope"}, code: 1, wantErr: "whiff: {:kind :no-address :message \"no service :nope\"}\n"},
 		{name: "eval a call", args: []string{"eval", `(call :greet/hello "ann")`}, wantOut: "(ok \"hello, ann\")\n"},
 		{name: "an err's actions", args: []string{"call", "greet/stuck"}, code: 1,
 			wantErr: "whiff: {:kind :not-now}\n  Greet x\t[:greet/hello \"x\"]\n  Greet someone\t[:greet/hello \"\"]\n"},

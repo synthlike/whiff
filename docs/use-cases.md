@@ -315,6 +315,7 @@ ln -s "$PWD"/notes.puff ~/.whiff/services/
 whiff call notes/add "buy milk"
 whiff ls                          # its functions and their marks
 whiff services                    # how each service is: failed, waiting for you, ok...
+whiff services notes              # one in full: file, last message, faults, timers
 ```
 
 Saving the file reloads it; a fault restarts it from the file; a file that

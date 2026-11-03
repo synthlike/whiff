@@ -339,6 +339,15 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 				})
 				return puff.Ok(puff.NewVector(all...)), nil
 			}},
+		{Name: "service/status", Args: "service", Mark: puff.MarkRead,
+			Doc: "(ok s): service's line of service/list, {:service :agent :status :note}, and what else whiff knows of it: :file, :load-error, :last {:fn :at} handled, :faults today and the last :fault {:at :message}, :inbox and :timers [{:fn :due}]; for an agent :spent, :turns and :day of the last 24 hours, :last-turn and :every. (err {:kind :no-address}) if there is none.",
+			Fn: func(_ *puff.Call, args []puff.Value) (puff.Value, error) {
+				addr, ok := args[0].(puff.Keyword)
+				if !ok {
+					return nil, fmt.Errorf("want a service like :gh, got %s", puff.Print(args[0]))
+				}
+				return d.serviceStatus(string(addr)), nil
+			}},
 		{Name: "service/state", Args: "service", Mark: puff.MarkRead,
 			Doc: "(ok state): service's state as it last committed it; (err {:kind :stateless}) for a service without :state, (err {:kind :no-address}) if there is none.",
 			Fn: func(_ *puff.Call, args []puff.Value) (puff.Value, error) {

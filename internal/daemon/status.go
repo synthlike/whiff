@@ -11,13 +11,25 @@ import (
 	"time"
 
 	"github.com/synthlike/whiff/internal/puff"
+	"go.etcd.io/bbolt"
 )
 
-// health is what whiff knows of a service file beyond its service: why
-// the file last failed to load, if it did, and when the service faulted.
+// health is what whiff knows of a service file beyond its service: its
+// path, why it last failed to load, if it did, when the service faulted
+// and the last message it handled.
 type health struct {
+	file    string
 	loadErr string      // "" once it loads
 	faults  []time.Time // the last 24 hours'
+	fault   string      // the last fault's err
+	last    handled     // the zero handled before it handles one
+}
+
+// handled is a message a service handled: its function, or topic, and
+// when.
+type handled struct {
+	fn string
+	at time.Time
 }
 
 // faultWindow is how long a fault keeps a service :faulting.
@@ -36,19 +48,54 @@ func (st *state) healthOf(name string) *health {
 func (d *daemon) loadFailed(file string, err error) {
 	// Its file is in the services directory: say only its name.
 	msg := strings.ReplaceAll(err.Error(), filepath.Dir(file)+string(filepath.Separator), "")
-	d.do(func(st *state) { st.healthOf(serviceName(file)).loadErr = msg })
+	d.do(func(st *state) {
+		h := st.healthOf(serviceName(file))
+		h.file, h.loadErr = file, msg
+	})
 }
 
 func (d *daemon) loadedOK(file string) {
-	d.do(func(st *state) { st.healthOf(serviceName(file)).loadErr = "" })
+	d.do(func(st *state) {
+		h := st.healthOf(serviceName(file))
+		h.file, h.loadErr = file, ""
+	})
 }
 
-// faulted keeps that s faulted now.
-func (st *state) faulted(s *service) {
+// served keeps that s handled m, at begin.
+func (st *state) served(s *service, m message, begin time.Time) {
+	if s.client || !s.keep {
+		return
+	}
+	fn := m.fn
+	if m.topic != "" {
+		fn = ":" + m.topic
+	}
+	st.healthOf(s.name).last = handled{fn, begin}
+}
+
+// faulted keeps that s faulted now, with the err it replied.
+func (st *state) faulted(s *service, reply string) {
 	if s.client || !s.keep {
 		return
 	}
 	h := st.healthOf(s.name)
+	h.fault = reply
+	// Its message, at a place in its file, which is in the services
+	// directory: say only the file's name.
+	if v, err := puff.ReadValue(reply); err == nil {
+		if t, ok := v.(puff.Tag); ok && t.Len() == 1 {
+			if e, ok := t.At(0).(puff.Map); ok {
+				if msg, ok := e.Get(puff.Keyword("message")); ok {
+					if text, ok := msg.(puff.String); ok {
+						h.fault = string(text)
+					}
+				}
+			}
+		}
+	}
+	if h.file != "" {
+		h.fault = strings.ReplaceAll(h.fault, filepath.Dir(h.file)+string(filepath.Separator), "")
+	}
 	since := time.Now().Add(-24 * time.Hour)
 	h.faults = append(slices.DeleteFunc(h.faults, func(t time.Time) bool { return t.Before(since) }), time.Now())
 }
@@ -132,8 +179,8 @@ func (st *state) statusOf(name string, now time.Time) status {
 		}
 	case recent > 0:
 		r.state, r.note = "faulting", fmt.Sprintf("restarted %s today", times(len(h.faults)))
-	case r.agent && s.dayUSD > 0 && agentSpent(name, now) >= s.dayUSD:
-		r.state, r.note = "over-budget", fmt.Sprintf("$%.2f of its $%.2f a day", agentSpent(name, now), s.dayUSD)
+	case r.agent && s.dayUSD > 0 && agentSpent(name, now).usd >= s.dayUSD:
+		r.state, r.note = "over-budget", fmt.Sprintf("$%.2f of its $%.2f a day", agentSpent(name, now).usd, s.dayUSD)
 	case answers > 0 || reviews > 0:
 		r.state = "waiting"
 		var parts []string
@@ -166,15 +213,23 @@ func (st *state) statusOf(name string, now time.Time) status {
 	return r
 }
 
-// agentSpent is the dollars agent name's turns cost in the 24 hours
-// before now, from the costs file its turn loop keeps.
-func agentSpent(name string, now time.Time) float64 {
+// spending is what an agent's turns of the last 24 hours cost: dollars,
+// how many turns, and when the last ended.
+type spending struct {
+	usd   float64
+	turns int
+	last  time.Time
+}
+
+// agentSpent is agent name's spending in the 24 hours before now, from
+// the costs file its turn loop keeps.
+func agentSpent(name string, now time.Time) spending {
+	var sp spending
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return 0
+		return sp
 	}
 	b, _ := os.ReadFile(filepath.Join(home, ".whiff", "agents", name, "costs"))
-	sum := 0.0
 	for _, line := range strings.Split(string(b), "\n") {
 		at, usd, ok := strings.Cut(line, " ")
 		if !ok {
@@ -183,10 +238,99 @@ func agentSpent(name string, now time.Time) float64 {
 		t, err := time.Parse(time.RFC3339Nano, at)
 		f, ferr := strconv.ParseFloat(usd, 64)
 		if err == nil && ferr == nil && now.Sub(t) < 24*time.Hour {
-			sum += f
+			sp.usd, sp.turns, sp.last = sp.usd+f, sp.turns+1, t
 		}
 	}
-	return sum
+	return sp
+}
+
+// serviceStatus is service/status name: its line of whiff services, and
+// what else whiff knows of it, as a map whose keys are there only when
+// they have something to say.
+func (d *daemon) serviceStatus(name string) puff.Value {
+	now := time.Now()
+	var es []puff.Entry
+	add := func(k string, v puff.Value) { es = append(es, puff.Entry{Key: puff.Keyword(k), Val: v}) }
+	found := false
+	var agent bool
+	var day float64
+	d.do(func(st *state) {
+		s, h := st.addrs[name], st.health[name]
+		if s == nil && (h == nil || h.loadErr == "") || s != nil && (s.client || !s.keep) {
+			return
+		}
+		found = true
+		if h == nil {
+			h = &health{}
+		}
+		r := st.statusOf(name, now)
+		agent = r.agent
+		add("service", puff.Keyword(name))
+		add("agent", puff.Bool(r.agent))
+		add("status", puff.Keyword(r.state))
+		add("note", puff.String(r.note))
+		if h.file != "" {
+			add("file", puff.String(h.file))
+		}
+		if h.loadErr != "" {
+			add("load-error", puff.String(h.loadErr))
+		}
+		if !h.last.at.IsZero() {
+			add("last", mapOf("fn", puff.Keyword(h.last.fn), "at", puff.NewTime(h.last.at)))
+		}
+		if len(h.faults) > 0 {
+			add("faults", puff.Int(len(h.faults)))
+			add("fault", mapOf("at", puff.NewTime(h.faults[len(h.faults)-1]), "message", puff.String(h.fault)))
+		}
+		add("inbox", puff.Int(len(st.inbox(name))))
+		if s != nil && s.agent {
+			day = s.dayUSD
+			if s.every > 0 {
+				add("every", puff.Duration(s.every))
+			}
+		}
+	})
+	if !found {
+		return puff.Errorf("no-address", "no service :%s", name)
+	}
+	var timers []puff.Value
+	d.db.View(func(tx *bbolt.Tx) error {
+		return tx.Bucket(timersBucket).ForEach(func(k, v []byte) error {
+			if t, err := storedTimer(slices.Clone(k), string(v)); err == nil && t.addr == name {
+				fn := t.m.fn
+				if t.m.topic != "" {
+					fn = ":" + t.m.topic
+				}
+				timers = append(timers, mapOf("fn", puff.Keyword(fn), "due", puff.NewTime(t.due)))
+			}
+			return nil
+		})
+	})
+	add("timers", puff.NewVector(timers...))
+	if agent {
+		sp := agentSpent(name, now)
+		add("spent", puff.Float(sp.usd))
+		add("turns", puff.Int(sp.turns))
+		add("day", puff.Float(day))
+		if !sp.last.IsZero() {
+			add("last-turn", puff.NewTime(sp.last))
+		}
+	}
+	m, err := puff.NewMap(es...)
+	if err != nil {
+		return puff.Errorf("bad-call", "%v", err)
+	}
+	return puff.Ok(m)
+}
+
+// mapOf is a map of keyword keys and values, alternating.
+func mapOf(kvs ...any) puff.Value {
+	var es []puff.Entry
+	for i := 0; i+1 < len(kvs); i += 2 {
+		es = append(es, puff.Entry{Key: puff.Keyword(kvs[i].(string)), Val: kvs[i+1].(puff.Value)})
+	}
+	m, _ := puff.NewMap(es...)
+	return m
 }
 
 func (s status) value() puff.Value {

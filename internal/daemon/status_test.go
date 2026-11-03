@@ -24,6 +24,7 @@ func TestServiceList(t *testing.T) {
 		"teller":  `(service teller (on (x) "x" (call :me/tell "hi")))`,
 		"calm":    `(service calm (on (x) "x" (ok 1)))`,
 		"sleepy":  `(agent sleepy :prompt "Sleep.")`,
+		"ticker":  `(service ticker :start (fn () (do (send-after 1h :tick) (ok :ticking))) (on (tick) "t" (ok 1)))`,
 	})
 	start(t, dir)
 	c := dial(t, dir)
@@ -46,7 +47,7 @@ func TestServiceList(t *testing.T) {
 		}
 		return strings.Join(lines, "\n")
 	}
-	eventually(t, "everything loads", func() string { return fmt.Sprint(strings.Count(list(), "\n") + 1) }, "7")
+	eventually(t, "everything loads", func() string { return fmt.Sprint(strings.Count(list(), "\n") + 1) }, "8")
 	for _, call := range []string{`(call :crashy/x)`, `(call :teller/x)`, `(call :spender/tell "spend it")`, `(call :thinker/tell "hold")`} {
 		c.Eval(call, "")
 	}
@@ -58,8 +59,40 @@ func TestServiceList(t *testing.T) {
 		`:thinker #t :thinking <time>`,
 		`:calm #f :ok ""`,
 		`:sleepy #t :idle ""`,
+		`:ticker #f :ok ""`,
 	}, "\n")
 	eventually(t, "the services", list, want)
+
+	// service/status has the rest: each key only with something to say.
+	status := func(name string) puff.Map {
+		r, err := c.Eval("(service/status :"+name+")", "")
+		v, _ := puff.ReadValue(r.Value)
+		m, ok := v.(puff.Tag).At(0).(puff.Map)
+		if err != nil || !ok {
+			t.Fatalf("service/status :%s = %+v %v", name, r, err)
+		}
+		return m
+	}
+	has := func(name string, want ...string) {
+		t.Helper()
+		got := puff.Print(status(name))
+		for _, w := range want {
+			if !strings.Contains(got, w) {
+				t.Errorf("service/status :%s = %s\nwant it to have %s", name, got, w)
+			}
+		}
+	}
+	has("teller", ":last {:at ", ":fn :x}", `:file "`+filepath.Join(dir, "services", "teller.puff")+`"`, ":inbox 0", ":timers []")
+	has("crashy", ":faults 1", `:fault {:at `, `:message "crashy.puff:1:33: unwrap: got (none)"}`)
+	has("broken", `:load-error "broken.puff:1:1: no closing ')'"`)
+	has("ticker", ":timers [{:due ", ":fn :tick}]")
+	has("spender", ":turns 1", ":spent 0.01", ":day 0.01", ":last-turn ")
+	if got := puff.Print(status("calm")); strings.Contains(got, ":last ") || strings.Contains(got, ":fault") || strings.Contains(got, ":spent") {
+		t.Errorf("service/status :calm = %s, want no :last, :fault or :spent", got)
+	}
+	if r, _ := c.Eval("(service/status :me)", ""); !strings.HasPrefix(r.Value, "(err {:kind :no-address") {
+		t.Errorf("service/status :me = %+v, want whiff's own address unknown", r)
+	}
 
 	// A file that goes is gone from the list, failed or not.
 	os.Remove(filepath.Join(dir, "services", "broken.puff"))

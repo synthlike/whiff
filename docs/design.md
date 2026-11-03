@@ -166,7 +166,11 @@ the agent has spent its day's in the last 24 hours its turns fail
   first: `failed` to load and why, `faulting` (restarted in the last
   hour), an agent `over budget`, `waiting` on you (its messages in your
   inbox, its writes held for review), `thinking` or `busy` with jobs,
-  then `idle` agents and `ok` services.
+  then `idle` agents and `ok` services. `whiff services name`
+  (`service/status`) is one in full: its file, its load error, its
+  faults today and the last one's message, the last message it handled,
+  its inbox and timers, and for an agent its turns and dollars of the
+  last 24 hours against `:day`, and its `:every`.
 - **Shared code.** `(use "lib/http-check.puff")` brings another file's
   defs and tests in, as if they were written there: a handler's mark sees
   through them, a name defined twice is an error at both places, and

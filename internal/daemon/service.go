@@ -30,7 +30,8 @@ type service struct {
 	// agent is a service an (agent name ...) file expands to: its turns,
 	// the jobs it runs, pass the review gate, as what they do is gated.
 	agent   bool
-	dayUSD  float64 // an agent's :limits :day
+	dayUSD  float64       // an agent's :limits :day
+	every   time.Duration // an agent's :every; 0 without
 	env     *puff.Env
 	fns     map[string]handler
 	subs    map[string]subscriber   // by topic
@@ -257,9 +258,16 @@ func (d *daemon) loadSource(file, dir, src, addr string, start bool) (*service, 
 			return nil, err
 		}
 	}
-	if v, ok := s.env.Lookup("day-usd"); ok && s.agent {
-		if f, ok := v.(puff.Float); ok {
-			s.dayUSD = float64(f)
+	if s.agent {
+		if v, ok := s.env.Lookup("day-usd"); ok {
+			if f, ok := v.(puff.Float); ok {
+				s.dayUSD = float64(f)
+			}
+		}
+		if v, ok := s.env.Lookup("every"); ok {
+			if e, ok := v.(puff.Duration); ok {
+				s.every = time.Duration(e)
+			}
 		}
 	}
 	return s, nil
@@ -568,12 +576,13 @@ func (s *service) serve(ctx context.Context, m message) {
 		}
 		st.record(entry{at: begin, kind: m.kind(), id: m.id, cause: m.cause, user: m.user, from: m.from, to: m.to(s.name),
 			args: m.args, reply: r, took: time.Since(begin), gate: gate})
+		st.served(s, m, begin)
 	})
 	if m.reply != nil {
 		m.reply <- r
 	}
 	if faulted {
-		s.d.do(func(st *state) { st.faulted(s) })
+		s.d.do(func(st *state) { st.faulted(s, r) })
 		select {
 		case s.d.restarts <- s:
 		default: // the supervisor has restarts waiting; this one can wait for the next fault
