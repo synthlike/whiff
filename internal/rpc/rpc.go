@@ -17,9 +17,11 @@ import (
 	"time"
 )
 
-// Version is the protocol version. Bump it when a message changes; hello and
-// stop must stay readable by every version, so an old daemon can be stopped.
-const Version = 18
+// Version is the protocol version. Bump it when a message changes, or a
+// function clients evaluate is renamed (19: address/describe and the other
+// modules); hello and stop must stay readable by every version, so an old
+// daemon can be stopped.
+const Version = 19
 
 // Request is a client's message to the daemon. The daemon answers each with
 // a Response, in order, except an answer or a cancel, which have none.
@@ -405,13 +407,15 @@ func Dial(dir string, start func() error) (*Client, error) {
 	return c, nil
 }
 
-// Compatible says what to do when the daemon speaks another protocol.
-func (c *Client) Compatible() error {
+// Compatible says what to do when the daemon speaks another protocol. name
+// is the client's, as you start it: a long-running one (sniff, whiff mcp)
+// may be older than the binary installed since.
+func (c *Client) Compatible(name string) error {
 	switch {
 	case c.Daemon < Version:
-		return fmt.Errorf("the daemon speaks protocol %d, this whiff %d: run `whiff stop` and try again", c.Daemon, Version)
+		return fmt.Errorf("the daemon speaks protocol %d, this %s %d: run `whiff stop` and try again", c.Daemon, name, Version)
 	case c.Daemon > Version:
-		return fmt.Errorf("the daemon speaks protocol %d, this whiff only %d: reinstall whiff", c.Daemon, Version)
+		return fmt.Errorf("the daemon speaks protocol %d, this %s only %d: reinstall whiff and start %s again", c.Daemon, name, Version, name)
 	}
 	return nil
 }

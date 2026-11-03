@@ -104,7 +104,7 @@ func TestCompatible(t *testing.T) {
 	}{
 		{Version, ""},
 		{Version - 1, "run `whiff stop`"},
-		{Version + 1, "reinstall whiff"},
+		{Version + 1, fmt.Sprintf("this sniff only %d: reinstall whiff and start sniff again", Version)},
 	}
 	for _, tt := range tests {
 		dir := tempDir(t)
@@ -113,7 +113,7 @@ func TestCompatible(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		err = c.Compatible()
+		err = c.Compatible("sniff")
 		c.Close()
 		switch {
 		case tt.want == "" && err != nil:

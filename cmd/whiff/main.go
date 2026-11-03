@@ -156,7 +156,7 @@ func connect(dir string, stderr io.Writer) *rpc.Client {
 		fmt.Fprintf(stderr, "whiff: %v\n", err)
 		return nil
 	}
-	if err := c.Compatible(); err != nil {
+	if err := c.Compatible("whiff"); err != nil {
 		c.Close()
 		fmt.Fprintf(stderr, "whiff: %v\n", err)
 		return nil
