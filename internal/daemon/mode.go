@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"go.etcd.io/bbolt"
+
 	"github.com/synthlike/whiff/internal/puff"
 	"github.com/synthlike/whiff/internal/rpc"
 )
@@ -16,7 +18,14 @@ import (
 // messages to the services you name through as if you had accepted them,
 // so what those services do for it goes through too. Free lets everything
 // it sends, publishes and evaluates through. Only you set a mode, as only
-// you accept; it lasts until the session ends, or for a while.
+// you accept; it lasts until the session ends, or for a while. An agent's
+// own session lasts as long as the agent, across restarts too.
+
+// modesBucket holds the modes of agents' own sessions, :agent/<name>, by
+// address, printed as (session/mode) gives them: trusting an agent
+// outlasts a restart, as the agent does. A client's session, :agent/<n>,
+// goes with its connection, and its mode with it, so it isn't stored.
+var modesBucket = []byte("modes")
 
 // mode is an agent session's mode other than gated.
 type mode struct {
@@ -54,7 +63,7 @@ func (m *mode) name() string {
 func (st *state) modeOf(addr string) *mode {
 	m := st.modes[addr]
 	if m != nil && !m.until.IsZero() && !time.Now().Before(m.until) {
-		delete(st.modes, addr)
+		st.setMode(addr, nil)
 		st.record(entry{at: m.until, note: fmt.Sprintf(":%s's %s mode ran out: it is gated", addr, m.name())})
 		return nil
 	}
@@ -84,22 +93,81 @@ func (st *state) modeValue(addr string) puff.Value {
 	if s := st.addrs[addr]; s == nil || !s.client || !strings.HasPrefix(addr, "agent/") {
 		return puff.Errorf("no-session", "only an agent session has a mode")
 	}
-	es := []puff.Entry{{Key: puff.Keyword("mode"), Val: puff.Keyword("gated")}}
 	if m := st.modeOf(addr); m != nil {
-		es[0].Val = puff.Keyword(m.name())
-		if !m.free {
-			var services []puff.Value
-			for _, name := range slices.Sorted(maps.Keys(m.trust)) {
-				services = append(services, puff.Keyword(name))
-			}
-			es = append(es, puff.Entry{Key: puff.Keyword("services"), Val: puff.NewVector(services...)})
+		return puff.Ok(m.value())
+	}
+	v, _ := puff.NewMap(puff.Entry{Key: puff.Keyword("mode"), Val: puff.Keyword("gated")})
+	return puff.Ok(v)
+}
+
+// value is m as (session/mode) gives it, and as it is stored: {:mode
+// :trusted :services [:todo ...] :until t}, or {:mode :free}.
+func (m *mode) value() puff.Value {
+	es := []puff.Entry{{Key: puff.Keyword("mode"), Val: puff.Keyword(m.name())}}
+	if !m.free {
+		var services []puff.Value
+		for _, name := range slices.Sorted(maps.Keys(m.trust)) {
+			services = append(services, puff.Keyword(name))
 		}
-		if !m.until.IsZero() {
-			es = append(es, puff.Entry{Key: puff.Keyword("until"), Val: puff.NewTime(m.until)})
-		}
+		es = append(es, puff.Entry{Key: puff.Keyword("services"), Val: puff.NewVector(services...)})
+	}
+	if !m.until.IsZero() {
+		es = append(es, puff.Entry{Key: puff.Keyword("until"), Val: puff.NewTime(m.until)})
 	}
 	v, _ := puff.NewMap(es...)
-	return puff.Ok(v)
+	return v
+}
+
+// storedMode is the mode value printed, as p.
+func storedMode(p string) (*mode, error) {
+	get, err := fields(p)
+	if err != nil {
+		return nil, err
+	}
+	m := &mode{}
+	switch get("mode") {
+	case puff.Keyword("free"):
+		m.free = true
+	case puff.Keyword("trusted"):
+		m.trust = map[string]bool{}
+		services, _ := get("services").(puff.Vector)
+		for i := range services.Len() {
+			k, ok := services.At(i).(puff.Keyword)
+			if !ok {
+				return nil, fmt.Errorf("want services like :todo, got %s", puff.Print(services.At(i)))
+			}
+			m.trust[string(k)] = true
+		}
+	default:
+		return nil, fmt.Errorf("want :free or :trusted, got %s", p)
+	}
+	if t, ok := get("until").(puff.Time); ok {
+		m.until = t.Go()
+	}
+	return m, nil
+}
+
+// setMode makes m addr's mode, gated for nil, and stores it if addr is an
+// agent's own session. One that can't be stored still holds until a
+// restart, so it is only noted.
+func (st *state) setMode(addr string, m *mode) {
+	if m == nil {
+		delete(st.modes, addr)
+	} else {
+		st.modes[addr] = m
+	}
+	if !agentSession(addr) {
+		return
+	}
+	err := st.db.Update(func(tx *bbolt.Tx) error {
+		if m == nil {
+			return tx.Bucket(modesBucket).Delete([]byte(addr))
+		}
+		return tx.Bucket(modesBucket).Put([]byte(addr), []byte(puff.Print(m.value())))
+	})
+	if err != nil {
+		st.note(fmt.Sprintf(":%s's mode isn't stored, so a restart forgets it: %v", addr, err))
+	}
 }
 
 // clientMode sets an agent session's mode for a client: req.Target is the
@@ -162,11 +230,10 @@ func (d *daemon) clientMode(req rpc.Request) rpc.Response {
 				return
 			}
 		}
+		st.setMode(addr, m)
 		if m == nil {
-			delete(st.modes, addr)
 			note = fmt.Sprintf(":%s is gated", addr)
 		} else {
-			st.modes[addr] = m
 			note = fmt.Sprintf(":%s is %s", addr, m)
 		}
 		st.record(entry{at: time.Now(), note: note})
@@ -214,7 +281,7 @@ func (st *state) trust(addr, service string) puff.Value {
 		maps.Copy(m.trust, old.trust)
 		m.until = old.until
 	}
-	st.modes[addr] = m
+	st.setMode(addr, m)
 	st.record(entry{at: time.Now(), note: fmt.Sprintf(":%s is %s", addr, m)})
 	return puff.Done
 }

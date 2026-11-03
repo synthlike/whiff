@@ -240,7 +240,7 @@ func (d *daemon) remove(s *service) {
 			delete(st.modes, s.name)
 		}
 		if !s.client {
-			delete(st.modes, "agent/"+s.name)
+			st.setMode("agent/"+s.name, nil)
 		}
 		for _, a := range st.inbox(s.name) {
 			st.take(s.name, a.id)

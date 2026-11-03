@@ -326,7 +326,8 @@ job runs with `:session can`: whiff gives the job a token in
 `WHIFF_SESSION`, which its `whiff mcp` claims the agent's own session with,
 `:agent/<name>`, until the job ends. So every turn is the same session,
 whose mode holds from one turn to the next (`whiff trust agent/researcher
-gh`), and history has its calls under it. The session may call or send to
+gh`), and across restarts, in whiff.db, until the agent's file goes
+(`whiff services researcher` shows it), and history has its calls under it. The session may call or send to
 its `:can` functions and nothing else: no eval, publish, subscribe or
 other inbox, enforced by whiff, not by Claude's permissions. Its tools act
 in the agent's `:dir`, `whiff mcp --dir`, while its Claude session stays in

@@ -155,6 +155,18 @@ func showService(dir, name string, stdout, stderr io.Writer) int {
 		}
 		line("turns", s)
 	}
+	if mode, ok := get(m, "mode").(puff.Map); ok {
+		s := text(mode, "mode")
+		if v, ok := get(mode, "services").(puff.Vector); ok {
+			for i := range v.Len() {
+				s += " " + puff.Print(v.At(i))
+			}
+		}
+		if t, ok := get(mode, "until").(puff.Time); ok {
+			s += ", for " + roughly(t.Go().Sub(now))
+		}
+		line("mode", s)
+	}
 	if e, ok := get(m, "every").(puff.Duration); ok {
 		line("every", puff.Print(e))
 	}

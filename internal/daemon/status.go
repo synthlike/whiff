@@ -301,6 +301,9 @@ func (d *daemon) serviceStatus(name string) puff.Value {
 		add("inbox", puff.Int(len(st.inbox(name))))
 		if s != nil && s.agent {
 			day = s.dayUSD
+			if m := st.modeOf("agent/" + name); m != nil {
+				add("mode", m.value())
+			}
 			if s.every > 0 {
 				add("every", puff.Duration(s.every))
 			}

@@ -901,3 +901,61 @@ func TestStoredJob(t *testing.T) {
 		t.Errorf("lost = %s", r)
 	}
 }
+
+// Trusting an agent outlasts a restart, as the agent does; it goes when the
+// agent's file does, even while whiff is down.
+func TestAgentModeSurvivesRestart(t *testing.T) {
+	dir := tempDir(t)
+	writeServices(t, dir, map[string]string{
+		"scout": `(agent scout :prompt "Look.")`,
+		"notes": `(service notes (on (add x) "Adds." x))`,
+	})
+	done := start(t, dir)
+	c := dial(t, dir)
+	if r, err := c.Mode("agent/scout", "trusted", []string{"notes"}, time.Hour); err != nil || r.Value != "(ok :done)" {
+		t.Fatalf("trust = %+v %v", r, err)
+	}
+	mode := func() string {
+		t.Helper()
+		r, err := c.Eval("(service/status :scout)", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, after, _ := strings.Cut(r.Value, ":mode ")
+		before, _, _ := strings.Cut(after, " :until")
+		return before
+	}
+	if got := mode(); got != "{:mode :trusted :services [:notes]" {
+		t.Errorf("mode = %q", got)
+	}
+	stopDaemon(t, c, done)
+
+	done = start(t, dir)
+	c = dial(t, dir)
+	if got := mode(); got != "{:mode :trusted :services [:notes]" {
+		t.Errorf("mode after a restart = %q", got)
+	}
+	if r, err := c.Mode("agent/scout", "free", nil, 0); err != nil || r.Value != "(ok :done)" {
+		t.Fatalf("free = %+v %v", r, err)
+	}
+	stopDaemon(t, c, done)
+	done = start(t, dir)
+	c = dial(t, dir)
+	if r, _ := c.Eval("(service/status :scout)", ""); !strings.Contains(r.Value, ":mode {:mode :free}") {
+		t.Errorf("free after a restart = %s", r.Value)
+	}
+	stopDaemon(t, c, done)
+
+	os.Remove(filepath.Join(dir, "services", "scout.puff"))
+	done = start(t, dir)
+	c = dial(t, dir)
+	stopDaemon(t, c, done)
+	withDB(t, dir, func(db *bbolt.DB) {
+		db.View(func(tx *bbolt.Tx) error {
+			if v := tx.Bucket(modesBucket).Get([]byte("agent/scout")); v != nil {
+				t.Errorf("a gone agent's mode is stored: %s", v)
+			}
+			return nil
+		})
+	})
+}

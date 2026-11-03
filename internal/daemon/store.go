@@ -64,7 +64,7 @@ func openStore(services string) (*bbolt.DB, error) {
 		return nil, err
 	}
 	err = db.Update(func(tx *bbolt.Tx) error {
-		for _, b := range [][]byte{stateBucket, metaBucket, inboxBucket, timersBucket, tasksBucket, historyBucket} {
+		for _, b := range [][]byte{stateBucket, metaBucket, inboxBucket, timersBucket, tasksBucket, historyBucket, modesBucket} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err
 			}
@@ -326,7 +326,7 @@ func (st *state) acceptHeld(id int64) (*asked, error) {
 }
 
 // load reads what was stored into a new state: the end of history, the
-// inboxes, the timers, and the jobs whiff lost, and the last id, which is at
+// inboxes, the timers, the jobs whiff lost, agents' sessions' modes, and the last id, which is at
 // least the last id in the inboxes and tasks. What it can't read stays
 // stored, and noted, rather than being lost. It deletes the results that
 // ended more than resultKept ago.
@@ -408,6 +408,18 @@ func (st *state) load() {
 				return err
 			}
 		}
+		err = tx.Bucket(modesBucket).ForEach(func(k, v []byte) error {
+			m, err := storedMode(string(v))
+			if err != nil {
+				st.note(fmt.Sprintf(":%s's mode can't be read, so it is gated: %v", k, err))
+				return nil
+			}
+			st.modes[string(k)] = m
+			return nil
+		})
+		if err != nil {
+			return err
+		}
 		n, err := storedInt(tx, nextIDKey)
 		st.nextID = max(st.nextID, n)
 		return err
@@ -471,6 +483,15 @@ func (d *daemon) resume() {
 			}
 			if st.addrs[a.addr] == nil {
 				away[a.addr]++
+			}
+		}
+		// An agent whose file has gone takes its session's mode with it, as
+		// it would have had whiff been running; one that fails to load
+		// keeps it, as it does then.
+		for _, addr := range slices.Sorted(maps.Keys(st.modes)) {
+			name := strings.TrimPrefix(addr, "agent/")
+			if agentSession(addr) && st.addrs[name] == nil && st.health[name] == nil {
+				st.setMode(addr, nil)
 			}
 		}
 		for _, addr := range slices.Sorted(maps.Keys(away)) {
