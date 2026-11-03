@@ -589,12 +589,16 @@ function showSession(d, name) {
 }
 
 let addresses = [];
+let addressesErr = ""; // why the last load failed, as whiff said it
 let linked = false; // #:name has been shown
 
 async function loadAddresses() {
   try {
     addresses = await getJSON("api/addresses");
-  } catch {
+    addressesErr = "";
+  } catch (err) {
+    addressesErr = err.message;
+    drawAddresses();
     return;
   }
   marks = new Map();
@@ -640,7 +644,8 @@ function drawAddresses() {
     };
     box.append(b);
   }
-  if (!addresses.length) box.append(el("p", "hint", "None while whiff isn't running."));
+  if (addressesErr) box.append(el("p", "hint", addressesErr));
+  else if (!addresses.length) box.append(el("p", "hint", "None while whiff isn't running."));
 }
 
 // showAddress shows an address's functions and state; #:name links to it.

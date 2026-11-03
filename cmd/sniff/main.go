@@ -221,7 +221,7 @@ func (s *server) dial() (*rpc.Client, error) {
 	if err != nil {
 		return nil, errors.New("whiff isn't running")
 	}
-	if err := c.Compatible(); err != nil {
+	if err := c.Compatible("sniff"); err != nil {
 		c.Close()
 		return nil, err
 	}

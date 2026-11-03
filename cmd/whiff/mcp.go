@@ -167,7 +167,7 @@ func dialAgent(dir string) (*rpc.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := c.Compatible(); err != nil {
+	if err := c.Compatible("whiff mcp"); err != nil {
 		c.Close()
 		return nil, err
 	}
