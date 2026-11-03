@@ -54,6 +54,7 @@ type jobOpts struct {
 	stdin      *string
 	dir        string // where it runs
 	text       bool   // :as :text
+	agent      bool   // :origin :agent: a model writes its output
 	retry      int    // how many times it may run again
 	idempotent bool   // running it twice does what running it once does
 	// can is, for :session, the functions the job's whiff mcp may call as
@@ -87,7 +88,7 @@ func (d *daemon) jobsService() *service {
 	return &service{name: "jobs", d: d, cur: caller{addr: "jobs"},
 		fns: map[string]handler{
 			"run": {params: []string{"cmd", "opts"}, optional: 1, mark: puff.MarkWrite, marked: true, native: d.runJob, cmd: true,
-				doc: "Run cmd, [program args...], here; pending now, {:exit :stdout :stderr} when done. Options: :timeout (1h), or :none for a server; :stdin, a string; :dir, where it runs; :as :text answers (ok stdout), or (err {:kind :exit}) unless it exits 0; :origin :agent, for a job whose output a model writes, answers as :agent's; :retry n runs it again, up to n times, under its id, if a timeout or whiff stopped it, or whiff died while it ran, and only if it is :read or :idempotent #t says running it twice is safe; :session [:addr/fn ...], from a service: the job's whiff mcp acts as an agent session, :agent/<service> for an agent's turn or a new :agent/<n>, reaching only those functions, gated as any agent's, and it answers as :agent's. :read for a read-only command, as whiff ls lists them."},
+				doc: "Run cmd, [program args...], here; pending now, {:exit :stdout :stderr} when done. Options: :timeout (1h), or :none for a server; :stdin, a string; :dir, where it runs; :as :text answers (ok stdout), or (err {:kind :exit}) unless it exits 0; :origin :agent, for a job whose output a model writes, answers as :agent's; :retry n runs it again, up to n times, under its id, if a timeout or whiff stopped it, or whiff died while it ran, and only if it is :read or :idempotent #t says running it twice is safe; :session [:addr/fn ...], from a service: the job's whiff mcp acts as an agent session, :agent/<service> for an agent's turn or a new :agent/<n>, reaching only those functions, gated as any agent's. :read for a read-only command, as whiff ls lists them."},
 			"list": {mark: puff.MarkRead, marked: true, native: d.listJobs,
 				doc: "The running jobs, each {:id :cmd :cwd :from}."},
 			"cancel": {params: []string{"id"}, mark: puff.MarkWrite, marked: true, native: d.cancelJob,
@@ -125,7 +126,9 @@ func (d *daemon) runJob(m message, args []puff.Value) (puff.Value, error) {
 		if id == 0 {
 			id = st.newID()
 		}
-		j.ticket = ticket{id: id, msg: m.id, from: m.from, dir: m.dir, user: user, session: m.session}
+		// A job in a chain you accepted goes on in it, unless a model writes
+		// its output: what its sender does with that is the agent's.
+		j.ticket = ticket{id: id, msg: m.id, from: m.from, dir: m.dir, user: user, session: m.session, reviewed: m.reviewed && !opts.agent}
 		j.began(p)
 		st.jobs[j.id] = j
 		if err := d.keepJob(j); err != nil {
@@ -176,7 +179,7 @@ func jobArgs(m message, args []puff.Value) (puff.Vector, jobOpts, bool, error) {
 				o.dir = filepath.Join(m.dir, o.dir)
 			}
 		case puff.Equal(e.Key, puff.Keyword("origin")) && puff.Equal(e.Val, puff.Keyword("agent")):
-			user = false
+			user, o.agent = false, true
 		case puff.Equal(e.Key, puff.Keyword("as")) && puff.Equal(e.Val, puff.Keyword("text")):
 			o.text = true
 		case puff.Equal(e.Key, puff.Keyword("retry")) && isInt && n > 0:
@@ -188,7 +191,7 @@ func jobArgs(m message, args []puff.Value) (puff.Vector, jobOpts, bool, error) {
 			if err != nil {
 				return cmdv, o, user, err
 			}
-			o.can, user = can, false
+			o.can = can
 		default:
 			return cmdv, o, user, fmt.Errorf("want {:timeout d :stdin s :dir path :as :text :origin :agent :retry n :idempotent b :session [:addr/fn ...]}, a positive duration or :none, a count and strings, got %s", puff.Print(opts))
 		}

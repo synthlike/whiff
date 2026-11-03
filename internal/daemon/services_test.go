@@ -1768,7 +1768,13 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"%s","tot
 	os.WriteFile(filepath.Join(fake, "go"), nil, 0o600)
 	dev.Close()
 
-	// The run ends ready; lead's turn on it says nothing to you.
+	// The run ends ready: its check and review go on in lead's trusted
+	// chain, as the dev's session is its own. lead's turn on it says
+	// nothing to you.
+	eventually(t, "the run ready", func() string {
+		r, _ := c.Message("call", "pipeline/runs", "[]", "")
+		return fmt.Sprint(strings.Contains(r.Value, ":step :ready"))
+	}, "true")
 	eventually(t, "lead's turn on the run's end", func() string {
 		b, _ := os.ReadFile(filepath.Join(home, "asks"))
 		return fmt.Sprint(strings.Contains(string(b), " whiff/result "))
@@ -1781,4 +1787,51 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"%s","tot
 	if text, _ := c.Inbox("me"); strings.Contains(text, "nothing") || strings.Count(text, ":lead -> ") != 1 {
 		t.Errorf("your inbox:\n%s\nwant lead's answer to your first tell alone", text)
 	}
+}
+
+// TestJobReviewedChain runs a job for a service in a chain you accepted,
+// as a trusted agent's: what the service does on its result goes on in
+// that chain, unless the job is :origin :agent, as a model writes its
+// output; then it is the agent's, gated.
+func TestJobReviewedChain(t *testing.T) {
+	dir := tempDir(t)
+	writeServices(t, dir, map[string]string{
+		"runner": `(service runner
+  (on (plain) :write "A job." (call :jobs/run ["true"]))
+  (on (model) :write "A model's job." (call :jobs/run ["true"] {:origin :agent}))
+  (on (whiff/done id r) "Writes, as its job ended." (call :writer/w (int/to-string id))))`,
+		"writer": `(service writer (on (w name) :write "Writes a file." (file/write name "x")))`,
+	})
+	start(t, dir)
+	a := dial(t, dir)
+	a.Agent = true
+	r, err := a.Claim("agent", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := strings.TrimSuffix(strings.TrimPrefix(r.Value, "(ok :"), ")")
+	c := dial(t, dir)
+	if r, err := c.Mode(session, "trusted", []string{"runner"}, 0); err != nil || r.Value != "(ok :done)" {
+		t.Fatalf("trust = %+v %v", r, err)
+	}
+	id := func(fn string) string {
+		r, _ := a.Message("call", "runner/"+fn, "[]", "")
+		if !strings.HasPrefix(r.Value, "(err {:id ") {
+			t.Fatalf("%s = %+v", fn, r)
+		}
+		return strings.Fields(strings.TrimPrefix(r.Value, "(err {:id "))[0]
+	}
+	plain, model := id("plain"), id("model")
+	eventually(t, "the plain job's write", func() string {
+		h, _ := historyOf(c)
+		return fmt.Sprint(strings.Contains(h, `:writer/w "`+plain+`"  (ok :done)`))
+	}, "true")
+	if t.Failed() {
+		h, _ := historyOf(c)
+		t.Log(h)
+	}
+	eventually(t, "the model's job's write refused", func() string {
+		h, _ := historyOf(c)
+		return fmt.Sprint(strings.Contains(h, `:writer/w "`+model+`"`) && strings.Contains(h, "no-reviewer"))
+	}, "true")
 }

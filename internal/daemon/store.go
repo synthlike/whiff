@@ -646,6 +646,9 @@ func (j *job) stored() puff.Value {
 	if j.session != "" {
 		with("session", puff.Keyword(j.session))
 	}
+	if j.reviewed {
+		with("reviewed", puff.Bool(true))
+	}
 	with("status", puff.Keyword("running"))
 	var as []puff.Value
 	for _, a := range j.attempts {
