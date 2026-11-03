@@ -389,8 +389,21 @@
   ; a vector of them merged, the first's worktree with the rest merged in:
   ; [n state], or the err it couldn't start for. extra are the run's
   ; fields beyond those, as :model and :asker.
+  ; command? is (ok :done) if check is a command, a vector of strings,
+  ; as ["go" "test" "./..."]; else why not, before a run takes a worktree.
+  (def (command? check)
+    (if (and (= (value/type check) :vector) (not (vector/empty? check))
+          (vector/all? check (fn (a) (= (value/type a) :string))))
+      (ok :done)
+      (err {:kind :bad-check :message (str "check wants a command, a vector of strings as [\"go\" \"test\" \"./...\"], got " (value/to-string check))})))
+
+  (test "a check is a command, not text that looks like one"
+    (= [(command? ["go" "test" "./..."]) (vector/map ["[\"go\",\"test\"]" [] ["go" 1]] (fn (c) (match (command? c) [(err {:kind k}) k] [_ :ok])))]
+      [(ok :done) [:bad-check :bad-check :bad-check]]))
+
   (def (begin state repo base task check quiet extra)
-    (let [bases (if (= (value/type base) :vector) base [base])
+    (let [_ (try (command? check))
+          bases (if (= (value/type base) :vector) base [base])
           base (string/trim (try (git repo ["rev-parse" (unwrap (vector/first bases))])))
           n (free repo (map/get-or state :next 1))
           dir (path/join home (str (path/base repo) "-" n))
