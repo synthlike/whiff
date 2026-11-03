@@ -33,7 +33,8 @@ One module, three binaries: `go install ./cmd/...` installs them all.
 
 - Verify library APIs with `go doc` before using them; don't rely on memory.
 - Ask before adding a dependency. Approved: `github.com/modelcontextprotocol/go-sdk`
-  (for `whiff mcp`), `go.etcd.io/bbolt` (for durable state).
+  (for `whiff mcp`), `go.etcd.io/bbolt` (for durable state), `golang.org/x/term`
+  (to tell a terminal from /dev/null).
 - No config file. Services live in `~/.whiff/services/`.
 - puff values are immutable. There is no nil and no truthiness: lookups return
   Options, failures return Results, and messages are printed puff values.

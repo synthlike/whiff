@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"golang.org/x/term"
+
 	"github.com/synthlike/whiff/internal/puff"
 )
 
@@ -25,11 +27,15 @@ const usage = `usage:
 `
 
 func main() {
-	fi, err := os.Stdin.Stat()
-	interactive := err == nil && fi.Mode()&os.ModeCharDevice != 0
 	interrupts := make(chan os.Signal, 1)
 	signal.Notify(interrupts, os.Interrupt)
-	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, interactive, interrupts))
+	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, terminal(os.Stdin), interrupts))
+}
+
+// terminal says whether f is a terminal: /dev/null is a character device
+// too, but gets no prompt.
+func terminal(f *os.File) bool {
+	return term.IsTerminal(int(f.Fd()))
 }
 
 // run is puff with its arguments and streams, returning the exit code.

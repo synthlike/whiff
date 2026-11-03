@@ -159,3 +159,30 @@ func quote(t *testing.T) string {
 	}
 	return `"` + wd + `"`
 }
+
+// TestTerminal: only a terminal gets a prompt in whiff repl, not /dev/null
+// (a character device too) or a pipe.
+func TestTerminal(t *testing.T) {
+	null, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer null.Close()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	defer w.Close()
+	if terminal(null) || terminal(r) {
+		t.Errorf("terminal: /dev/null %v, a pipe %v; want false", terminal(null), terminal(r))
+	}
+	tty, err := os.Open("/dev/tty")
+	if err != nil {
+		t.Skip("no terminal:", err)
+	}
+	defer tty.Close()
+	if !terminal(tty) {
+		t.Error("terminal(/dev/tty) = false")
+	}
+}
