@@ -1,0 +1,102 @@
+; whiff's turn loop, which an (agent name :prompt "..." ...) file runs as
+; the service name. whiff adds prompt, model (or "") and every (or 0s) as
+; defs before these forms, and leaves out wake when there's no :every.
+;
+; Each message wakes Claude for one turn of the same session, so the agent
+; remembers the whole conversation, days apart; its answer lands in your
+; inbox, and replying to an answer is your next message. It has no tools.
+; Its home, ~/.whiff/agents/<its name>, holds its session's id (Claude keeps
+; sessions per directory) and the ids of the turns it started. Its turns are
+; :agent's.
+
+(def name (string/slice (value/to-string (self)) 1))
+(def home (path/join (os/home) ".whiff" "agents" name))
+(def session-file (path/join home "session")) ; the conversation's id
+(def started (path/join home "started"))      ; the id once it has begun
+(def turns (path/join home "turns"))          ; each turn's job id, a line each
+(def wakes (path/join home "wakes"))          ; the scheduled ones' ids
+(def system (str "You are " name ", " """
+  a long-running agent living in whiff, the user's personal message
+  daemon. The user leaves you messages, which arrive as turns of one
+  conversation, sometimes days apart. You have no tools. Answer briefly and
+  plainly: your answer is left in the user's inbox, and their reply to it
+  is their next message.
+  """ "\n" prompt))
+
+(def (read-file path) (string/trim (or-else (file/read-text path) "")))
+(def (read-lines path) (string/lines (or-else (file/read-text path) "")))
+
+; session is the conversation's id, made on its first turn.
+(def (session)
+  (match [(read-file session-file) (read-file started)]
+    [["" ""]
+     (let [id (uuid/new)]
+       (do (try (file/write session-file id)) (ok id)))]
+    [["" s] (ok s)] ; begun before there was a session file
+    [[s _] (ok s)]))
+
+(def (claude id)
+  (vector/concat ["claude" "-p" "--tools" "" "--append-system-prompt" system]
+    (if (= model "") [] ["--model" model])
+    (if (= (read-file started) id) ["--resume" id] ["--session-id" id])))
+
+; busy? is whether the last turn's job still runs.
+(def (busy?)
+  (match [(vector/last (read-lines turns)) (call :jobs/list)]
+    [[(some last) (ok js)]
+     (vector/any? js (fn ({:id i}) (= (int/to-string i) last)))]
+    [_ #f]))
+
+; turn starts one turn with text, a scheduled one if wake: (ok :thinking),
+; or (err {:kind :busy}).
+(def (turn text wake)
+  (if (busy?)
+    (err {:kind :busy :message (string/concat name " is still answering your last message; send it again in a moment")})
+    (let [_ (try (file/mkdir home))
+          id (try (submitted (call :jobs/run (claude (try (session))) {:stdin text :dir home :as :text :timeout 10m :origin :agent})))]
+      (do (try (file/append turns (str id "\n")))
+        (if wake (try (file/append wakes (str id "\n"))) (ok :done))
+        (ok :thinking)))))
+
+; answered leaves a turn's answer in your inbox; a scheduled turn's
+; "nothing" stays out of it.
+(def (answered r wake)
+  (match r
+    [(ok answer) when (and wake (= (string/lower (string/trim answer)) "nothing"))
+     (do (try (file/write started (try (session)))) (ok :done))]
+    [(ok answer) (do (try (file/write started (try (session)))) (call :me/tell (string/trim answer)))]
+    [(err {:kind :exit :stderr e}) when (string/contains? e "already in use")
+     (do (try (file/write started (try (session))))
+       (call :me/tell "My session had already begun, so that message was lost; please send it again."))]
+    [(err e) (call :me/tell (string/concat "I couldn't answer: " (value/to-string e)))]))
+
+(on (tell text)
+  "Leaves the agent a message: (ok :thinking) now, and its answer in your inbox; (err {:kind :busy}) while it answers the last one."
+  (turn text #f))
+
+(on (forget)
+  "Ends the conversation: the next message starts a new one, which remembers nothing."
+  (do (try (file/write session-file ""))
+    (try (file/write started ""))
+    (ok :forgotten)))
+
+(on (wake)
+  "A scheduled turn, which whiff sends every :every: it answers only if there's something to tell you. whiff's own loop: tell the agent instead."
+  (do (send-after every :wake)
+    (if (busy?)
+      (ok :busy)
+      (turn (str "This is your scheduled turn; you have one every " (value/to-string every)
+              ". Look again at what the user asked you to keep track of. If there is nothing worth telling them, answer only: nothing")
+        #t))))
+
+(on (whiff/done id r)
+  "A turn's answer goes to your inbox; your reply to one, if it is text, is the next message."
+  (let [i (int/to-string id)]
+    (cond
+      [(vector/contains? (read-lines turns) i) (answered r (vector/contains? (read-lines wakes) i))]
+      [_ (match r
+           [(ok text) when (= (value/type text) :string)
+            (match (turn text #f)
+              [(err {:kind :busy}) (call :me/tell "I'm still answering your last message; reply again in a moment.")]
+              [res res])]
+           [_ (ok :done)])])))

@@ -244,6 +244,15 @@ func TestLoadService(t *testing.T) {
 		{"twice", `(service twice (on (f) "Doc." (ok 1)) (on (f) "Doc." (ok 2)))`, ":1:44: f is already defined at"},
 		{"fault", `(service fault (def x (+ 1 1.0)))`, ":1:23: +: can't add int and float"},
 		{"forever", `(service forever (def x (loop [] (recur))))`, "cancelled"},
+		{"agent", `(agent agent :prompt "Watch things.")`, ""},
+		{"agentall", `(agent agentall :prompt "p" :model "opus")`, ""},
+		{"agentnamed", `(agent other :prompt "p")`, ":1:1: service wants its name, agentnamed, as in its file name"},
+		{"agentnoprompt", `(agent agentnoprompt :model "opus")`, ":1:1: agent wants :prompt, a string saying what it is for"},
+		{"agentopt", `(agent agentopt :prompt "p" :can [:gh/prs])`, ":1:29: unknown agent option :can; it takes :prompt, :model and :every"},
+		{"agenttwice", `(agent agenttwice :prompt "p" :prompt "q")`, ":1:31: agent takes :prompt once"},
+		{"agentevery", `(agent agentevery :prompt "p" :every "1d")`, ":1:31: :every wants a duration, as 1d"},
+		{"agentnone", `(agent agentnone :prompt)`, ":1:18: :prompt wants a string, what the agent is for"},
+		{"agentbody", `(agent agentbody :prompt "p" (def x 1))`, `:1:30: agent takes options, as :prompt "...", not (def x 1)`},
 	}
 	set(t, &loadTimeout, 100*time.Millisecond)
 	d := &daemon{ctx: context.Background()}

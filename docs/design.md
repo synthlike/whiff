@@ -140,7 +140,10 @@ only ever handling one message.
 
 A service is a file, `(service name forms...)`: `(on (fn params...) "doc"
 body...)` handlers, `(ask ...)` functions, `(on :topic (v) ...)`
-subscribers and private `def`s.
+subscribers and private `def`s. An agent is a file too, `(agent name
+:prompt "..." [:model "..."] [:every d])`, which whiff runs as a service of
+its own turn loop (`internal/daemon/agent.puff`): `tell`, `forget`, a
+`wake` with `:every`, and its answers in `:me`'s inbox.
 
 - **Supervised.** The daemon looks at `~/.whiff/services/` twice a second:
   a saved file reloads, a deleted one unloads, a fault restarts the service

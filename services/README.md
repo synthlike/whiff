@@ -34,10 +34,12 @@ Or try one without installing it: `whiff try services/git.puff status`.
 - `plan`: `start goal check` has a planner Claude split goal into a few
   tasks and builds them one after another as `pipeline` runs, each from the
   last one's branch. `plans` says where each is. Needs `pipeline`.
-- `assistant`: a resident agent. `tell text` wakes Claude for one turn of
-  the same session, with no tools; its answer lands in your inbox (`whiff
-  inbox`), and replying to it is your next message. Its home is
-  `~/.whiff/agents/assistant`. Needs the claude CLI.
+- `assistant`: a resident agent, one `(agent assistant :prompt "...")`
+  form. `tell text` wakes Claude for one turn of the same session, with no
+  tools; its answer lands in your inbox (`whiff inbox`), and replying to it
+  is your next message. Its home is `~/.whiff/agents/assistant`. Another
+  agent is another file, with its own `:prompt`, and `:model` and `:every
+  1d` if you like. Needs the claude CLI.
 - `procs`: your dev servers and containers, named per project in the file
   (copy it and fill in `procs`): `up :shop` starts them in order, `down`,
   `restart`, `runs`, `logs :shop/api`, and `view` with Start, Stop, Restart

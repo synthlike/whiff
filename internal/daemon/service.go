@@ -118,10 +118,15 @@ func (d *daemon) loadSource(file, dir, src, addr string, start bool) (*service, 
 	if err != nil {
 		return nil, err
 	}
-	if len(forms) != 1 || !isList(forms[0], "service") {
-		return nil, &puff.Error{Pos: puff.Pos{File: file, Line: 1, Col: 1}, Msg: "a service file holds one (service name ...)"}
+	if len(forms) != 1 || !isList(forms[0], "service") && !isList(forms[0], "agent") {
+		return nil, &puff.Error{Pos: puff.Pos{File: file, Line: 1, Col: 1}, Msg: "a service file holds one (service name ...) or (agent name ...)"}
 	}
 	srv := forms[0]
+	if isList(srv, "agent") {
+		if srv, err = agentService(srv); err != nil {
+			return nil, err
+		}
+	}
 	name := strings.TrimSuffix(filepath.Base(file), ".puff")
 	if len(srv.Items) < 2 || srv.Items[1].Kind != puff.FormSymbol || srv.Items[1].Name != name {
 		return nil, &puff.Error{Pos: srv.Pos, Msg: fmt.Sprintf("service wants its name, %s, as in its file name", name)}

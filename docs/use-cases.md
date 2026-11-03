@@ -221,7 +221,17 @@ whiff reply 7 "and the docs?"     # the next turn of the same conversation
 
 Each message wakes Claude for one turn of one long session, days apart if
 need be; its answer waits in your inbox, `:me`'s, and your reply is the next
-turn. Copy `assistant.puff` under another name for another one.
+turn. `assistant.puff` is one form, and another agent is another file:
+
+```lisp
+(agent researcher
+  :prompt "Follow the BIP-360 discussion for the user."
+  :model "opus"
+  :every 1d)
+```
+
+`:every` gives it a turn of its own each day, which reaches your inbox only
+if it has something to say.
 
 ## Services that ask you
 

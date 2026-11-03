@@ -378,7 +378,8 @@ echo "reviewed:"; grep '^+[^+]'
 
 // TestAssistantService runs services/assistant.puff, installed, with a
 // fake claude on PATH that says whether it starts or resumes the session
-// and echoes the message.
+// and echoes the message; and watcher, an agent with :model and :every,
+// whose first scheduled turn has nothing to say and its second news.
 func TestAssistantService(t *testing.T) {
 	src, err := os.ReadFile(filepath.Join("..", "..", "services", "assistant.puff"))
 	if err != nil {
@@ -390,8 +391,14 @@ func TestAssistantService(t *testing.T) {
 	fake := `#!/bin/sh
 [ "$1 $2 $3" = "-p --tools " ] || { echo "want no tools, got $*" >&2; exit 9; }
 case "$*" in *--session-id*) mode=new ;; *--resume*) mode=resume ;; esac
-for a; do case "$prev" in --session-id|--resume) echo "$a" > last-id ;; esac; prev=$a; done
+model=default
+for a; do case "$prev" in --session-id|--resume) echo "$a" > last-id ;; --model) model=$a ;; --append-system-prompt) sys=$a ;; esac; prev=$a; done
 msg=$(cat)
+case "$msg" in *"scheduled turn"*)
+  case "$sys" in *"Watch the thread."*) ;; *) echo "no prompt in $sys" >&2; exit 9 ;; esac
+  if [ -e told ]; then echo nothing; elif [ -e woke ]; then touch told; echo "news from $model"; else touch woke; echo " Nothing "; fi
+  exit ;;
+esac
 case "$msg" in slow) sleep 1 ;; fail) echo "it broke" >&2; exit 1 ;; esac
 echo "$mode in $(basename "$PWD"): $msg"
 `
@@ -407,7 +414,8 @@ echo "$mode in $(basename "$PWD"): $msg"
 	os.WriteFile(filepath.Join(helperHome, "started"), []byte("old-id"), 0o600)
 	writeServices(t, dir, map[string]string{
 		"assistant": string(src),
-		"helper":    strings.Replace(string(src), "(service assistant", "(service helper", 1),
+		"helper":    strings.Replace(string(src), "(agent assistant", "(agent helper", 1),
+		"watcher":   `(agent watcher :prompt "Watch the thread." :model "opus" :every 1s)`,
 	})
 	start(t, dir)
 	c := dial(t, dir)
@@ -463,7 +471,7 @@ echo "$mode in $(basename "$PWD"): $msg"
 	inboxed(`:assistant -> :me/tell "I couldn't answer: {:exit 1 :kind :exit :message \"job `)
 	inboxed(` exited 1\" :stderr \"it broke\\n\"}"`)
 	// The first was replied to and the second dismissed: slow's and fail's wait.
-	if text, _ := c.Inbox("me"); strings.Count(text, "\n") != 2 {
+	if text, _ := c.Inbox("me"); strings.Count(text, ":assistant -> ") != 2 {
 		t.Errorf("want two answers waiting:\n%s", text)
 	}
 	// Its turns are the agent's, whoever wrote to it.
@@ -487,6 +495,12 @@ echo "$mode in $(basename "$PWD"): $msg"
 	inboxed(`:helper -> :me/tell "resume in helper: hi"`)
 	if id, _ := os.ReadFile(filepath.Join(helperHome, "last-id")); string(id) != "old-id\n" {
 		t.Errorf("helper resumed %q, want old-id", id)
+	}
+
+	// A scheduled turn's "nothing" stays out of your inbox; its news doesn't.
+	inboxed(`:watcher -> :me/tell "news from opus"`)
+	if text, _ := c.Inbox("me"); strings.Contains(strings.ToLower(text), "nothing") {
+		t.Errorf("a scheduled turn's nothing reached the inbox:\n%s", text)
 	}
 }
 
