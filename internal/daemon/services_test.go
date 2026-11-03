@@ -1139,6 +1139,51 @@ echo "changed things"
 	eventually(t, "the run finishing", func() string { return strconv.FormatBool(strings.Contains(call("runs", "[]"), ":step :ready")) }, "true")
 }
 
+// TestPipelineTakenRun has a git worktree add a killed whiff began finish
+// between pipeline's looking for a free run and adding its own: a git that
+// takes whiff/1 first. The run starts as run 2 instead of failing.
+func TestPipelineTakenRun(t *testing.T) {
+	real, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("no git")
+	}
+	src, err := os.ReadFile(filepath.Join("..", "..", "services", "pipeline.puff"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := tempDir(t)
+	bin := filepath.Join(dir, "bin")
+	os.Mkdir(bin, 0o700)
+	git := `#!/bin/sh
+case "$*" in *"worktree add -q -b whiff/1 "*) "` + real + `" -C "$2" branch whiff/1 ;; esac
+exec "` + real + `" "$@"
+`
+	os.WriteFile(filepath.Join(bin, "git"), []byte(git), 0o700)
+	os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\ncat > /dev/null\nsleep 30\n"), 0o700)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("HOME", dir)
+	t.Setenv("GIT_AUTHOR_NAME", "t")
+	t.Setenv("GIT_AUTHOR_EMAIL", "t@example.com")
+	t.Setenv("GIT_COMMITTER_NAME", "t")
+	t.Setenv("GIT_COMMITTER_EMAIL", "t@example.com")
+	writeServices(t, dir, map[string]string{"pipeline": string(src)})
+	start(t, dir)
+	c := dial(t, dir)
+	repo := filepath.Join(dir, "repo")
+	os.Mkdir(repo, 0o700)
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"commit", "-q", "--allow-empty", "-m", "first"}} {
+		cmd := exec.Command(real, args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	if r, err := c.Message("call", "pipeline/start", `["add a feature" ["true"]]`, repo); err != nil || r.Value != "(ok 2)" {
+		t.Fatalf("start = %+v %v, want run 2", r, err)
+	}
+	c.Message("call", "pipeline/cancel", "[2]", repo)
+}
+
 // TestAgentAsk asks an agent from a client and from a service: each gets
 // the answer back as a whiff/done, asks wait their turn instead of failing
 // :busy, a failed turn keeps its error, and a reload while a turn runs

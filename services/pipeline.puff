@@ -410,10 +410,6 @@
         (recur (+ n 1))
         n)))
 
-  ; begin starts a run on task in repo, from base, a commit or branch, or
-  ; a vector of them merged, the first's worktree with the rest merged in:
-  ; [n state], or the err it couldn't start for. extra are the run's
-  ; fields beyond those, as :model and :asker.
   ; command? is (ok :done) if check is a command, a vector of strings,
   ; as ["go" "test" "./..."]; else why not, before a run takes a worktree.
   (def (command? check)
@@ -426,16 +422,30 @@
     (= [(command? ["go" "test" "./..."]) (vector/map ["[\"go\",\"test\"]" [] ["go" 1]] (fn (c) (match (command? c) [(err {:kind k}) k] [_ :ok])))]
       [(ok :done) [:bad-check :bad-check :bad-check]]))
 
+  ; worktree adds a run's worktree and branch in repo, from base, as the
+  ; first free run from n: (ok n), or why not. A git worktree add that a
+  ; killed whiff began can finish after free looked, taking that n, so a
+  ; failed add tries the next free one, 3 times in all.
+  (def (worktree repo n base)
+    (loop [n (free repo n) tries 1]
+      (match (git repo ["worktree" "add" "-q" "-b" (str "whiff/" n) (path/join home (str (path/base repo) "-" n)) base])
+        [(ok _) (ok n)]
+        [(err _) when (< tries 3) (recur (free repo (+ n 1)) (+ tries 1))]
+        [e e])))
+
+  ; begin starts a run on task in repo, from base, a commit or branch, or
+  ; a vector of them merged, the first's worktree with the rest merged in:
+  ; [n state], or the err it couldn't start for. extra are the run's
+  ; fields beyond those, as :model and :asker.
   (def (begin state repo base task check quiet extra)
     (let [_ (try (command? check))
           bases (if (= (value/type base) :vector) base [base])
           base (string/trim (try (git repo ["rev-parse" (unwrap (vector/first bases))])))
-          n (free repo (map/get-or state :next 1))
+          _ (try (file/mkdir home))
+          n (try (worktree repo (map/get-or state :next 1) base))
           dir (path/join home (str (path/base repo) "-" n))
           branch (str "whiff/" n)
           session (uuid/new)
-          _ (try (file/mkdir home))
-          _ (try (git repo ["worktree" "add" "-q" "-b" branch dir base]))
           rest (vector/slice bases 1 (vector/length bases))
           merged (if (vector/empty? rest) (ok "")
                    (git dir (vector/concat ["-c" "user.name=whiff" "-c" "user.email=whiff@localhost" "merge" "-q" "--no-edit" "-m" (str "Merge " (string/join rest ", "))] rest)))
