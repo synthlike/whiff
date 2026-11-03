@@ -27,9 +27,28 @@
     then split the goal below into at most 4 tasks, in the order to build
     them. Each task is done by a developer in one sitting and reviewed on its
     own, so make each one small, complete and testable, and say in it what to
-    test. Answer with only a JSON array of strings, one per task, and nothing
-    else.
+    test. The developer can run only the check below, and the reviewer sees
+    its result: say what to test as tests the check runs, never as other
+    commands to run. Answer with only a JSON array of strings, one per task,
+    and nothing else.
     """)
+
+  ; planner-input is what the planner reads: the prompt, the check and the
+  ; goal.
+  (def (planner-input goal check)
+    (str prompt "\n\nThe check: " (string/join check " ") "\n\nGoal: " goal))
+
+  (test "the planner hears the check, the one command the developer can run"
+    (string/contains? (planner-input "g" ["go" "test" "./..."]) "The check: go test ./...\n\nGoal: g"))
+
+  ; where names the repository at repo and the branch checked out there,
+  ; "whiff, on main", or the commit base if none is: what a draft is of.
+  (def (where repo branch base)
+    (str (path/base repo) (if (= branch "HEAD") (str ", at " (string/slice base 0 7)) (str ", on " branch))))
+
+  (test "where a plan is drafted"
+    (= [(where "/src/whiff" "main" "0123456789") (where "/src/whiff" "HEAD" "0123456789")]
+      ["whiff, on main" "whiff, at 0123456"]))
 
   (def (plan-of state n) (unwrap (map/get-in state [:plans n])))
 
@@ -115,11 +134,13 @@
 
   (def (edit-action n i) {:label "Edit" :action [:plan/edit n i] :ask "The task, as it should be"})
 
-  ; propose stops plan n at its tasks, for you to edit and approve.
+  ; propose stops plan n at its tasks, for you to edit and approve, saying
+  ; where it was planned, so a draft in the wrong repository shows.
   (def (propose state n)
     (let [{:tasks ts} (plan-of state n)
-          listed (vector/map (vector/range 0 (vector/length ts)) (fn (i) (str (+ i 1) ". " (unwrap (vector/get ts i)))))]
-      (finish state n :proposed (str "Its tasks:\n\n" (string/join listed "\n"))
+          listed (vector/map (vector/range 0 (vector/length ts)) (fn (i) (str (+ i 1) ". " (unwrap (vector/get ts i)))))
+          in (match (map/get-in state [:plans n :where]) [(some w) (str ", in " w)] [_ ""])]
+      (finish state n :proposed (str "Its tasks" in ":\n\n" (string/join listed "\n"))
         [(approve-action n) (discard-action n)])))
 
   ; moved is r, once :plan/changed says plan n's tickets moved, so a client
@@ -133,12 +154,14 @@
   (def (begin state goal check draft)
     (let [repo (string/trim (try (proc/output ["git" "rev-parse" "--show-toplevel"])))
           base (string/trim (try (proc/output ["git" "-C" repo "rev-parse" "HEAD"])))
+          branch (string/trim (try (proc/output ["git" "-C" repo "rev-parse" "--abbrev-ref" "HEAD"])))
           n (map/get-or state :next 1)
           id (try (submitted (call :jobs/run ["claude" "-p" "--strict-mcp-config" "--tools" "Read,Glob,Grep" "--no-session-persistence"]
-                               {:stdin (str prompt "\n\nGoal: " goal) :dir repo :as :text :timeout 10m})))]
+                               {:stdin (planner-input goal check) :dir repo :as :text :timeout 10m})))]
       (moved n (ok [n (-> state
                         (map/set :next (+ n 1))
-                        (map/set-in [:plans n] {:goal goal :repo repo :base base :check check :step :planning :tasks [] :draft draft})
+                        (map/set-in [:plans n] {:goal goal :repo repo :base base :check check :step :planning :tasks [] :draft draft
+                                                :where (where repo branch base)})
                         (map/set-in [:jobs id] n))]))))
 
   (on (start state goal check) :write :update
