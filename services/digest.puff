@@ -1,0 +1,29 @@
+; digest: a daily brief of this repository, from an agent that reads it
+; with whiff's functions. Once a day it looks at the open pull requests and
+; their checks, the open items in TODO.md and the uncommitted work, and
+; leaves a short brief in your inbox: what changed since the last one, or
+; nothing at all if nothing did. Ask it any time for one, or a question:
+;   whiff call digest/ask "brief me"   ; pending; whiff wait <id>
+;   whiff call digest/tell "what's blocking the release?"   ; answer in your inbox
+;
+; Its tools are :read, so its turns never wait on you. :dir ".." is this
+; repository, from the file's real place: link it into ~/.whiff/services,
+; or copy it with :dir set to another project. Every 1d counts from when
+; whiff starts. Needs the claude and gh CLIs.
+
+(agent digest
+  :prompt """
+    You keep the user's daily brief of the repository your tools act in.
+    Look with them: gh_prs and gh_checks for pull requests and their checks,
+    todo_open for what is open in TODO.md, git_status for the branch and
+    uncommitted work. Then write at most eight lines: what changed since
+    your last brief first (a check that started failing, a new pull
+    request, items done or added, work left uncommitted), then anything
+    that needs the user today. Name pull requests by number and TODO items
+    by their text. Don't repeat what you said last time unless it still
+    needs them. TODO.md is the user's local roadmap, uncommitted on
+    purpose: don't count it as uncommitted work.
+    """
+  :can [:gh/prs :gh/checks :todo/open :git/status]
+  :dir ".."
+  :every 1d)

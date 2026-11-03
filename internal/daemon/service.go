@@ -126,7 +126,11 @@ func (d *daemon) loadSource(file, dir, src, addr string, start bool) (*service, 
 	}
 	srv := forms[0]
 	if isList(srv, "agent") {
-		if srv, err = agentService(srv); err != nil {
+		from := file
+		if dir != "" && !filepath.IsAbs(file) {
+			from = filepath.Join(dir, file)
+		}
+		if srv, err = agentService(srv, from); err != nil {
 			return nil, err
 		}
 	}

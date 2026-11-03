@@ -1,6 +1,6 @@
 ; whiff's turn loop, which an (agent name :prompt "..." ...) file runs as
-; the service name. whiff adds prompt, model (or ""), can (or []) and every
-; (or 0s) as defs before these forms, and leaves out wake when there's no
+; the service name. whiff adds prompt, model (or ""), can (or []), dir (or
+; "", an absolute path) and every (or 0s) as defs before these forms, and leaves out wake when there's no
 ; :every. With :can, a turn's tools are those whiff functions, through
 ; whiff mcp acting as the agent's session, :agent/<name>; without, it has
 ; none.
@@ -46,8 +46,9 @@
     [["" s] (ok s)] ; begun before there was a session file
     [[s _] (ok s)]))
 
-; mcp is whiff mcp, for claude's --mcp-config: the tools of a turn with :can.
-(def mcp "{\"mcpServers\":{\"whiff\":{\"command\":\"whiff\",\"args\":[\"mcp\"]}}}")
+; mcp is whiff mcp, for claude's --mcp-config: the tools of a turn with
+; :can, which act in dir, or the agent's home.
+(def mcp (json/to-string {:mcpServers {:whiff {:command "whiff" :args (if (= dir "") ["mcp"] ["mcp" "--dir" dir])}}}))
 
 (def (claude id)
   (vector/concat ["claude" "-p" "--tools" "" "--append-system-prompt" system]

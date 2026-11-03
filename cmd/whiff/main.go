@@ -52,7 +52,7 @@ const usage = `usage:
   whiff ls                        list every address's functions and their marks, each agent session's mode, then the :read overrides
   whiff state service             print a service's state, as it last committed it
   whiff reset service             forget a service's stored state, so it starts from its :state again
-  whiff mcp                       serve whiff to an agent over MCP on stdin and stdout, as :agent/<n>
+  whiff mcp [--dir path]          serve whiff to an agent over MCP on stdin and stdout, as :agent/<n>, its calls from path
   whiff stop                      stop the daemon
   whiff daemon                    run the daemon in the foreground
 
@@ -136,6 +136,13 @@ func run(args []string, dir, services string, stdout, stderr io.Writer) int {
 	case len(args) == 2 && (args[0] == "reset" || args[0] == "state"):
 		return serviceOp(dir, args[0], args[1], stdout, stderr)
 	case len(args) == 1 && args[0] == "mcp":
+		return mcpRun(dir, stderr)
+	case len(args) == 3 && args[0] == "mcp" && args[1] == "--dir":
+		// An agent's turn: its tools act in the project, not its home.
+		if err := os.Chdir(args[2]); err != nil {
+			fmt.Fprintf(stderr, "whiff: %v\n", err)
+			return 1
+		}
 		return mcpRun(dir, stderr)
 	case len(args) == 1 && args[0] == "stop":
 		return stop(dir, stderr)

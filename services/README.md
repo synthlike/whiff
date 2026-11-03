@@ -42,6 +42,10 @@ Or try one without installing it: `whiff try services/git.puff status`.
   agent is another file, with its own `:prompt`, and `:model`, `:can
   [:gh/prs]` for the functions it may use as tools, and `:every 1d` if you
   like. Needs the claude CLI.
+- `digest`: an agent that briefs you on this repository once a day: open
+  pull requests and their checks, open TODO items and uncommitted work, in
+  your inbox, and only what changed. `ask "brief me"` for one now. Its
+  tools are `:read` functions of `gh`, `todo` and `git`, so it needs those.
 - `procs`: your dev servers and containers, named per project in the file
   (copy it and fill in `procs`): `up :shop` starts them in order, `down`,
   `restart`, `runs`, `logs :shop/api`, and `view` with Start, Stop, Restart

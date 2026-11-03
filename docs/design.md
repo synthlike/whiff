@@ -308,7 +308,9 @@ job runs with `:session can`: whiff gives the job a token in
 whose mode holds from one turn to the next (`whiff trust agent/researcher
 gh`), and history has its calls under it. The session may call or send to
 its `:can` functions and nothing else: no eval, publish, subscribe or
-other inbox, enforced by whiff, not by Claude's permissions. The fence
+other inbox, enforced by whiff, not by Claude's permissions. Its tools act
+in the agent's `:dir`, `whiff mcp --dir`, while its Claude session stays in
+its home. The fence
 holds because a turn has no shell: `--tools ""`, and `whiff mcp` alone.
 
 ## History

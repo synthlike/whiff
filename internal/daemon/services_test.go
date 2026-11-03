@@ -380,7 +380,8 @@ echo "reviewed:"; grep '^+[^+]'
 // fakeClaude puts a fake claude on PATH, with HOME at dir. It says whether
 // it starts or resumes the session and echoes the message; "slow" takes a
 // second, "fail" exits 1, and "hold" waits for a file go in its directory.
-// A turn with whiff mcp's flags leaves its WHIFF_SESSION in a file token. A scheduled turn of an agent whose prompt is
+// A turn with whiff mcp's flags leaves its WHIFF_SESSION in a file token,
+// and its arguments, a line each, in args. A scheduled turn of an agent whose prompt is
 // "Watch the thread." has nothing to say the first time, then news from
 // its model, then nothing again.
 func fakeClaude(t *testing.T, dir string) {
@@ -395,7 +396,7 @@ for a; do case "$prev" in --session-id|--resume) echo "$a" > last-id ;; --model)
 msg=$(cat)
 case "$*" in *--mcp-config*)
   case "$*" in *"--strict-mcp-config --allowedTools mcp__whiff"*) ;; *) echo "want whiff mcp alone, got $*" >&2; exit 9 ;; esac
-  echo "$WHIFF_SESSION" > token ;;
+  echo "$WHIFF_SESSION" > token; printf '%s\n' "$@" > args ;;
 esac
 case "$msg" in *"scheduled turn"*)
   case "$sys" in *"Watch the thread."*) ;; *) echo "no prompt in $sys" >&2; exit 9 ;; esac
@@ -1196,8 +1197,10 @@ func TestAgentAsk(t *testing.T) {
 func TestAgentSession(t *testing.T) {
 	dir := tempDir(t)
 	fakeClaude(t, dir)
+	os.Mkdir(filepath.Join(dir, "project"), 0o700)
 	writeServices(t, dir, map[string]string{
-		"scout": `(agent scout :prompt "Look things up." :can [:notes/list])`,
+		// Its :dir is from its file, in dir/services.
+		"scout": `(agent scout :prompt "Look things up." :can [:notes/list] :dir "../project")`,
 		"notes": `(service notes
   (on (list) "The notes." (ok ["a"]))
   (on (add text) "Adds a note." (file/write "note" text)))`,
@@ -1216,6 +1219,13 @@ func TestAgentSession(t *testing.T) {
 		token = strings.TrimSpace(string(b))
 		return fmt.Sprint(len(token))
 	}, "32")
+
+	// Its whiff mcp acts in its :dir.
+	args, _ := os.ReadFile(filepath.Join(home, "args"))
+	real, _ := filepath.EvalSymlinks(filepath.Join(dir, "project"))
+	if want := `"args":["mcp","--dir","` + real + `"]`; !strings.Contains(string(args), want) {
+		t.Errorf("the turn's arguments:\n%s\nwant %s", args, want)
+	}
 
 	turn := dial(t, dir)
 	turn.Agent = true
