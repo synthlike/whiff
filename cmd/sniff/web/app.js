@@ -363,6 +363,7 @@ function append(e) {
   while (i > 0 && entries[i - 1].us > e.us) i--;
   entries.splice(i, 0, e);
   if (noteFault(e)) drawAddresses();
+  servicesSoon();
   if (selected !== null && selected >= i) selected++;
   $("empty").hidden = true;
   // A chain can gain a message anywhere, or one that began it after the
@@ -627,6 +628,82 @@ async function loadAddresses() {
   if (!linked && location.hash.startsWith("#:")) showAddress(decodeURIComponent(location.hash.slice(2)));
   linked = true;
   drawAddresses();
+  loadServices();
+}
+
+// services is each service file's line of whiff services, by name:
+// {service, agent, status, note}. It is fetched again a second after
+// history moves, and every 15 seconds for what changes on its own.
+let services = new Map();
+
+async function loadServices() {
+  try {
+    services = new Map((await getJSON("api/services")).map((s) => [s.service, s]));
+  } catch {
+    return; // the addresses say why
+  }
+  drawAddresses();
+}
+
+let servicesTimer = 0;
+function servicesSoon() {
+  clearTimeout(servicesTimer);
+  servicesTimer = setTimeout(loadServices, 1000);
+}
+setInterval(loadServices, 15000);
+
+// statusClass is the dot a service's status draws: broken, wanting you,
+// working, or none for idle and ok.
+function statusClass(status) {
+  return { failed: "fault", faulting: "fault", "over-budget": "warn", waiting: "warn", thinking: "busy", busy: "busy" }[status] || "";
+}
+
+// roughly is ms for people, in its largest unit: 40s, 12m, 3h, 2d; ago an
+// ISO time as how long before now it was.
+function roughly(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return s + "s";
+  if (s < 3600) return Math.floor(s / 60) + "m";
+  if (s < 172800) return Math.floor(s / 3600) + "h";
+  return Math.floor(s / 86400) + "d";
+}
+const ago = (at) => roughly(Date.now() - Date.parse(at)) + " ago";
+
+// serviceLines are service/status st as labelled lines, as whiff services
+// name prints them: only those with something to say.
+function serviceLines(st) {
+  const lines = [];
+  const add = (label, text) => text && lines.push([label, text]);
+  add("file", st.file);
+  add("error", st["load-error"]);
+  if (st.fault) add("faults", `${st.faults} today; the last ${ago(st.fault.at)}: ${st.fault.message}`);
+  if (st.last) add("last", `${st.last.fn} ${ago(st.last.at)}`);
+  if (st.turns !== undefined) {
+    const usd = (x) => "$" + parseFloat(x).toFixed(2);
+    add("turns", `${st.turns} in 24h, ${usd(st.spent)} of ${usd(st.day)} a day` + (st["last-turn"] ? `; the last ${ago(st["last-turn"])}` : ""));
+  }
+  add("every", st.every);
+  if (st.inbox > 0) add("inbox", st.inbox + " waiting");
+  if (st.timers?.length) add("timers", st.timers.map((t) => `${t.fn} in ${roughly(Date.parse(t.due) - Date.now())}`).join(", "));
+  return lines;
+}
+
+// statusBox is the Status section of an address's details: its state and
+// note, then serviceLines.
+async function statusBox(name) {
+  const box = el("div", "svc-status", "…");
+  try {
+    const st = await getJSON("api/service?address=" + encodeURIComponent(name));
+    const head = el("p", "svc-head " + statusClass(st.status));
+    head.append(el("span", "dot"), el("strong", "", st.status.replace("-", " ")));
+    if (st.note) head.append(" ", el("span", "", st.note));
+    const dl = el("dl");
+    for (const [k, v] of serviceLines(st)) dl.append(el("dt", "", k), el("dd", "", v));
+    box.replaceChildren(head, dl);
+  } catch (err) {
+    box.replaceChildren(el("p", "hint", err.message));
+  }
+  return box;
 }
 
 let reloading = 0;
@@ -648,16 +725,22 @@ function noteFault(e) {
 }
 
 // drawAddresses lists every address in the sidebar, with a dot: a
-// service, one whose last call faulted, or a client's.
+// service, its status when that isn't idle or ok, or a client's. A file
+// that failed to load, so has no address, is there too.
 function drawAddresses() {
   const box = $("addresses");
   box.replaceChildren();
-  for (const a of addresses) {
-    const fault = faulted.has(a.address);
-    const b = el("button", "addr" + (a.client ? " client" : "") + (fault ? " fault" : ""));
+  const failed = [...services.values()].filter((s) => !addresses.some((a) => a.address === s.service)).map((s) => ({ address: s.service, fns: [] }));
+  for (const a of [...addresses, ...failed]) {
+    const st = services.get(a.address);
+    const fault = faulted.has(a.address) && !st;
+    const quiet = !st || st.status === "ok" || st.status === "idle";
+    const cls = fault ? "fault" : st ? statusClass(st.status) : "";
+    const b = el("button", "addr" + (a.client ? " client" : "") + (cls ? " " + cls : ""));
     b.append(el("span", "dot"), el("span", "name", ":" + a.address));
-    if (fault || a.client) b.append(el("span", "note", fault ? "fault" : "client"));
-    b.title = fault ? "a service whose last call faulted; whiff restarted it" : a.client ? "a client's address" : "a service";
+    if (fault || a.client || !quiet) b.append(el("span", "note", fault ? "fault" : a.client ? "client" : st.status.replace("-", " ")));
+    b.title = fault ? "a service whose last call faulted; whiff restarted it" : a.client ? "a client's address"
+      : st ? (st.agent ? "an agent: " : "a service: ") + st.status.replace("-", " ") + (st.note ? ", " + st.note : "") : "a service";
     b.onclick = () => {
       activate(null);
       showAddress(a.address);
@@ -708,14 +791,16 @@ async function showAddress(name) {
   d.replaceChildren(el("h2", "", ":" + name));
   const agent = name.startsWith("agent/");
   if (!a) {
-    d.append(el("p", "hint", "Not loaded now."));
+    if (services.has(name)) d.append(section("Status", await statusBox(name)));
+    else d.append(el("p", "hint", "Not loaded now."));
     if (agent) showSession(d, name);
     return;
   }
   const meta = el("div", "meta");
-  meta.append(el("span", "badge", a.client ? "client" : "service"));
+  meta.append(el("span", "badge", a.client ? "client" : services.get(name)?.agent ? "agent" : "service"));
   if (a.state) meta.append(el("span", "badge", "state"));
   d.append(meta);
+  if (services.has(name)) d.append(section("Status", await statusBox(name)));
   // Its state, fetched again after you call one of its functions.
   const stateBox = el("div", "", "…");
   const loadState = async () => {

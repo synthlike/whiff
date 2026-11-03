@@ -341,6 +341,8 @@ func (s *server) handler() http.Handler {
 	mux.HandleFunc("GET /events", s.events)
 	mux.HandleFunc("GET /api/addresses", s.addresses)
 	mux.HandleFunc("GET /api/state", s.state)
+	mux.HandleFunc("GET /api/services", s.services)
+	mux.HandleFunc("GET /api/service", s.service)
 	mux.HandleFunc("GET /api/session", s.session)
 	mux.HandleFunc("GET /api/view", s.view)
 	mux.HandleFunc("GET /api/watch", s.watch)
@@ -497,6 +499,46 @@ func (s *server) state(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, treeOf(resp.Value))
+}
+
+// services answers whiff services, service/list, as plain JSON: each
+// service file {"service", "agent", "status", "note"}, what needs you
+// first.
+func (s *server) services(w http.ResponseWriter, r *http.Request) {
+	c, err := s.dial()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	defer c.Close()
+	v, err := evalOk(c, "(service/list)")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, plain(v))
+}
+
+// service answers whiff services name, service/status, as plain JSON:
+// times, dollars and durations as puff prints them. 404 for no service.
+func (s *server) service(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Query().Get("address"), ":")
+	if k, err := puff.ReadValue(":" + name); err != nil || name == "" || !puff.Equal(k, puff.Keyword(name)) {
+		http.Error(w, "want an address", http.StatusBadRequest)
+		return
+	}
+	c, err := s.dial()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	defer c.Close()
+	v, err := evalOk(c, "(service/status "+puff.Print(puff.Keyword(name))+")")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	writeJSON(w, plain(v))
 }
 
 // session answers what the agent session address did, as whiff session

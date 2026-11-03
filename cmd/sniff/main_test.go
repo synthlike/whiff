@@ -277,6 +277,31 @@ func TestSniff(t *testing.T) {
 		t.Errorf("a bad address: %s", r.Status)
 	}
 
+	// whiff services: each file's status, and one in full.
+	var svcs []map[string]any
+	if err := json.Unmarshal([]byte(body("/api/services")), &svcs); err != nil {
+		t.Fatal(err)
+	}
+	found = false
+	for _, s := range svcs {
+		if s["service"] == "greet" {
+			found = s["status"] == "ok" && s["agent"] == false && s["note"] == ""
+		}
+	}
+	if !found {
+		t.Errorf("no ok :greet in %+v", svcs)
+	}
+	var greet map[string]any
+	if err := json.Unmarshal([]byte(body("/api/service?address=greet")), &greet); err != nil {
+		t.Fatal(err)
+	}
+	if last, _ := greet["last"].(map[string]any); greet["status"] != "ok" || !strings.HasSuffix(fmt.Sprint(greet["file"]), "greet.puff") || last["fn"] != "hello" {
+		t.Errorf("service greet = %+v", greet)
+	}
+	if r := get("/api/service?address=nope"); r.StatusCode != http.StatusNotFound {
+		t.Errorf("no service: %s", r.Status)
+	}
+
 	// An agent session's writes, each with its gate, and their summary.
 	agent, err := rpc.Dial(s.dir, nil)
 	if err != nil {
