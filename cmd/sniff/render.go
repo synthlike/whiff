@@ -25,6 +25,7 @@ var pages = template.Must(template.ParseFS(tmplFS, "tmpl/*.html"))
 type shown struct {
 	View  *view
 	Value node
+	Next  []act // what an err reply offers instead, its :actions
 }
 
 // view is a view as a service answers with it, (ok view): (items [...]),
@@ -79,7 +80,18 @@ func show(printed string, marks map[string]string, back string) shown {
 	if err != nil {
 		return shown{Value: node{Kind: "lit", Text: printed}}
 	}
-	return shown{View: viewOf(v, marks, back), Value: fold(v, 0)}
+	return shown{View: viewOf(v, marks, back), Value: fold(v, 0), Next: nextOf(v, marks, back)}
+}
+
+// nextOf is what reply offers instead if it is an err with :actions, as
+// actions going back to back; nil for any other reply.
+func nextOf(reply puff.Value, marks map[string]string, back string) []act {
+	t, ok := reply.(puff.Tag)
+	if !ok || t.Name() != "err" || t.Len() != 1 {
+		return nil
+	}
+	acts, _ := get(t.At(0), "actions").(puff.Vector)
+	return actsOf(acts, marks, back)
 }
 
 // viewOf is the view in reply, or nil if it holds none, or one of a shape

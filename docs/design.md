@@ -107,7 +107,9 @@ only ever handling one message.
   `:me/tell` and views offer, `(err {:kind :no-run :actions [{:label
   "Merge whiff/2" :action [:pipeline/merge 2]}]})`: a stale action's
   error offers the ones that hold now. `whiff call` prints them as lines
-  `whiff act` takes, and sniff as buttons under what it answered.
+  `whiff act` takes, and sniff as buttons under what it answered, from
+  a view, ⌘K or Call again; a past reply in history shows only their
+  links, as what it offered may no longer hold.
 - **Faults are bugs.** Bad arguments, a non-exhaustive `match`, `(fail e)`:
   the handler stops, its caller gets `(err {:kind :fault})`, and the service
   restarts from its file. A file that doesn't load keeps the old version

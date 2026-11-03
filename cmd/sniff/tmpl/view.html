@@ -39,7 +39,8 @@
 
 {{/* A reply: its view, with the reply folded under it as puff; or the reply. */}}
 {{define "shown"}}{{if .View}}{{template "view" .View}}
-<details class="raw"><summary>as puff</summary><div class="value">{{template "value" .Value}}</div></details>{{else}}<div class="value">{{template "value" .Value}}</div>{{end}}{{end}}
+<details class="raw"><summary>as puff</summary><div class="value">{{template "value" .Value}}</div></details>{{else}}<div class="value">{{template "value" .Value}}</div>{{end}}
+{{- with .Next}}<div class="view next"><span class="actions">{{range .}}{{template "act" .}}{{end}}</span></div>{{end}}{{end}}
 
 {{define "view"}}<div class="view{{if eq .Kind "board"}} board{{end}}">
 {{- if eq .Kind "text"}}<pre>{{.Text}}</pre>
