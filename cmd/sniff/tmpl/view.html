@@ -33,7 +33,9 @@
 {{define "first"}}{{template "said" .Said}}{{with .Reply.View}}{{if and (eq .Kind "items") .Items}}<div class="view first">{{template "item" index .Items 0}}
 {{- with slice .Items 1}}<a class="more" href="{{$.Page}}">{{len .}} more</a>{{end}}</div>{{end}}{{end}}{{end}}
 
-{{define "said"}}{{with .}}<p class="said {{if .OK}}ok{{else}}err{{end}}">Sent <code>{{.Sends}}</code>: {{.Reply}}</p>{{end}}{{end}}
+{{/* What an action sent answered, and the actions an err offers next. */}}
+{{define "said"}}{{with .}}<div class="said {{if .OK}}ok{{else}}err{{end}}"><p>Sent <code>{{.Sends}}</code>: {{.Reply}}</p>
+{{- with .Actions}}<div class="view"><span class="actions">{{range .}}{{template "act" .}}{{end}}</span></div>{{end}}</div>{{end}}{{end}}
 
 {{/* A reply: its view, with the reply folded under it as puff; or the reply. */}}
 {{define "shown"}}{{if .View}}{{template "view" .View}}

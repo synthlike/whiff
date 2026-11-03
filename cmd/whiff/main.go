@@ -318,7 +318,7 @@ func result(op string, resp rpc.Response, stdout, stderr io.Writer) int {
 	case r.Name() == "err" && op == "call" && puff.Equal(kind, puff.Keyword("pending")) && id != nil:
 		fmt.Fprintf(stdout, "pending %s (whiff wait %[1]s)\n", puff.Print(id))
 	case r.Name() == "err":
-		fmt.Fprintf(stderr, "whiff: %s\n", puff.Print(r.At(0)))
+		fmt.Fprintf(stderr, "whiff: %s", errText(r.At(0)))
 		return 1
 	case op == "call" || op == "wait" || op == "accept" || op == "state":
 		if text, ok := viewText(r.At(0)); ok {

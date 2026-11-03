@@ -191,17 +191,25 @@ func itemsOf(v puff.Value, marks map[string]string, back string) ([]item, bool) 
 			}
 		}
 		acts, _ := get(m, "actions").(puff.Vector)
-		for j := range acts.Len() {
-			msg, _ := get(acts.At(j), "action").(puff.Vector)
-			label, _ := strOf(acts.At(j), "label")
-			ask, _ := strOf(acts.At(j), "ask")
-			if a, ok := actOf(label, msg, ask, marks, back); ok {
-				it.Actions = append(it.Actions, a)
-			}
-		}
+		it.Actions = append(it.Actions, actsOf(acts, marks, back)...)
 		its = append(its, it)
 	}
 	return its, true
+}
+
+// actsOf is acts, [{:label :action [...] :ask}...], as actions, leaving
+// out any whose :action isn't a message.
+func actsOf(acts puff.Vector, marks map[string]string, back string) []act {
+	var out []act
+	for j := range acts.Len() {
+		msg, _ := get(acts.At(j), "action").(puff.Vector)
+		label, _ := strOf(acts.At(j), "label")
+		ask, _ := strOf(acts.At(j), "ask")
+		if a, ok := actOf(label, msg, ask, marks, back); ok {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // actOf is msg, [:address/fn args...], as an action labelled label; false

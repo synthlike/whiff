@@ -137,6 +137,7 @@ type watcher struct {
 type said struct {
 	Sends, Reply string
 	OK           bool
+	Actions      []act // what an err reply offers next, its :actions
 }
 
 // status is whether sniff follows the daemon, and why not.
@@ -803,6 +804,28 @@ func (s *server) call(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, treeOf(sd.Reply))
 }
 
+// errActions are the actions reply, a printed (err {... :actions [...]}),
+// offers next, going back to back; nil for any other reply.
+func (s *server) errActions(reply, back string) []act {
+	v, err := puff.ReadValue(reply)
+	t, ok := v.(puff.Tag)
+	if err != nil || !ok || t.Name() != "err" || t.Len() != 1 {
+		return nil
+	}
+	acts, _ := get(t.At(0), "actions").(puff.Vector)
+	if acts.Len() == 0 {
+		return nil
+	}
+	ms := map[string]string{}
+	if c, err := s.dial(); err == nil {
+		if m, err := c.Marks(); err == nil {
+			ms = m
+		}
+		c.Close()
+	}
+	return actsOf(acts, ms, back)
+}
+
 // act sends what a page's form picked, an item's action, as you, with your
 // answer added if the form asked for one, and goes back to the page it
 // came from, which shows what it answered.
@@ -830,6 +853,9 @@ func (s *server) act(w http.ResponseWriter, r *http.Request) {
 	back := r.PostForm.Get("back")
 	if !strings.HasPrefix(back, "/") || strings.HasPrefix(back, "//") || strings.HasPrefix(back, "/\\") {
 		back = "/"
+	}
+	if !sd.OK {
+		sd.Actions = s.errActions(sd.Reply, back)
 	}
 	s.mu.Lock()
 	s.saidN++

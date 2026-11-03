@@ -297,17 +297,38 @@
             (let [{:task t :step s :round r :branch b :dir d} run]
               {:run n :task t :step s :round r :branch b :dir d :from (map/get-or run :from :none)})))))
 
+  ; run-actions are what can be done about run n now: show it, and cancel
+  ; it while it runs, or what actions offers once it ended, unless a
+  ; planner runs it.
+  (def (run-actions n run)
+    (let [{:step s :branch b} run
+          show {:label "Show review and diff" :action [:pipeline/show n]}]
+      (cond
+        [(active? s) [show {:label "Cancel the run" :action [:pipeline/cancel n]}]]
+        [(map/get-or run :quiet #f) [show]]
+        [_ (actions n s b (map/get-or run :from :none))])))
+
+  ; no-run is (err {:kind :no-run}) for an action run n doesn't take now,
+  ; saying why, with :actions, the ones it does take, if it is there.
+  (def (no-run state n why)
+    (err {:kind :no-run :message why
+          :actions (match (map/get-in state [:runs n])
+                     [(some run) (run-actions n run)]
+                     [_ []])}))
+
+  (test "an action a run doesn't take offers the ones it does"
+    (= (no-run {:runs {2 {:step :ready :branch "whiff/2"}}} 2 "run 2 is ready")
+      (err {:kind :no-run :message "run 2 is ready"
+            :actions [{:label "Show review and diff" :action [:pipeline/show 2]}
+                      {:label "Merge whiff/2" :action [:pipeline/merge 2]}]})))
+
   (on (view state) :read
     "The runs as a view: each shows its last review and diff, cancels it while it runs, and merges it once ready or retries it once it ended otherwise, unless a planner runs it."
     (ok (view/items (vector/map (map/entries (map/get-or state :runs {}))
                       (fn ([n run])
-                        (let [{:task t :step s :round r :branch b} run
-                              show {:label "Show review and diff" :action [:pipeline/show n]}]
+                        (let [{:task t :step s :round r :branch b} run]
                           {:label (str n "  " t) :detail (str (keyword/name s) ", round " r ", " b)
-                           :actions (cond
-                                      [(active? s) [show {:label "Cancel the run" :action [:pipeline/cancel n]}]]
-                                      [(map/get-or run :quiet #f) [show]]
-                                      [_ (actions n s b (map/get-or run :from :none))])})))
+                           :actions (run-actions n run)})))
           {:changed :pipeline/step})))
 
   (on (show state n) :read
@@ -322,13 +343,13 @@
       [_ (err {:kind :no-run :message (str "no run " n)})]))
 
   (on (cancel state n) :write :update
-    "Cancels run n: kills the job it waits for and leaves its worktree as it is. (err {:kind :no-run}) if there is no such run, or it has ended."
+    "Cancels run n: kills the job it waits for and leaves its worktree as it is. (err {:kind :no-run}) if there is no such run, or it has ended, with :actions, what it can do instead."
     (match (map/get-in state [:runs n])
       [(some {:step s :job id}) when (active? s)
        (do (or-else (call :jobs/cancel id) :gone)
          (publish :pipeline/step {:run n :step :cancelled})
          (ok [:cancelled (set-run state n {:step :cancelled})]))]
-      [_ (err {:kind :no-run :message (str "no run " n " is going")})]))
+      [_ (no-run state n (str "no run " n " is going"))]))
 
   (on (retry state n note) :write :update
     "Takes run n on after it gave up, failed or was cancelled, for up to 3 more rounds: the dev Claude, in the run's worktree, gets note, your words for it (\"\" for none), and the last review. (ok :retrying); (err {:kind :no-run}) unless run n ended so; (err {:kind :still-running :pid}) while its last job may still be running, as after whiff died while it ran."
@@ -345,7 +366,7 @@
                 fresh (if (map/get-or run :resumable #f) {} {:session (uuid/new)})
                 state (set-run state n (map/merge fresh {:round (+ round 1) :limit (+ round rounds)}))]
             (ok [:retrying (try (dev state n (retry-input (run-of state n) note)))]))])]
-      [_ (err {:kind :no-run :message (str "run " n " hasn't ended without being ready: nothing to retry")})]))
+      [_ (no-run state n (str "run " n " hasn't ended without being ready: nothing to retry"))]))
 
   ; A reviewer has no tools, so one that may still run after whiff died
   ; can't fight a new one: no stray check, unlike retry.
@@ -354,7 +375,7 @@
     (match (map/get-in state [:runs n])
       [(some {:step :failed :from :review :checked checked})
        (ok [:reviewing (try (review state n checked))])]
-      [_ (err {:kind :no-run :message (str "run " n " didn't fail at its review: nothing to review again")})]))
+      [_ (no-run state n (str "run " n " didn't fail at its review: nothing to review again"))]))
 
   (on (merge state n) :write :update
     "Merges ready run n's branch into the branch checked out in its repository, only as a fast-forward, then removes the run's worktree and branch: (ok branch); git's error if your branch moved on or your changes are in the way, and (err {:kind :no-run}) unless run n is ready."
@@ -362,14 +383,14 @@
       [(some {:step :ready :repo repo :branch b})
        (let [_ (try (git repo ["merge" "-q" "--ff-only" b]))]
          (ok [b (tidy state n :merged)]))]
-      [_ (err {:kind :no-run :message (str "run " n " isn't ready: nothing to merge")})]))
+      [_ (no-run state n (str "run " n " isn't ready: nothing to merge"))]))
 
   (on (discard state n) :write :update
     "Discards run n, ended and not merged: removes its worktree, uncommitted work and all, and its branch. (ok :discarded); (err {:kind :no-run}) unless run n ended so."
     (match (map/get-in state [:runs n])
       [(some {:step s}) when (or (= s :ready) (ended? s))
        (ok [:discarded (tidy state n :discarded)])]
-      [_ (err {:kind :no-run :message (str "run " n " hasn't ended, or is gone: nothing to discard")})]))
+      [_ (no-run state n (str "run " n " hasn't ended, or is gone: nothing to discard"))]))
 
   (on (whiff/done state id r) :update
     "A job a run waited for is done: the run takes its next step."
