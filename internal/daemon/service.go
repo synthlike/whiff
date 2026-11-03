@@ -518,6 +518,9 @@ func (s *service) run(ctx context.Context) {
 			}
 			s.handling = m.kept
 			s.serve(ctx, m)
+			if m.fn == "whiff/done" && m.topic == "" {
+				s.d.askedAgain(s)
+			}
 		case <-s.quit:
 			return
 		case <-ctx.Done():
@@ -666,7 +669,7 @@ func (s *service) handle(ctx context.Context, m message) (reply string, faulted,
 	}
 	// An :update handler's state is committed before its reply is sent.
 	if update && t.Name() == "ok" {
-		if r, err = s.update(t.At(0), m.topic != "" || m.fn == "whiff/done"); err != nil {
+		if r, err = s.update(t.At(0), m.topic != "" || m.fn == "whiff/done" || m.fn == "whiff/asked"); err != nil {
 			return fail("fault", "%s: %s: %v", pos, what, err)
 		}
 	}

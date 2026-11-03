@@ -231,7 +231,16 @@ turn. `assistant.puff` is one form, and another agent is another file:
 ```
 
 `:every` gives it a turn of its own each day, which reaches your inbox only
-if it has something to say.
+if it has something to say. A service uses an agent with `ask`, whose
+answer comes back to it rather than to your inbox; asks wait their turn in
+the agent's inbox (`whiff inbox researcher`):
+
+```lisp
+(on (summarize) "Asks the researcher for a summary."
+  (submitted (call :researcher/ask "summarize the thread so far")))
+(on (whiff/done id r) "Its answer."
+  (match r [(ok text) (call :me/tell text)] [e e]))
+```
 
 ## Services that ask you
 

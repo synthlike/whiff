@@ -376,16 +376,13 @@ echo "reviewed:"; grep '^+[^+]'
 	}
 }
 
-// TestAssistantService runs services/assistant.puff, installed, with a
-// fake claude on PATH that says whether it starts or resumes the session
-// and echoes the message; and watcher, an agent with :model and :every,
-// whose first scheduled turn has nothing to say and its second news.
-func TestAssistantService(t *testing.T) {
-	src, err := os.ReadFile(filepath.Join("..", "..", "services", "assistant.puff"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	dir := tempDir(t)
+// fakeClaude puts a fake claude on PATH, with HOME at dir. It says whether
+// it starts or resumes the session and echoes the message; "slow" takes a
+// second and "fail" exits 1. A scheduled turn of an agent whose prompt is
+// "Watch the thread." has nothing to say the first time, then news from
+// its model, then nothing again.
+func fakeClaude(t *testing.T, dir string) {
+	t.Helper()
 	bin := filepath.Join(dir, "bin")
 	os.Mkdir(bin, 0o700)
 	fake := `#!/bin/sh
@@ -407,6 +404,19 @@ echo "$mode in $(basename "$PWD"): $msg"
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("HOME", dir)
+}
+
+// TestAssistantService runs services/assistant.puff, installed, with a
+// fake claude on PATH that says whether it starts or resumes the session
+// and echoes the message; and watcher, an agent with :model and :every,
+// whose first scheduled turn has nothing to say and its second news.
+func TestAssistantService(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "..", "services", "assistant.puff"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := tempDir(t)
+	fakeClaude(t, dir)
 	// helper is a copy under another name whose home began a conversation
 	// before agents kept a session file: it carries on with that one.
 	helperHome := filepath.Join(dir, ".whiff", "agents", "helper")
@@ -1092,4 +1102,83 @@ echo "changed things"
 		t.Fatalf("retry = %s", got)
 	}
 	eventually(t, "the run finishing", func() string { return strconv.FormatBool(strings.Contains(call("runs", "[]"), ":step :ready")) }, "true")
+}
+
+// TestAgentAsk asks an agent from a client and from a service: each gets
+// the answer back as a whiff/done, asks wait their turn instead of failing
+// :busy, a failed turn keeps its error, and a reload while a turn runs
+// doesn't start it again.
+func TestAgentAsk(t *testing.T) {
+	set(t, &pollInterval, 10*time.Millisecond)
+	dir := tempDir(t)
+	fakeClaude(t, dir)
+	sage := `(agent sage :prompt "Answer questions.")`
+	writeServices(t, dir, map[string]string{
+		"sage": sage,
+		"boss": `(service boss
+  (on (go q) "Asks sage q." (submitted (call :sage/ask q)))
+  (on (whiff/done id r) "sage's answer." (call :me/tell (str "boss heard " (value/to-string r)))))`,
+	})
+	start(t, dir)
+	c := dial(t, dir)
+	ask := func(q string) string {
+		t.Helper()
+		resp, err := c.Eval(`(call :sage/ask "`+q+`")`, "")
+		if err != nil || !strings.HasPrefix(resp.Value, "(err {:id ") {
+			t.Fatalf("ask %s = %+v %v, want a pending", q, resp, err)
+		}
+		return strings.Fields(strings.TrimPrefix(resp.Value, "(err {:id "))[0]
+	}
+	wait := func(id, want string) {
+		t.Helper()
+		resp, err := c.Message("wait", "", "["+id+"]", "")
+		if err != nil || !strings.HasPrefix(resp.Value, want) {
+			t.Errorf("wait %s = %s %v, want %s...", id, resp.Value, err, want)
+		}
+	}
+
+	// The second ask waits in sage's inbox while the first's turn runs.
+	slow, quick := ask("slow"), ask("quick")
+	if text, _ := c.Inbox("sage"); strings.Count(text, ":sage/ask") != 2 {
+		t.Errorf("sage's inbox:\n%s\nwant both asks", text)
+	}
+	// A reload hears of both again, and starts neither twice.
+	writeServices(t, dir, map[string]string{"sage": sage + "\n; reloaded\n"})
+	eventually(t, "slow's ask told again", func() string {
+		h, _ := historyOf(c)
+		return fmt.Sprint(strings.Count(h, ":sage/whiff/asked "+slow+"  ") >= 2)
+	}, "true")
+	wait(slow, `(ok "new in sage: slow")`)
+	wait(quick, `(ok "resume in sage: quick")`)
+
+	// A service's ask comes back to it.
+	if resp, err := c.Eval(`(call :boss/go "hello")`, ""); err != nil || !strings.HasPrefix(resp.Value, "(ok ") {
+		t.Fatalf("boss/go = %+v %v", resp, err)
+	}
+	historyHas(t, c, `:boss -> :me/tell "boss heard (ok \"resume in sage: hello\")"`)
+
+	// A failed turn answers with its error; then sage goes on.
+	wait(ask("fail"), `(err {:exit 1 :kind :exit`)
+	wait(ask("after"), `(ok "resume in sage: after")`)
+	turns, _ := os.ReadFile(filepath.Join(dir, ".whiff", "agents", "sage", "turns"))
+	if n := strings.Count(string(turns), "\n"); n != 5 {
+		t.Errorf("sage ran %d turns, want one for each of the 5 asks:\n%s", n, turns)
+	}
+	if text, _ := c.Inbox("sage"); text != "" {
+		t.Errorf("sage's inbox after every answer:\n%s", text)
+	}
+
+	// An agent session's ask is its write: the turn goes through the
+	// review gate, which refuses it here as nobody reviews, and the ask
+	// is answered with why.
+	agent := dial(t, dir)
+	agent.Agent = true
+	if _, err := agent.Claim("agent", ""); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := agent.Eval(`(call :sage/ask "from an agent")`, "")
+	if err != nil || !strings.HasPrefix(resp.Value, "(err {:id ") {
+		t.Fatalf("agent's ask = %+v %v, want a pending", resp, err)
+	}
+	wait(strings.Fields(strings.TrimPrefix(resp.Value, "(err {:id "))[0], `(err {:kind :no-reviewer`)
 }

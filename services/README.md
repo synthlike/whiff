@@ -37,7 +37,8 @@ Or try one without installing it: `whiff try services/git.puff status`.
 - `assistant`: a resident agent, one `(agent assistant :prompt "...")`
   form. `tell text` wakes Claude for one turn of the same session, with no
   tools; its answer lands in your inbox (`whiff inbox`), and replying to it
-  is your next message. Its home is `~/.whiff/agents/assistant`. Another
+  is your next message; `ask text` answers whoever asked instead, so a
+  service can use it. Its home is `~/.whiff/agents/assistant`. Another
   agent is another file, with its own `:prompt`, and `:model` and `:every
   1d` if you like. Needs the claude CLI.
 - `procs`: your dev servers and containers, named per project in the file

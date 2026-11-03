@@ -79,7 +79,12 @@ result, or `:rejected` if you reject it.
 An **ask** is a function with no body, `(ask (approve text) "...")`: its
 messages wait in the address's inbox until something replies. `:me` is your
 own address of asks: `(call :me/ask "go ahead?")` waits in `whiff inbox` for
-`whiff reply`.
+`whiff reply`. A service can answer its own asks: with an `(on (whiff/asked
+id) ...)`, whiff tells it of each message that reaches its inbox, again
+when it loads, and again after each `whiff/done` it handles, for those still
+waiting, so it takes them one at a time and skips what it has begun. Like a
+`whiff/done` that isn't gated, but what its handler does is, by the chain
+the ask's sender began: an agent's ask is still an agent's write.
 
 A call back into an address already waiting in the chain would wait for
 itself, so it fails at once with `:cycle` instead of timing out.
@@ -142,8 +147,9 @@ A service is a file, `(service name forms...)`: `(on (fn params...) "doc"
 body...)` handlers, `(ask ...)` functions, `(on :topic (v) ...)`
 subscribers and private `def`s. An agent is a file too, `(agent name
 :prompt "..." [:model "..."] [:every d])`, which whiff runs as a service of
-its own turn loop (`internal/daemon/agent.puff`): `tell`, `forget`, a
-`wake` with `:every`, and its answers in `:me`'s inbox.
+its own turn loop (`internal/daemon/agent.puff`): `tell`, whose answer
+lands in `:me`'s inbox, `ask`, whose answer goes back to whoever asked,
+`forget`, and a `wake` with `:every`.
 
 - **Supervised.** The daemon looks at `~/.whiff/services/` twice a second:
   a saved file reloads, a deleted one unloads, a fault restarts the service

@@ -116,7 +116,41 @@ func (d *daemon) ask(st *state, s *service, m message) puff.Value {
 	if a.expires > 0 {
 		d.expireAfter(a, a.expires)
 	}
+	d.notifyAsked(st, s, a)
 	return pending(a.id, ":%s waits in :%s's inbox for a reply", m.to(s.name), s.name)
+}
+
+// notifyAsked tells s, if it has an (on (whiff/asked id) ...), that a, a
+// message to one of its asks, waits in its inbox: so a service can answer
+// its own asks, as an agent does. It tells it again each time s loads,
+// for every one still waiting, so a handler must skip what it has begun.
+// Like a whiff/done it isn't gated: what the handler does is, by the
+// chain a's sender began.
+func (d *daemon) notifyAsked(st *state, s *service, a *asked) {
+	if h, ok := s.fns["whiff/asked"]; !ok || h.ask {
+		return
+	}
+	m := message{id: st.msgID(), cause: a.msg, from: a.from, fn: "whiff/asked", args: puff.Print(puff.NewVector(puff.Int(a.id))),
+		dir: a.dir, user: a.user, reviewed: a.reviewed, session: a.session}
+	d.put(st, s.name, m)
+}
+
+// askedAgain tells s again of each message waiting in its inbox, after it
+// has handled a whiff/done: the work it waited on has ended, so it may be
+// free to take the next. Each comes in the chain its own sender began, not
+// the one of the work that ended.
+func (d *daemon) askedAgain(s *service) {
+	if _, ok := s.fns["whiff/asked"]; !ok {
+		return
+	}
+	d.do(func(st *state) {
+		if st.addrs[s.name] != s {
+			return
+		}
+		for _, a := range st.inbox(s.name) {
+			d.notifyAsked(st, s, a)
+		}
+	})
 }
 
 // expireAfter answers a (err {:kind :expired}) once after has passed, if it
@@ -254,6 +288,11 @@ func (d *daemon) loaded(st *state, addr string) {
 		}
 	}
 	st.owed = still
+	if s := st.addrs[addr]; s != nil {
+		for _, a := range st.inbox(addr) {
+			d.notifyAsked(st, s, a)
+		}
+	}
 }
 
 // handOn gives m's sender the answer to id, a job or ask by sent, as

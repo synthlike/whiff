@@ -7,6 +7,7 @@
 ;   whiff inbox                  ; its answer, from :assistant
 ;   whiff reply 7 "and the docs?"   ; the next message; or :seen to dismiss
 ;
+;   whiff call assistant/ask "what's left?"  ; pending; whiff wait <id> has the answer
 ;   whiff call assistant/forget  ; start a new conversation
 ;
 ; Its home is ~/.whiff/agents/<its name>. For another agent, write another
