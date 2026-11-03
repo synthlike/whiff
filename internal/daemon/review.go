@@ -252,11 +252,11 @@ func (d *daemon) reviewService() *service {
 		fns: map[string]handler{
 			"pending": {mark: puff.MarkRead, marked: true, yours: true, native: d.pendingView,
 				doc: "(ok view): what waits for your review, as items to accept or reject, oldest first."},
-			"accept": {params: []string{"id"}, mark: puff.MarkWrite, marked: true, yours: true, native: d.acceptFn,
+			"accept": {params: []string{"id"}, mark: puff.MarkWrite, marked: true, yours: true, native: d.acceptFn, apart: true,
 				doc: "Deliver the held message id as it was sent, or run the code it holds; its result, which its sender gets too."},
 			"reject": {params: []string{"id", "reason"}, optional: 1, mark: puff.MarkWrite, marked: true, yours: true, native: d.rejectFn,
 				doc: "Answer the held message id (err {:kind :rejected :reason reason}) without delivering it; reason, a string, tells its sender why."},
-			"trust": {params: []string{"id"}, mark: puff.MarkWrite, marked: true, yours: true, native: d.trustFn,
+			"trust": {params: []string{"id"}, mark: puff.MarkWrite, marked: true, yours: true, native: d.trustFn, apart: true,
 				doc: "Accept the held message id, an agent session's to a service, and trust the session for that service from now on, as whiff trust does."},
 		},
 		subs: map[string]subscriber{}, code: map[string][]*puff.Form{},

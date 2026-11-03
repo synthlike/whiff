@@ -488,3 +488,75 @@ func TestReviewService(t *testing.T) {
 		t.Errorf("review/pending once empty = %s", r)
 	}
 }
+
+// TestAcceptApart: while :review/accept waits on what it delivered, a slow
+// service here, :review answers its other calls, and accepts another.
+func TestAcceptApart(t *testing.T) {
+	dir := tempDir(t)
+	gate := filepath.Join(dir, "go")
+	writeServices(t, dir, map[string]string{
+		"slow": `(service slow
+  (on (wait) "Waits for the go file." (proc/output ["sh" "-c" "while [ ! -e ` + gate + ` ]; do sleep 0.02; done; echo went"])))`,
+	})
+	start(t, dir)
+	c, other := dial(t, dir), dial(t, dir)
+	agent := dial(t, dir)
+	agent.Agent = true
+	reviewer := dial(t, dir)
+	if _, err := reviewer.Sub("review/pending"); err != nil {
+		t.Fatal(err)
+	}
+	pend := func() string {
+		t.Helper()
+		resp, err := agent.Message("call", "slow/wait", `[]`, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		v, _ := puff.ReadValue(resp.Value)
+		n, ok := pendingID(v)
+		if !ok {
+			t.Fatalf("%s isn't pending", resp.Value)
+		}
+		return puff.Print(puff.Int(n))
+	}
+	first, second := pend(), pend()
+	accepted := make(chan string, 1)
+	go func() {
+		resp, err := c.Message("call", "review/accept", "["+first+"]", "")
+		if err != nil {
+			accepted <- err.Error()
+			return
+		}
+		accepted <- resp.Value
+	}()
+	// The first accept waits on :slow; :review still answers.
+	eventually(t, "the first accept waiting", func() string {
+		resp, _ := other.Message("call", "review/pending", `[]`, "")
+		if strings.Contains(resp.Value, "[:review/accept "+first+"]") {
+			return resp.Value
+		}
+		return "waiting"
+	}, "waiting")
+	done := make(chan string, 1)
+	go func() {
+		resp, _ := other.Message("call", "review/reject", "["+second+` "no"]`, "")
+		done <- resp.Value
+	}()
+	select {
+	case r := <-done:
+		if r != "(ok :done)" {
+			t.Errorf("reject while an accept waits = %s", r)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("reject waited behind the accept")
+	}
+	select {
+	case r := <-accepted:
+		t.Fatalf("the accept ended before :slow went on: %s", r)
+	default:
+	}
+	os.WriteFile(gate, nil, 0o600)
+	if r := <-accepted; r != `(ok "went\n")` {
+		t.Errorf("accept = %s", r)
+	}
+}

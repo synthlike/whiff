@@ -85,6 +85,10 @@ type handler struct {
 	// answers only a message from one of your connections, so the review
 	// gate never holds one, which would protect nothing.
 	yours bool
+	// apart is for a native that waits on what it starts, as
+	// :review/accept on what it delivers: each runs on a goroutine of its
+	// own, so the service's other messages don't wait behind it.
+	apart bool
 }
 
 // readsCmd says whether h is :read for args, whatever its mark: they start
@@ -503,41 +507,51 @@ func (s *service) run(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
-			begin := time.Now()
+			if h, ok := s.fns[m.fn]; ok && h.apart && m.topic == "" && m.kept == (kept{}) {
+				go s.serve(ctx, m)
+				continue
+			}
 			s.handling = m.kept
-			r, faulted, stopped := s.handle(ctx, m)
-			// Handled, if no commit marked it: a handler that faults on a
-			// result would fault again, so it isn't given it again either.
-			// Not one whiff stopping cut short: it comes again at start.
-			if s.handling != (kept{}) && !stopped {
-				s.d.handled(s.name, s.handling)
-				s.handling = kept{}
-			}
-			if faulted && m.kept.task != 0 {
-				s.d.note(":%s faulted on the result of task %d, so it won't get it again; whiff wait %d has it", s.name, m.kept.task, m.kept.task)
-			}
-			// Recorded before the reply, so the caller finds it in history.
-			s.d.do(func(st *state) {
-				gate := m.gate
-				if gate == "" && s.d.forSession(st, s, m) {
-					gate = "for " + m.session
-				}
-				st.record(entry{at: begin, kind: m.kind(), id: m.id, cause: m.cause, user: m.user, from: m.from, to: m.to(s.name),
-					args: m.args, reply: r, took: time.Since(begin), gate: gate})
-			})
-			if m.reply != nil {
-				m.reply <- r
-			}
-			if faulted {
-				select {
-				case s.d.restarts <- s:
-				default: // the supervisor has restarts waiting; this one can wait for the next fault
-				}
-			}
+			s.serve(ctx, m)
 		case <-s.quit:
 			return
 		case <-ctx.Done():
 			return
+		}
+	}
+}
+
+// serve handles m, records it in history and replies. Run from s's
+// goroutine, s.handling is m's kept; an apart native's never has one.
+func (s *service) serve(ctx context.Context, m message) {
+	begin := time.Now()
+	r, faulted, stopped := s.handle(ctx, m)
+	// Handled, if no commit marked it: a handler that faults on a result
+	// would fault again, so it isn't given it again either. Not one whiff
+	// stopping cut short: it comes again at start.
+	if m.kept != (kept{}) && s.handling != (kept{}) && !stopped {
+		s.d.handled(s.name, s.handling)
+		s.handling = kept{}
+	}
+	if faulted && m.kept.task != 0 {
+		s.d.note(":%s faulted on the result of task %d, so it won't get it again; whiff wait %d has it", s.name, m.kept.task, m.kept.task)
+	}
+	// Recorded before the reply, so the caller finds it in history.
+	s.d.do(func(st *state) {
+		gate := m.gate
+		if gate == "" && s.d.forSession(st, s, m) {
+			gate = "for " + m.session
+		}
+		st.record(entry{at: begin, kind: m.kind(), id: m.id, cause: m.cause, user: m.user, from: m.from, to: m.to(s.name),
+			args: m.args, reply: r, took: time.Since(begin), gate: gate})
+	})
+	if m.reply != nil {
+		m.reply <- r
+	}
+	if faulted {
+		select {
+		case s.d.restarts <- s:
+		default: // the supervisor has restarts waiting; this one can wait for the next fault
 		}
 	}
 }
