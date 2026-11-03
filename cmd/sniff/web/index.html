@@ -30,8 +30,12 @@
       <h2>Views</h2>
       <div id="pins"></div>
     </div>
+    <div class="group" id="agents-group" hidden>
+      <h2>Agents</h2>
+      <div id="agents"></div>
+    </div>
     <div class="group">
-      <h2>Addresses</h2>
+      <h2>Services</h2>
       <div id="addresses"></div>
     </div>
   </nav>
@@ -48,7 +52,7 @@
       <button type="button" class="chip" data-term="kind:err" aria-pressed="false" title="kind:err: what answered with an error or a fault">Errors</button>
       <button type="button" class="chip" data-term="time:>500ms" aria-pressed="false" title="time:>500ms">Slow &gt; 500ms</button>
       <button type="button" class="chip" data-term="mark:write" aria-pressed="false" title="mark:write: to :write functions">Writes</button>
-      <input id="query" type="search" aria-label="Filter" placeholder="to:plan from:agent kind:err time:>500ms -to:gh   ( / )" autocomplete="off" spellcheck="false"
+      <input id="query" type="search" aria-label="Filter" placeholder="Filter: to:plan kind:err -to:gh …  ( / )" autocomplete="off" spellcheck="false"
         title="Each term must match; -term must not. to:address[/fn] from:address origin:user|agent kind:call|send|pub|done|eval|note|ok|err|fault|pending time:>500ms|<1ms mark:read|write gate:held|refused|accepted|trusted|free|for, or a word">
       <span class="seg" role="group" aria-label="Show messages as">
         <button type="button" data-show="chains" aria-pressed="true" title="Each message under the one whose handler sent it">Chains</button>

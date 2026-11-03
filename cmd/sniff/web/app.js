@@ -122,9 +122,14 @@ function drawLanes() {
   }
 }
 
+// time is when at was to the second, as rows show it; fullTime to the
+// millisecond, as their titles do.
 function time(at) {
+  return new Date(at).toTimeString().slice(0, 8);
+}
+function fullTime(at) {
   const d = new Date(at);
-  return d.toTimeString().slice(0, 8) + "." + String(d.getMilliseconds()).padStart(3, "0");
+  return time(at) + "." + String(d.getMilliseconds()).padStart(3, "0");
 }
 
 function took(ms) {
@@ -178,7 +183,8 @@ function row(e, i) {
 // Chains: each entry that began one, then what it led to, as each began,
 // indented under what led to it. One whose cause isn't here, gone from
 // history or left out by the filter, begins a chain of its own. A chain of
-// more than one message is a box of its own, with a heading that folds it.
+// more than one message is headed by the message that began it, whose
+// fold hides the rest.
 function drawChains(frag) {
   const ids = new Set(entries.map((e) => e.id).filter(Boolean));
   const led = new Map(); // the indexes of what each id led to, as they began
@@ -217,10 +223,10 @@ function drawChains(frag) {
     flush();
     if (chain.length === 1) {
       const r = chainRow(e, i, 0);
-      const key = e.kind === "note" ? null : [e.kind, e.from, e.to, e.args ? print(e.args) : "", kindOf(e.reply)].join(" ");
+      const key = e.kind === "note" ? "note " + e.note : [e.kind, e.from, e.to, e.args ? print(e.args) : "", kindOf(e.reply)].join(" ");
       if (key && last?.key === key) {
         last.n++;
-        r.querySelector(".args").append(" ", el("span", "times", "×" + last.n));
+        (r.querySelector(".args") || r.querySelector(".note-text")).append(" ", el("span", "times", "×" + last.n));
         last.row.replaceWith(r);
         last.row = r;
       } else {
@@ -230,11 +236,20 @@ function drawChains(frag) {
       continue;
     }
     last = null;
-    const box = el("div", "chain");
-    box.append(chainHead(entries[i], chain.length));
-    if (!folded.has(entries[i].id)) {
-      for (const [j, depth] of chain) box.append(chainRow(entries[j], j, depth));
-    }
+    // The message that began it heads it, with a fold for the rest.
+    const box = el("div", "chain"), id = entries[i].id, shut = folded.has(id);
+    const head = chainRow(e, i, 0);
+    head.classList.add("chain-root");
+    const fold = el("button", "fold", shut ? "▸" : "▾");
+    fold.type = "button";
+    fold.dataset.id = id;
+    fold.title = (shut ? "open" : "fold") + ` what it led to: ${chain.length - 1} more`;
+    fold.setAttribute("aria-expanded", String(!shut));
+    // In the arrow's place, as what it began is under it.
+    head.querySelector(".glyph").replaceWith(fold);
+    if (shut) head.querySelector(".args").append(" ", el("span", "times", `+${chain.length - 1}`));
+    box.append(head);
+    if (!shut) for (const [j, depth] of chain.slice(1)) box.append(chainRow(entries[j], j, depth, true));
     frag.append(box);
   }
   flush();
@@ -251,34 +266,19 @@ function readsBox(is) {
   h.dataset.id = first;
   h.setAttribute("aria-expanded", String(open));
   const what = [...new Set(is.map((i) => entries[i].to))].join(", ");
-  h.append(el("span", "fold", open ? "▾" : "▸"), `client: ${is.length} reads`, el("span", "what-read", what),
-    el("span", "sum", time(entries[is[0]].at).slice(0, 8) + "–" + time(entries[is.at(-1)].at).slice(0, 8)));
+  h.title = time(entries[is[0]].at) + "–" + time(entries[is.at(-1)].at);
+  h.append(el("span", "time", time(entries[is.at(-1)].at)), el("span", "fold", open ? "▾" : "▸"), `${is.length} reads`, el("span", "what-read", what));
   box.append(h);
   if (open) for (const i of is) box.append(chainRow(entries[i], i, 0));
   return box;
 }
 
-// chainHead is the heading of a chain of n messages that e began: "agent/3
-// asked plan/draft "x"".
-function chainHead(e, n) {
-  const h = el("button", "chain-head");
-  h.type = "button";
-  h.dataset.id = e.id;
-  h.setAttribute("aria-expanded", String(!folded.has(e.id)));
-  const verb = { call: e.origin === "agent" ? "asked" : "called", send: "sent", pub: "published", eval: "ran", done: "answered" }[e.kind];
-  const what = e.kind === "eval" ? "eval" : e.kind === "pub" ? fn(e) : e.to;
-  const args = e.args ? print(e.args).slice(1, -1) : "";
-  const sum = [`${n} messages`, took(e.took), time(e.at).slice(0, 5)].filter(Boolean).join(" · ");
-  h.append(el("span", "fold", folded.has(e.id) ? "▸" : "▾"), el("strong", "", e.from || (e.origin === "agent" ? "client" : "you")),
-    el("span", "verb", verb), el("code", "", what + (args ? " " + args : "")), el("span", "sum", sum));
-  return h;
-}
-
-// chainRow is e, entry i, as a row of its chain, depth deep.
-function chainRow(e, i, depth) {
+// In a chain, whose heading says when it began, a row's time is only in
+// its title.
+function chainRow(e, i, depth, inChain = false) {
   const r = el("div", "row " + e.kind);
   r.dataset.i = i;
-  r.append(el("span", "time", time(e.at)));
+  r.append(el("span", "time", inChain ? "" : time(e.at)));
   if (e.kind === "note") {
     r.classList.add("noted");
     r.append(el("div", "note-text", e.note));
@@ -297,8 +297,9 @@ function chainRow(e, i, depth) {
   if (e.kind === "done" && e.args && e.args.v.length) args = print(e.args.v[0]);
   const rest = el("span", "args", args);
   if (e.gate) rest.append(" ", el("span", "gate", "[" + e.gate + "]"));
-  r.title = what.textContent + " " + rest.textContent;
-  r.append(what, rest, el("span", "result", e.gate?.startsWith("held") ? "held" : k), el("span", "took", took(e.took)));
+  r.title = fullTime(e.at) + "  " + what.textContent + " " + rest.textContent;
+  // ok is the rule, so it goes unsaid: only what isn't ok has a word.
+  r.append(what, rest, el("span", "result", e.gate?.startsWith("held") ? "held" : k === "ok" ? "" : k), el("span", "took", took(e.took)));
   return r;
 }
 
@@ -625,10 +626,11 @@ async function loadAddresses() {
   marks = new Map();
   for (const a of addresses) for (const f of a.fns) marks.set(a.address + "/" + f.fn, f.mark);
   if (shown === "chains") redraw(); // a client's reads fold, by their marks
+  drawAddresses();
+  await loadServices();
+  // After the statuses, so a link to an address shows its Status.
   if (!linked && location.hash.startsWith("#:")) showAddress(decodeURIComponent(location.hash.slice(2)));
   linked = true;
-  drawAddresses();
-  loadServices();
 }
 
 // services is each service file's line of whiff services, by name:
@@ -674,7 +676,7 @@ const ago = (at) => roughly(Date.now() - Date.parse(at)) + " ago";
 function serviceLines(st) {
   const lines = [];
   const add = (label, text) => text && lines.push([label, text]);
-  add("file", st.file);
+  add("file", st.file?.replace(/^\/(Users|home)\/[^/]+\//, "~/"));
   add("error", st["load-error"]);
   if (st.fault) add("faults", `${st.faults} today; the last ${ago(st.fault.at)}: ${st.fault.message}`);
   if (st.last) add("last", `${st.last.fn} ${ago(st.last.at)}`);
@@ -682,6 +684,7 @@ function serviceLines(st) {
     const usd = (x) => "$" + parseFloat(x).toFixed(2);
     add("turns", `${st.turns} in 24h, ${usd(st.spent)} of ${usd(st.day)} a day` + (st["last-turn"] ? `; the last ${ago(st["last-turn"])}` : ""));
   }
+  if (st.mode) add("mode", [st.mode.mode, ...(st.mode.services || []).map((x) => ":" + x)].join(" ") + (st.mode.until ? ", until " + time(st.mode.until) : ""));
   add("every", st.every);
   if (st.inbox > 0) add("inbox", st.inbox + " waiting");
   if (st.timers?.length) add("timers", st.timers.map((t) => `${t.fn} in ${roughly(Date.parse(t.due) - Date.now())}`).join(", "));
@@ -707,7 +710,8 @@ function workList(work) {
   const ol = el("ol", "svc-work");
   for (const w of [...work].reverse()) {
     const [who, how] = workText(w);
-    const li = el("li", w.status === "ended" ? (w.result?.ok ? "ok" : "failed") : "open");
+    const bad = !w.result?.ok || ["failed", "gave-up", "cancelled"].includes(w.result?.value?.status);
+    const li = el("li", w.status === "ended" ? (bad ? "failed" : "ok") : "open");
     li.append(el("span", "work-id", String(w.id)), el("span", "work-to", who), el("span", "work-how", how), el("span", "hint", ago(w.at)));
     ol.append(li);
   }
@@ -716,8 +720,15 @@ function workList(work) {
 
 // statusBox is the Status section of an address's details: its state and
 // note, then serviceLines.
-async function statusBox(name) {
+// It answers at once, and fills in when the status comes, so the rest of
+// the details needn't wait.
+function statusBox(name) {
   const box = el("div", "svc-status", "…");
+  fillStatus(box, name);
+  return box;
+}
+
+async function fillStatus(box, name) {
   try {
     const st = await getJSON("api/service?address=" + encodeURIComponent(name));
     const head = el("p", "svc-head " + statusClass(st.status));
@@ -742,14 +753,13 @@ async function statusBox(name) {
           box.append(el("p", "query-error", err.message));
         }
         await loadServices();
-        box.replaceWith(await statusBox(name));
+        box.replaceWith(statusBox(name));
       };
-      box.append(b);
+      head.append(b);
     }
   } catch (err) {
     box.replaceChildren(el("p", "hint", err.message));
   }
-  return box;
 }
 
 let reloading = 0;
@@ -774,15 +784,16 @@ function noteFault(e) {
 // service, its status when that isn't idle or ok, or a client's. A file
 // that failed to load, so has no address, is there too.
 function drawAddresses() {
-  const box = $("addresses");
+  const box = $("addresses"), agents = $("agents");
   box.replaceChildren();
+  agents.replaceChildren();
   const failed = [...services.values()].filter((s) => !addresses.some((a) => a.address === s.service)).map((s) => ({ address: s.service, fns: [] }));
   for (const a of [...addresses, ...failed]) {
     const st = services.get(a.address);
     const fault = faulted.has(a.address) && !st;
     const quiet = !st || st.status === "ok" || st.status === "idle";
     const cls = fault ? "fault" : st ? statusClass(st.status) : "";
-    const b = el("button", "addr" + (a.client ? " client" : "") + (cls ? " " + cls : ""));
+    const b = el("button", "addr" + (a.client ? " client" : "") + (cls ? " " + cls : quiet && !fault ? " quiet" : ""));
     b.append(el("span", "dot"), el("span", "name", ":" + a.address));
     if (fault || a.client || !quiet) b.append(el("span", "note", fault ? "fault" : a.client ? "client" : st.status.replace("-", " ")));
     b.title = fault ? "a service whose last call faulted; whiff restarted it" : a.client ? "a client's address"
@@ -791,8 +802,9 @@ function drawAddresses() {
       activate(null);
       showAddress(a.address);
     };
-    box.append(b);
+    (st?.agent ? agents : box).append(b);
   }
+  $("agents-group").hidden = !agents.childElementCount;
   if (addressesErr) box.append(el("p", "hint", addressesErr));
   else if (!addresses.length) box.append(el("p", "hint", "None while whiff isn't running."));
 }
@@ -837,7 +849,7 @@ async function showAddress(name) {
   d.replaceChildren(el("h2", "", ":" + name));
   const agent = name.startsWith("agent/");
   if (!a) {
-    if (services.has(name)) d.append(section("Status", await statusBox(name)));
+    if (services.has(name)) d.append(section("Status", statusBox(name)));
     else d.append(el("p", "hint", "Not loaded now."));
     if (agent) showSession(d, name);
     return;
@@ -846,7 +858,7 @@ async function showAddress(name) {
   meta.append(el("span", "badge", a.client ? "client" : services.get(name)?.agent ? "agent" : "service"));
   if (a.state) meta.append(el("span", "badge", "state"));
   d.append(meta);
-  if (services.has(name)) d.append(section("Status", await statusBox(name)));
+  if (services.has(name)) d.append(section("Status", statusBox(name)));
   // Its state, fetched again after you call one of its functions.
   const stateBox = el("div", "", "…");
   const loadState = async () => {
@@ -863,6 +875,12 @@ async function showAddress(name) {
     const sig = (f.form === "ask" ? "ask " : "") + "(" + [f.fn, ...f.params].join(" ") + ")";
     const mk = el("span", "badge " + f.mark, ":" + f.mark);
     const c1 = el("td"), c2 = el("td"), c3 = el("td", "doc", f.doc);
+    // Two lines of a doc, and all of it on a click.
+    if (f.doc.length > 90) {
+      c3.classList.add("more");
+      c3.title = "click for the whole doc";
+      c3.onclick = () => c3.classList.toggle("whole");
+    }
     // A :read function of no arguments links to its answer's page, a tab;
     // any other opens a form under it that calls it as you.
     if (f.mark === "read" && !f.params.length && f.form !== "ask") {
@@ -913,7 +931,7 @@ function setStatus(s) {
 }
 
 $("rows").addEventListener("click", (ev) => {
-  const h = ev.target.closest(".chain-head");
+  const h = ev.target.closest(".fold[data-id]");
   if (h) {
     const id = Number(h.dataset.id);
     if (!folded.delete(id)) folded.add(id);
@@ -1434,7 +1452,7 @@ document.addEventListener("keydown", (ev) => {
 // step goes d messages or headings on from where you are, the heading
 // focused or the message selected; from neither, to the first or last.
 function step(d) {
-  const all = [...$("rows").querySelectorAll(".chain-head, .reads-head, .row")];
+  const all = [...$("rows").querySelectorAll(".reads-head, .row")];
   let at = all.indexOf(document.activeElement);
   if (at < 0 && selected !== null) at = all.indexOf(document.querySelector(`.row[data-i="${selected}"]`));
   const next = all[at < 0 ? (d > 0 ? 0 : all.length - 1) : Math.max(0, Math.min(all.length - 1, at + d))];
