@@ -20,8 +20,7 @@ var agentSrc string
 // [:can [:addr/fn ...]] [:dir path] [:limits {...}] [:every d]) read from
 // file, into the (service name ...) whiff runs: agent.puff's forms, after
 // defs of prompt, model, can, dir ("" for none), limits (with defaults)
-// and every. Without :every there's
-// no wake.
+// and every, and a :start. Without :every there's no wake.
 func agentService(f *puff.Form, file string) (*puff.Form, error) {
 	if len(f.Items) < 2 || f.Items[1].Kind != puff.FormSymbol {
 		return nil, &puff.Error{Pos: f.Pos, Msg: "agent wants its name"}
@@ -82,15 +81,18 @@ func agentService(f *puff.Form, file string) (*puff.Form, error) {
 	if err != nil {
 		return nil, fmt.Errorf("whiff's agent.puff: %v", err)
 	}
+	// Its :start sets its timers to itself, which whiff drops at start and
+	// a reload stops: its laters, and with :every its next wake.
 	every := opts["every"].Val.(puff.Duration) > 0
-	items := []*puff.Form{sym("service"), f.Items[1]}
+	src := "(fn () (arm-laters))"
 	if every {
-		start, err := puff.Read("agent.puff", "(fn () (do (send-after every :wake) (ok :waking)))")
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, lit(puff.Keyword("start")), start[0])
+		src = "(fn () (do (send-after every :wake) (arm-laters)))"
 	}
+	start, err := puff.Read("agent.puff", src)
+	if err != nil {
+		return nil, err
+	}
+	items := []*puff.Form{sym("service"), f.Items[1], lit(puff.Keyword("start")), start[0]}
 	for _, k := range []puff.Keyword{"prompt", "model", "can", "dir", "limits", "every"} {
 		items = append(items, list(sym("def"), sym(string(k)), opts[k]))
 	}

@@ -2,9 +2,8 @@
 ; the service name. whiff adds prompt, model (or ""), can (or []), dir (or
 ; "", an absolute path), limits ({:turn usd :day usd :time d}) and every
 ; (or 0s) as defs before these forms, and leaves out wake when there's no
-; :every. With :can, a turn's tools are those whiff functions, through
-; whiff mcp acting as the agent's session, :agent/<name>; without, it has
-; none.
+; :every. A turn's tools are the :can whiff functions and the agent's own
+; later, through whiff mcp acting as the agent's session, :agent/<name>.
 ;
 ; Each message wakes Claude for one turn of the same session, so the agent
 ; remembers the whole conversation, days apart. A tell's answer lands in
@@ -26,6 +25,7 @@
 (def deferred (path/join home "deferred"))    ; each ask turn whose answer waits for the tasks it started
 (def costs (path/join home "costs"))          ; "time usd" for each turn, the last 24 hours'
 (def paused-file (path/join home "paused"))   ; "paused" while it takes no turns
+(def later-file (path/join home "later"))     ; [{:id :due :note}], the turns it set itself with later
 (def day-usd (unwrap (map/get limits :day)))
 (def turn-usd (unwrap (map/get limits :turn)))
 (def system (str "You are " name ", " """
@@ -41,7 +41,11 @@
   the user's review, and another agent's ask for its answer. Don't wait
   for them: end your turn, and each result comes to you later as a
   message of its own.
-  """ "\n")) prompt))
+  """ "\n")) "To look at something again later, call your tool " name "_later with\n"
+  """
+  a duration, as 2h or 1d, and a note to yourself: once it has passed,
+  the note comes back to you as a turn of its own.
+  """ "\n" prompt))
 
 (def (read-file path) (string/trim (or-else (file/read-text path) "")))
 (def (read-lines path) (string/lines (or-else (file/read-text path) "")))
@@ -55,15 +59,18 @@
     [["" s] (ok s)] ; begun before there was a session file
     [[s _] (ok s)]))
 
-; mcp is whiff mcp, for claude's --mcp-config: the tools of a turn with
-; :can, which act in dir, or the agent's home.
+; mcp is whiff mcp, for claude's --mcp-config: a turn's tools, which act
+; in dir, or the agent's home.
 (def mcp (json/to-string {:mcpServers {:whiff {:command "whiff" :args (if (= dir "") ["mcp"] ["mcp" "--dir" dir])}}}))
+
+; tools are what a turn may call: :can, and the agent's own later.
+(def tools (vector/append can (unwrap (keyword/from-string (str name "/later")))))
 
 (def (claude id)
   (vector/concat ["claude" "-p" "--tools" "" "--append-system-prompt" system
                   "--output-format" "json" "--max-budget-usd" (float/to-string turn-usd)]
     (if (= model "") [] ["--model" model])
-    (if (vector/empty? can) [] ["--mcp-config" mcp "--strict-mcp-config" "--allowedTools" "mcp__whiff"])
+    ["--mcp-config" mcp "--strict-mcp-config" "--allowedTools" "mcp__whiff"]
     (if (= (read-file started) id) ["--resume" id] ["--session-id" id])))
 
 ; busy? is whether the last turn runs: its message is in the inbox until
@@ -115,9 +122,8 @@
 (def (start text)
   (let [_ (try (over-budget))
         _ (try (file/mkdir home))
-        opts {:stdin text :dir home :timeout (unwrap (map/get limits :time)) :origin :agent}
-        id (int/to-string (try (submitted (call :jobs/run (claude (try (session)))
-                                            (if (vector/empty? can) opts (map/set opts :session can))))))]
+        opts {:stdin text :dir home :timeout (unwrap (map/get limits :time)) :origin :agent :session tools}
+        id (int/to-string (try (submitted (call :jobs/run (claude (try (session))) opts))))]
     (do (try (file/append turns (str id "\n")))
       (ok id))))
 
@@ -213,6 +219,33 @@
 (def wake-text (str "This is your scheduled turn; you have one every " (value/to-string every)
                  ". Look again at what the user asked you to keep track of. If there is nothing worth telling them, answer only: nothing"))
 
+; laters are the turns the agent set itself with later, [{:id :due :note}].
+(def (laters) (or-else (value/from-string (read-file later-file)) []))
+
+; set-laters keeps ls as the agent's laters.
+(def (set-laters ls) (file/write later-file (value/to-string ls)))
+
+; arm-laters sets a timer for each later whose remind isn't in the inbox
+; yet, one past due at once: whiff's start and a reload drop an agent's
+; timers to itself, and its :start calls this.
+(def (arm-laters)
+  (let [ls (laters)]
+    (if (vector/empty? ls)
+      (ok :armed)
+      (let [now (time/now)
+            queued (vector/map (inbox :remind) (fn ({:args [i _]}) i))]
+        (do (vector/each ls
+              (fn ({:id i :due due :note note})
+                (if (vector/contains? queued i)
+                  (ok :done)
+                  (send-after (if (> due now) (- due now) 0s) :remind i note))))
+          (ok :armed))))))
+
+; later-text is a remind's turn text.
+(def (later-text note)
+  (str "This is a turn you set yourself with " name "_later, saying: " note
+    " If there is nothing worth telling the user, answer only: nothing"))
+
 ; held? is whether inbox item m is a result whose turn started other
 ; tasks that haven't ended: it waits for them, so that their results
 ; take one turn together rather than one each.
@@ -270,11 +303,15 @@
       [_ when (paused?) (ok :paused)]
       [_ when (busy?) (ok :waiting)]
       [(some {:id i :fn f :args args})
-       (let [_ (if (= f :wake) (send-after every :wake) (ok :done))
+       (let [_ (match [f args]
+                 [[:wake _] (send-after every :wake)]
+                 [[:remind [l _]] (set-laters (vector/filter (laters) (fn ({:id o}) (not (= o l)))))]
+                 [_ (ok :done)])
              root (match [f args] [[:whiff/result [t _]] (root-of (turn-of t))] [_ ""])
              batch (match [f args] [[:whiff/result [t _]] (results-with waiting t)] [_ [{:id i}]])
              text (match [f args]
                     [[:whiff/result _] (result-text batch root)]
+                    [[:remind [_ note]] (later-text note)]
                     [[_ [t]] t]
                     [_ wake-text])]
          (match (start text)
@@ -367,6 +404,20 @@
 
 (ask (whiff/result id r)
   "A task one of the agent's turns started, as a call to a :write function or another agent's ask, ended with r: it waits its turn, and the turn answers only with news. whiff's own.")
+
+(on (later d note) :read
+  "Sets the agent a turn of its own once d has passed, as 1d, with note, what to look at: it waits its turn, as a wake does, and answers only with news. (ok due), when it comes. :read, as it writes nothing but the agent's home: its turn's tools are gated as any. The agent's own tool."
+  (if (and (= (value/type d) :duration) (>= d 0s) (= (value/type note) :string))
+    (let [due (+ (time/now) d)
+          i (uuid/new)
+          _ (try (file/mkdir home))
+          _ (try (set-laters (vector/append (laters) {:id i :due due :note note})))
+          _ (try (send-after d :remind i note))]
+      (ok due))
+    (err {:kind :bad-call :message (str "later wants a duration of 0s or more and a note, got " (value/to-string d) " and " (value/to-string note))})))
+
+(ask (remind id note)
+  "A turn the agent set itself with later, which waits its turn: it answers only if there's something to tell you. whiff's own: use later.")
 
 (ask (wake)
   "A scheduled turn, which whiff sends every :every and which waits its turn: it answers only if there's something to tell you. whiff's own loop: tell the agent instead.")

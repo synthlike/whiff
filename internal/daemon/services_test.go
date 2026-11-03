@@ -1253,20 +1253,20 @@ func TestAgentSession(t *testing.T) {
 	turn := dial(t, dir)
 	turn.Agent = true
 	claim, err := turn.ClaimSession(token, `(ask (tell text) "Leaves the agent a message.")`)
-	if err != nil || claim.Value != "(ok [:agent/scout [:notes/list]])" {
+	if err != nil || claim.Value != "(ok [:agent/scout [:notes/list :scout/later]])" {
 		t.Fatalf("claim = %+v %v", claim, err)
 	}
 	// It may call :notes/list, and describe :notes, but nothing else.
 	for _, tt := range []struct{ op, target, src, want string }{
 		{"call", "notes/list", "", `(ok ["a"])`},
-		{"call", "notes/add", "", "error: :agent/scout may call only :notes/list, its agent's :can, not notes/add"},
-		{"send", "scout/ask", "", "error: :agent/scout may call only :notes/list, its agent's :can, not scout/ask"},
-		{"pub", "notes/changed", "", "error: :agent/scout may only call :notes/list, its agent's :can: no pub"},
+		{"call", "notes/add", "", "error: :agent/scout may call only :notes/list :scout/later, its agent's :can, not notes/add"},
+		{"send", "scout/ask", "", "error: :agent/scout may call only :notes/list :scout/later, its agent's :can, not scout/ask"},
+		{"pub", "notes/changed", "", "error: :agent/scout may only call :notes/list :scout/later, its agent's :can: no pub"},
 		{"inbox", "me", "", "error: :agent/scout reads only its own inbox"},
 		{"eval", "", "(session/mode)", "(ok {:mode :gated})"},
 		{"eval", "", "(address/describe :notes)", "(ok [{"},
-		{"eval", "", "(address/describe :scout)", "error: :agent/scout may only call :notes/list, its agent's :can: no eval"},
-		{"eval", "", `(call :notes/list)`, "error: :agent/scout may only call :notes/list, its agent's :can: no eval"},
+		{"eval", "", "(address/describe :jobs)", "error: :agent/scout may only call :notes/list :scout/later, its agent's :can: no eval"},
+		{"eval", "", `(call :notes/list)`, "error: :agent/scout may only call :notes/list :scout/later, its agent's :can: no eval"},
 	} {
 		var r rpc.Response
 		var err error
@@ -1454,7 +1454,7 @@ func TestAgentDelegate(t *testing.T) {
 	}, "32")
 	turn := dial(t, dir)
 	turn.Agent = true
-	if r, err := turn.ClaimSession(token, ""); err != nil || r.Value != "(ok [:agent/lead [:helper/ask]])" {
+	if r, err := turn.ClaimSession(token, ""); err != nil || r.Value != "(ok [:agent/lead [:helper/ask :lead/later]])" {
 		t.Fatalf("claim = %+v %v", r, err)
 	}
 	r, _ := turn.Message("call", "helper/ask", `["sum it up"]`, "")
@@ -1538,6 +1538,63 @@ func TestAgentPause(t *testing.T) {
 		return fmt.Sprint(one >= 0 && two > one)
 	}, "true")
 	eventually(t, "napper, its answers waiting for you", line, `{:agent #t :note "2 answers in your inbox" :service :napper :status :waiting}`)
+}
+
+// TestAgentLater has an agent's turn set it turns of its own with later,
+// its own tool: the call answers at once, without review, each turn comes
+// once its time has passed, with its note, and one set before a restart
+// still comes after it, once.
+func TestAgentLater(t *testing.T) {
+	dir := tempDir(t)
+	fakeClaude(t, dir)
+	writeServices(t, dir, map[string]string{"watch": `(agent watch :prompt "Watch.")`})
+	done := start(t, dir)
+	c := dial(t, dir)
+	if r, err := c.Eval(`(call :watch/tell "hold")`, ""); err != nil || !strings.HasPrefix(r.Value, "(err {:id ") {
+		t.Fatalf("tell = %+v %v", r, err)
+	}
+	home := filepath.Join(dir, ".whiff", "agents", "watch")
+	var token string
+	eventually(t, "the turn's token", func() string {
+		b, _ := os.ReadFile(filepath.Join(home, "token"))
+		token = strings.TrimSpace(string(b))
+		return fmt.Sprint(len(token))
+	}, "32")
+	turn := dial(t, dir)
+	turn.Agent = true
+	if r, err := turn.ClaimSession(token, ""); err != nil || r.Value != "(ok [:agent/watch [:watch/later]])" {
+		t.Fatalf("claim = %+v %v", r, err)
+	}
+	for _, tt := range []struct{ args, want string }{
+		{`[1s "soon"]`, "(ok 20"},
+		{`[3s "after a restart"]`, "(ok 20"},
+		{`["tomorrow" "x"]`, `(err {:kind :bad-call :message "later wants a duration of 0s or more and a note, got \"tomorrow\" and \"x\""`},
+	} {
+		if r, err := turn.Message("call", "watch/later", tt.args, ""); err != nil || !strings.HasPrefix(r.Value, tt.want) {
+			t.Errorf("later %s = %+v %v, want %s...", tt.args, r, err, tt.want)
+		}
+	}
+	os.WriteFile(filepath.Join(home, "go"), nil, 0o600)
+	turn.Close()
+	said := func(note string) func() string {
+		return func() string {
+			text, _ := c.Inbox("me")
+			return fmt.Sprint(strings.Count(text, "a turn you set yourself with watch_later, saying: "+note+" If there is nothing"))
+		}
+	}
+	eventually(t, "the first later's turn", said("soon"), "1")
+	stopDaemon(t, c, done)
+	start(t, dir)
+	c = dial(t, dir)
+	eventually(t, "the second later's turn, after the restart", said("after a restart"), "1")
+	eventually(t, "no laters left", func() string {
+		b, _ := os.ReadFile(filepath.Join(home, "later"))
+		return string(b)
+	}, "[]")
+	time.Sleep(200 * time.Millisecond)
+	if got := said("after a restart")(); got != "1" {
+		t.Errorf("the second later's turn came %s times", got)
+	}
 }
 
 // TestAgentDelegateAsk asks lead, which asks helper in its turn and ends

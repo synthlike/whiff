@@ -250,10 +250,15 @@ func TestMCPTurn(t *testing.T) {
 		names = append(names, tool.Name)
 	}
 	slices.Sort(names)
-	if want := []string{"cancel", "greet_hello", "wait"}; !slices.Equal(names, want) {
+	if want := []string{"cancel", "greet_hello", "scout_later", "wait"}; !slices.Equal(names, want) {
 		t.Errorf("tools = %v, want %v", names, want)
 	}
-	r, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "greet_hello", Arguments: map[string]any{"name": `"you"`}})
+	// Its own later answers at once, without your review.
+	r, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "scout_later", Arguments: map[string]any{"d": "1d", "note": "look again"}})
+	if err != nil || r.IsError || !strings.HasPrefix(r.Content[0].(*mcp.TextContent).Text, "20") {
+		t.Errorf("scout_later = %+v %v", r.Content[0].(*mcp.TextContent).Text, err)
+	}
+	r, err = cs.CallTool(ctx, &mcp.CallToolParams{Name: "greet_hello", Arguments: map[string]any{"name": `"you"`}})
 	if err != nil || r.IsError || !strings.Contains(r.Content[0].(*mcp.TextContent).Text, "hello, you") {
 		t.Errorf("greet_hello = %+v %v", r, err)
 	}

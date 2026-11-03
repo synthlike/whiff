@@ -233,8 +233,9 @@ turn. `assistant.puff` is one form, and another agent is another file:
 
 `:can` gives its turns those functions as tools: it reads pull requests
 itself, and its `todo/add` waits for your review like any agent's write,
-unless you `whiff trust agent/researcher todo`. Without `:can` it has no
-tools. Its turns cost at most `:limits`, $1 each and $5 a day unless it
+unless you `whiff trust agent/researcher todo`. Whatever its `:can`, it
+has `researcher/later` too, to look again in a while ("the vote closes
+Friday: look then"), which comes back as a turn of its own. Its turns cost at most `:limits`, $1 each and $5 a day unless it
 says otherwise; `whiff call researcher/usage` says what it spent, and
 `researcher/stop` ends a turn that runs away.
 

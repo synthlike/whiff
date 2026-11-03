@@ -150,10 +150,13 @@ subscribers and private `def`s. An agent is a file too, `(agent name
 {:turn usd :day usd :time d}] [:every d])`, which whiff runs as a service
 of its own turn loop (`internal/daemon/agent.puff`): `tell`, whose answer
 lands in `:me`'s inbox, `ask`, whose answer goes back to whoever asked,
-`forget`, `usage`, `stop`, `pause` and `resume`, and a `wake` with
-`:every`. A paused agent takes no turns: what it is sent waits in its
-inbox, and only one wake, as the next is set as one is taken. Tells, asks and
-wakes, and the results of what its turns started, are all asks of the agent, so they wait in its inbox while a turn
+`forget`, `usage`, `stop`, `pause` and `resume`, a `wake` with
+`:every`, and `later d note`, its turns' own tool: a turn of its own once
+`d` has passed, with the note, kept in its home so a restart or reload
+sets it again. `later` is `:read`, as all it adds is a turn, which is
+gated and paid for as any. A paused agent takes no turns: what it is sent waits in its
+inbox, and only one wake, as the next is set as one is taken. Tells, asks,
+wakes and laters, and the results of what its turns started, are all asks of the agent, so they wait in its inbox while a turn
 runs and take turns oldest first; your reply to an answer is a tell. Its turns are held
 to `:limits`, $1 and 10 minutes a turn and $5 a day unless it says
 otherwise: claude stops a turn at its dollars, whiff at its time, and once
