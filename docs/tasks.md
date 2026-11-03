@@ -1,7 +1,7 @@
 # Tasks
 
-The spec for v0.6's durable work. Most of it isn't built: "Today" says what
-is. Once built, what's here moves into [design.md](design.md).
+The spec for durable work, built in v0.6: "Today" says how whiff meets it.
+[design.md](design.md) has the rest of whiff.
 
 ## The idea
 

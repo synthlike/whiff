@@ -61,20 +61,22 @@ whiff session agent/1      # everything the session wrote, and how
   sniff shows them as pages with buttons.
 
 Docs: [use cases](docs/use-cases.md) · [procs](docs/procs.md) ·
-[design](docs/design.md) · [stdlib](docs/stdlib.md)
+[design](docs/design.md) · [tasks](docs/tasks.md) · [stdlib](docs/stdlib.md)
 
 ## Status
 
-v0.5. sniff brings views into one window, with a review banner, searchable
-activity, message chains and address details, and a ⌘K palette that goes to
-or calls any address, view or function, with keys to move through activity.
-The CLI shares its history filters and can show message chains with `whiff
-history -c`.
+v0.6. whiff survives a restart: service state, inboxes, the review queue,
+timers, task results and 30 days of history are in `~/.whiff/whiff.db`. Work
+has one id from submission to result, and every failure says its `:outcome`:
+not started, stopped, or unknown, when a job may still be running after a
+crash. Jobs retry with `:retry n` (a write only if `:idempotent`), errors
+offer the next step as actions, and `procs` runs dev servers and containers
+as jobs. puff gains `use` for shared code and faults that point at their
+cause.
 
-v0.6 will focus on reliable work and recovery: durable inboxes, timers and
-task results and safe retries. Service state, inboxes, the review queue,
-timers and results already survive restarts, and a job's sender hears that
-it was interrupted; history is still in memory.
+v0.7 will focus on resident agents and bounded delegation: an agent that
+queues work, hands parts of it to others and comes back with a result after
+an interruption.
 
 ## Inspirations
 
