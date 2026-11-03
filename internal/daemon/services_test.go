@@ -1566,3 +1566,101 @@ func TestAgentDelegateAsk(t *testing.T) {
 		t.Errorf("an ask's answers reached your inbox:\n%s", text)
 	}
 }
+
+// TestPipelineBuild runs pipeline/build as a lead would: a run on a
+// model, two from its branch at once, and one from both of theirs merged;
+// each answers its asker when it ends. Bases that don't merge fail, and
+// leave nothing behind.
+func TestPipelineBuild(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	src, err := os.ReadFile(filepath.Join("..", "..", "services", "pipeline.puff"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := tempDir(t)
+	fake, bin := filepath.Join(dir, "fake"), filepath.Join(dir, "bin")
+	os.Mkdir(fake, 0o700)
+	os.Mkdir(bin, 0o700)
+	// The dev writes a file named after its worktree, and with $FAKE/clash
+	// same.txt saying so too: two runs' same.txt don't merge. It notes its
+	// model, and what it found.
+	claude := `#!/bin/sh
+if [ "$1 $2 $3 $4" = "-p --strict-mcp-config --tools " ]; then cat >/dev/null; echo "VERDICT: approve"; exit 0; fi
+cat >/dev/null
+case "$*" in *"--model haiku"*) m=haiku ;; *"--model"*) m=other ;; *) m=default ;; esac
+echo "dev $(basename "$PWD") $m" >> "$FAKE/log"
+ls > "$FAKE/saw-$(basename "$PWD")"
+basename "$PWD" > "$(basename "$PWD").txt"
+if [ -e "$FAKE/clash" ]; then basename "$PWD" > same.txt; fi
+echo done
+`
+	os.WriteFile(filepath.Join(bin, "claude"), []byte(claude), 0o700)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("FAKE", fake)
+	t.Setenv("HOME", dir)
+	for _, k := range []string{"GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"} {
+		t.Setenv(k, "t")
+	}
+	for _, k := range []string{"GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"} {
+		t.Setenv(k, "t@example.com")
+	}
+	writeServices(t, dir, map[string]string{"pipeline": string(src)})
+	start(t, dir)
+	c := dial(t, dir)
+	repo := filepath.Join(dir, "repo")
+	os.Mkdir(repo, 0o700)
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"commit", "-q", "--allow-empty", "-m", "first"}} {
+		if out, err := exec.Command("git", append([]string{"-C", repo}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	build := func(base, model string) string {
+		t.Helper()
+		r, err := c.Message("call", "pipeline/build", fmt.Sprintf(`[%q %s "do it" ["true"] %q]`, repo, base, model), "")
+		if err != nil || !strings.HasPrefix(r.Value, "(err {:id ") {
+			t.Fatalf("build from %s = %+v %v", base, r, err)
+		}
+		return strings.Fields(strings.TrimPrefix(r.Value, "(err {:id "))[0]
+	}
+	wait := func(id string) string {
+		t.Helper()
+		r, err := c.Message("wait", "", "["+id+"]", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r.Value
+	}
+	if got := wait(build(`"main"`, "haiku")); !strings.HasPrefix(got, `(ok {:branch "whiff/1"`) || !strings.Contains(got, ":status :ready") {
+		t.Fatalf("the first build = %s", got)
+	}
+	two, three := build(`"whiff/1"`, ""), build(`"whiff/1"`, "")
+	for _, id := range []string{two, three} {
+		if got := wait(id); !strings.Contains(got, ":status :ready") {
+			t.Errorf("build %s = %s", id, got)
+		}
+	}
+	log, _ := os.ReadFile(filepath.Join(fake, "log"))
+	if got := strings.Fields(string(log)); len(got) != 9 || got[2] != "haiku" || got[5] != "default" || got[8] != "default" {
+		t.Errorf("the devs ran:\n%s\nwant the first on haiku, the others on the default", log)
+	}
+	// Both branches merged: the fourth run's dev starts from both files.
+	if got := wait(build(`["whiff/2" "whiff/3"]`, "")); !strings.Contains(got, ":status :ready") {
+		t.Fatalf("the merged build = %s", got)
+	}
+	if saw, _ := os.ReadFile(filepath.Join(fake, "saw-repo-4")); !strings.Contains(string(saw), "repo-2.txt") || !strings.Contains(string(saw), "repo-3.txt") {
+		t.Errorf("the merged run's dev saw:\n%s\nwant both runs' files", saw)
+	}
+	// Two runs that each write same.txt don't merge.
+	os.WriteFile(filepath.Join(fake, "clash"), nil, 0o600)
+	five, six := build(`"whiff/1"`, ""), build(`"whiff/1"`, "")
+	wait(five)
+	wait(six)
+	if got := wait(build(`["whiff/5" "whiff/6"]`, "")); !strings.HasPrefix(got, "(err {") || !strings.Contains(got, "CONFLICT") {
+		t.Errorf("a build from bases that conflict = %s, want git's err", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".whiff", "pipelines", "repo-7")); err == nil {
+		t.Error("a build that couldn't start left its worktree")
+	}
+}

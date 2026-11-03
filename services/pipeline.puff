@@ -64,8 +64,9 @@
         (map/set-in [:jobs id] [n step])
         (set-run n {:step step :job id}))))
 
-  ; dev-cmd is the dev's claude: its session's first turn, or a later one
-  ; once a turn has ended in it, :resumable. It may run the check, as it is
+  ; dev-cmd is the dev's claude, on the run's :model if it has one: its
+  ; session's first turn, or a later one once a turn has ended in it,
+  ; :resumable. It may run the check, as it is
   ; or with more arguments, and no MCP servers: none of your own Claude
   ; setup's.
   (def (dev-cmd run)
@@ -75,6 +76,7 @@
          ["claude" "-p" "--strict-mcp-config" "--tools" "Read,Edit,Write,Glob,Grep,Bash"
           "--allowedTools" (str "Bash(" (string/join check " ") ")") (str "Bash(" (string/join check " ") ":*)")
           "--permission-mode" "acceptEdits" "--append-system-prompt" dev-system]
+         (match (map/get-or run :model "") ["" []] [m ["--model" m]])
          (if (map/get-or run :resumable #f) ["--resume" s] ["--session-id" s]))]))
 
   (def (dev state n input)
@@ -204,6 +206,10 @@
           from (map/get-or (run-of state n) :step :none)]
       ; :me/tell answers pending, as it waits in your inbox.
       (do (if quiet :quiet (or-else (call :me/tell (str "pipeline " n ", " task ": " (keyword/name status) ". " note) {:actions (actions n status branch from)}) :told))
+        ; A build's asker hears how it ended.
+        (match (map/get (run-of state n) :asker)
+          [(some a) (or-else (reply a (ok {:run n :status status :branch branch :dir dir :note note})) :gone)]
+          [(none) :none])
         (publish :pipeline/done {:run n :status status :branch branch :dir dir :note note :from from})
         ; After :pipeline/done, so a planner hears of the end first.
         (publish :pipeline/step {:run n :step status})
@@ -289,20 +295,28 @@
         (recur (+ n 1))
         n)))
 
-  ; begin starts a run on task in repo, from base, a commit or branch: [n
-  ; state], or the err it couldn't start for.
-  (def (begin state repo base task check quiet)
-    (let [base (string/trim (try (git repo ["rev-parse" base])))
+  ; begin starts a run on task in repo, from base, a commit or branch, or
+  ; a vector of them merged, the first's worktree with the rest merged in:
+  ; [n state], or the err it couldn't start for. extra are the run's
+  ; fields beyond those, as :model and :asker.
+  (def (begin state repo base task check quiet extra)
+    (let [bases (if (= (value/type base) :vector) base [base])
+          base (string/trim (try (git repo ["rev-parse" (unwrap (vector/first bases))])))
           n (free repo (map/get-or state :next 1))
           dir (path/join home (str (path/base repo) "-" n))
           branch (str "whiff/" n)
           session (uuid/new)
           _ (try (file/mkdir home))
           _ (try (git repo ["worktree" "add" "-q" "-b" branch dir base]))
-          run {:task task :repo repo :dir dir :branch branch :base base :check check :round 1 :session session :step :starting :quiet quiet}
+          rest (vector/slice bases 1 (vector/length bases))
+          merged (if (vector/empty? rest) (ok "")
+                   (git dir (vector/concat ["-c" "user.name=whiff" "-c" "user.email=whiff@localhost" "merge" "-q" "--no-edit" "-m" (str "Merge " (string/join rest ", "))] rest)))
+          ; Its base is where the dev starts: the merge, if there is one.
+          base (match merged [(ok _) (string/trim (or-else (git dir ["rev-parse" "HEAD"]) base))] [_ base])
+          run (map/merge {:task task :repo repo :dir dir :branch branch :base base :check check :round 1 :session session :step :starting :quiet quiet} extra)
           state (-> state (map/set :next (+ n 1)) (map/set-in [:runs n] run))]
       ; A run that can't start leaves no worktree or branch behind.
-      (match (dev state n (str "Task: " task))
+      (match (match merged [(ok _) (dev state n (str "Task: " task))] [e e])
         [(ok s) (ok [n s])]
         [(err e)
          (do (or-else (git repo ["worktree" "remove" "--force" dir]) "")
@@ -311,11 +325,26 @@
 
   (on (start state task check) :write :update
     "Starts a run on task in the repository here: a dev Claude makes the change in a worktree of its own, check (a command, like [\"go\" \"test\" \"./...\"]) runs there, and a reviewer Claude reviews the diff, for up to 3 rounds; then it is committed on the run's branch and you hear how it went in your inbox. (ok n), the run's number."
-    (begin state (string/trim (try (proc/output ["git" "rev-parse" "--show-toplevel"]))) "HEAD" task check #f))
+    (begin state (string/trim (try (proc/output ["git" "rev-parse" "--show-toplevel"]))) "HEAD" task check #f {}))
 
   (on (start-on state repo base task check) :write :update
     "Starts a run as start does, in the repository at repo, from base, a commit or branch such as an earlier run's, without telling you how it ends (:pipeline/done still does): how a planner stacks runs. (ok n)."
-    (begin state repo base task check #t))
+    (begin state repo base task check #t {}))
+
+  (ask (build repo base task check model)
+    "Runs task as start-on does, in the repository at repo, from base (a commit or branch, or a vector of them, merged), with the dev Claude on model (\"\" for the default): pending at once, and once the run ends (ok {:run :status :branch :dir :note}), :status :ready, :gave-up or :failed. How an agent hands work to smaller ones and hears back.")
+
+  (on (whiff/asked state id) :update
+    "A build waits in the inbox: its run starts now, unless it has. whiff's own; call build instead."
+    (cond
+      [(vector/any? (map/values (map/get-or state :runs {})) (fn (run) (= (map/get run :asker) (some id)))) (ok state)]
+      [_
+       (match (vector/find (inbox :build) (fn ({:id i}) (= i id)))
+         [(some {:args [repo base task check model]})
+          (match (begin state repo base task check #t {:model model :asker id})
+            [(ok [_ s]) (ok s)]
+            [(err e) (let [_ (reply id (err e))] (ok state))])]
+         [_ (ok state)])]))
 
   (on (runs state) :read
     "Every run, oldest first: {:run :task :step :round :branch :dir :from}, with :step one of :dev, :check, :review, :ready, :gave-up, :failed, :cancelled, :merged or :discarded, and :from the step an ended run ended at (:none while it runs)."
