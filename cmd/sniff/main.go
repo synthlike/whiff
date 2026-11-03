@@ -28,6 +28,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -724,15 +725,14 @@ func (s *server) render(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if r.URL.Query().Get("as") == "reply" {
-		ms := map[string]string{}
-		if c, err := s.dial(); err == nil {
-			if m, err := c.Marks(); err == nil {
-				ms = m
-			}
-			c.Close()
-		}
-		pages.ExecuteTemplate(w, "shown", show(string(b), ms, ""))
+	switch r.URL.Query().Get("as") {
+	case "reply":
+		pages.ExecuteTemplate(w, "shown", show(string(b), s.currentMarks(), ""))
+		return
+	case "answer":
+		// Just answered: what an err offers instead holds now, so its
+		// forms show too. The page sends one with api/call, staying put.
+		pages.ExecuteTemplate(w, "shown", show(string(b), s.currentMarks(), "/"))
 		return
 	}
 	n := node{Kind: "lit", Text: string(b)}
@@ -796,7 +796,7 @@ func (s *server) call(w http.ResponseWriter, r *http.Request) {
 	if !s.posted(w, r) {
 		return
 	}
-	sd, err := s.send(r.PostForm.Get("action"))
+	sd, err := s.send(answered(r.PostForm))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -804,37 +804,11 @@ func (s *server) call(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, treeOf(sd.Reply))
 }
 
-// errActions are the actions reply, a printed (err {... :actions [...]}),
-// offers next, going back to back; nil for any other reply.
-func (s *server) errActions(reply, back string) []act {
-	v, err := puff.ReadValue(reply)
-	t, ok := v.(puff.Tag)
-	if err != nil || !ok || t.Name() != "err" || t.Len() != 1 {
-		return nil
-	}
-	acts, _ := get(t.At(0), "actions").(puff.Vector)
-	if acts.Len() == 0 {
-		return nil
-	}
-	ms := map[string]string{}
-	if c, err := s.dial(); err == nil {
-		if m, err := c.Marks(); err == nil {
-			ms = m
-		}
-		c.Close()
-	}
-	return actsOf(acts, ms, back)
-}
-
-// act sends what a page's form picked, an item's action, as you, with your
-// answer added if the form asked for one, and goes back to the page it
-// came from, which shows what it answered.
-func (s *server) act(w http.ResponseWriter, r *http.Request) {
-	if !s.posted(w, r) {
-		return
-	}
-	msg := r.PostForm.Get("action")
-	if answer, ok := r.PostForm["answer"]; ok {
+// answered is the action form posted, with your answer added as its last
+// argument if the form asked for one.
+func answered(form url.Values) string {
+	msg := form.Get("action")
+	if answer, ok := form["answer"]; ok {
 		v, err := puff.ReadValue(msg)
 		if vec, ok := v.(puff.Vector); err == nil && ok {
 			items := make([]puff.Value, vec.Len(), vec.Len()+1)
@@ -844,7 +818,41 @@ func (s *server) act(w http.ResponseWriter, r *http.Request) {
 			msg = puff.Print(puff.NewVector(append(items, puff.String(strings.TrimSpace(strings.Join(answer, ""))))...))
 		}
 	}
-	sd, err := s.send(msg)
+	return msg
+}
+
+// errActions are the actions reply, a printed (err {... :actions [...]}),
+// offers next, going back to back; nil for any other reply.
+func (s *server) errActions(reply, back string) []act {
+	v, err := puff.ReadValue(reply)
+	t, ok := v.(puff.Tag)
+	if err != nil || !ok || t.Name() != "err" || t.Len() != 1 || get(t.At(0), "actions") == nil {
+		return nil // no need to ask the daemon for marks
+	}
+	return nextOf(v, s.currentMarks(), back)
+}
+
+// currentMarks is every function's mark, as the daemon says now; none if
+// it doesn't answer.
+func (s *server) currentMarks() map[string]string {
+	ms := map[string]string{}
+	if c, err := s.dial(); err == nil {
+		if m, err := c.Marks(); err == nil {
+			ms = m
+		}
+		c.Close()
+	}
+	return ms
+}
+
+// act sends what a page's form picked, an item's action, as you, with your
+// answer added if the form asked for one, and goes back to the page it
+// came from, which shows what it answered.
+func (s *server) act(w http.ResponseWriter, r *http.Request) {
+	if !s.posted(w, r) {
+		return
+	}
+	sd, err := s.send(answered(r.PostForm))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

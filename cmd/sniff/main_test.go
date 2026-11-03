@@ -532,6 +532,23 @@ func TestViews(t *testing.T) {
 		!strings.Contains(b, `href="/view/board/times?args=%5B3%5D"`) || !strings.Contains(b, `<span>x</span>`) {
 		t.Errorf("a reply drawn: %s %s", r.Status, b)
 	}
+	// An err offering what to do instead: drawn from history, its links;
+	// just answered, its forms too, which api/call sends with your answer.
+	stuck := `(err {:kind :not-now :actions [{:label "Bump" :action [:board/bump] :ask "By?"} {:label "Times" :action [:board/times 3]}]})`
+	if r, b := do("POST", "/render?as=reply", "text/plain", stuck); r.StatusCode != http.StatusOK || strings.Contains(b, "<form") ||
+		!strings.Contains(b, `<div class="view next">`) || !strings.Contains(b, `href="/view/board/times?args=%5B3%5D"`) {
+		t.Errorf("an err drawn from history: %s %s", r.Status, b)
+	}
+	if r, b := do("POST", "/render?as=answer", "text/plain", stuck); r.StatusCode != http.StatusOK ||
+		!strings.Contains(b, `<input type="hidden" name="action" value="[:board/bump]">`) || !strings.Contains(b, `placeholder="By?"`) ||
+		!strings.Contains(b, `href="/view/board/times?args=%5B3%5D"`) {
+		t.Errorf("an err just answered: %s %s", r.Status, b)
+	}
+	if r, b := do("POST", "/api/call", "application/x-www-form-urlencoded", url.Values{"action": {"[:board/bump]"}, "answer": {" 1 "}}.Encode(),
+		"Sec-Fetch-Site", "same-origin"); r.StatusCode != http.StatusOK || !strings.Contains(b, "can't add int and string") {
+		// Your answer is its argument, "1", a string, which bump can't add.
+		t.Errorf("api/call with an answer: %s %s", r.Status, b)
+	}
 	if _, b := do("POST", "/render", "text/plain", `[1 "two"]`); !strings.Contains(b, `<span class="str">&#34;two&#34;</span>`) {
 		t.Errorf("a value drawn: %s", b)
 	}

@@ -34,7 +34,7 @@ function print(t) {
 // drawn is a box that sniff fills with a tree drawn: as a reply, with the
 // view it holds, if as is "reply"; else folded as puff.
 function drawn(t, as) {
-  const box = el("div", as === "reply" ? "" : "value", "…");
+  const box = el("div", as === "reply" || as === "answer" ? "" : "value", "…");
   fetch("render" + (as ? "?as=" + as : ""), { method: "POST", headers: { "Content-Type": "text/plain" }, body: print(t) })
     .then(async (r) => {
       const html = await r.text();
@@ -535,14 +535,34 @@ function callBox(action, then) {
     try {
       const r = await fetch("api/call", { method: "POST", body: new URLSearchParams(new FormData(form)) });
       if (!r.ok) throw new Error((await r.text()).trim());
-      out.replaceChildren(drawn(await r.json(), "reply"));
+      out.replaceChildren(drawn(await r.json(), "answer"));
       then?.();
     } catch (err) {
       out.replaceChildren(el("p", "query-error", err.message));
     }
   };
+  answers(out);
   box.append(form, out);
   return box;
+}
+
+// answers has out, where a reply just drawn as an answer shows, send the
+// form of an action its err offers instead, as you, and show that reply
+// in its place: the page stays where it is.
+function answers(out) {
+  out.addEventListener("submit", async (ev) => {
+    if (!ev.target.closest(".next")) return;
+    ev.preventDefault();
+    const body = new URLSearchParams(new FormData(ev.target));
+    out.replaceChildren(el("p", "hint", "…"));
+    try {
+      const r = await fetch("api/call", { method: "POST", body });
+      if (!r.ok) throw new Error((await r.text()).trim());
+      out.replaceChildren(drawn(await r.json(), "answer"));
+    } catch (err) {
+      out.replaceChildren(el("p", "query-error", err.message));
+    }
+  });
 }
 
 // gateBadge is how the review gate treated an agent's write: held or
@@ -1431,11 +1451,12 @@ async function callForm(text) {
   try {
     const r = await fetch("api/call", { method: "POST", body: new URLSearchParams({ action }) });
     if (!r.ok) throw new Error((await r.text()).trim());
-    out.replaceChildren(drawn(await r.json(), "reply"));
+    out.replaceChildren(drawn(await r.json(), "answer"));
   } catch (err) {
     out.replaceChildren(el("p", "query-error", err.message));
   }
 }
+answers($("palette-reply"));
 
 paletteQ.addEventListener("input", () => {
   $("palette-reply").replaceChildren();

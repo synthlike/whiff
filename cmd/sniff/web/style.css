@@ -597,7 +597,7 @@ aside h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; co
 .view details.asks[open] summary { border-color: var(--accent); }
 .said { font: 12px var(--mono); margin: 0 0 8px; word-break: break-word; }
 .said p { margin: 0; }
-.said .actions { margin: 4px 0 0; justify-content: flex-start; max-width: none; }
+.said .actions, .view.next .actions { margin: 4px 0 0; justify-content: flex-start; max-width: none; }
 .said.ok { color: var(--ok); }
 .said.err { color: var(--err); }
 /* A board: columns side by side, scrolled sideways, each item a card. */
