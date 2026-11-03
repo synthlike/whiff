@@ -10,6 +10,47 @@ import (
 	"github.com/synthlike/whiff/internal/puff"
 )
 
+// actionMsg is action a's message, {:label :action [...]}'s :action. One
+// that asks for an answer gets "", no answer, as a client adds it: edit
+// the line to give one.
+func actionMsg(a puff.Value) puff.Value {
+	msg := field(a, "action")
+	if vec, ok := msg.(puff.Vector); ok && field(a, "ask") != nil {
+		args := make([]puff.Value, vec.Len(), vec.Len()+1)
+		for k := range vec.Len() {
+			args[k] = vec.At(k)
+		}
+		msg = puff.NewVector(append(args, puff.String(""))...)
+	}
+	return msg
+}
+
+// errText is e, an err's value, as the CLI prints it: e without its
+// :actions, then a line for each, its label and action apart by a tab, as
+// whiff act takes them.
+func errText(e puff.Value) string {
+	m, ok := e.(puff.Map)
+	acts, isVec := field(e, "actions").(puff.Vector)
+	if !ok || !isVec {
+		return puff.Print(e) + "\n"
+	}
+	var rest []puff.Entry
+	for i := range m.Len() {
+		if en := m.Entry(i); !puff.Equal(en.Key, puff.Keyword("actions")) {
+			rest = append(rest, en)
+		}
+	}
+	m, _ = puff.NewMap(rest...)
+	var b strings.Builder
+	b.WriteString(puff.Print(m) + "\n")
+	for i := range acts.Len() {
+		a := acts.At(i)
+		label, _ := field(a, "label").(puff.String)
+		b.WriteString("  " + oneLine(string(label)) + "\t" + puff.Print(actionMsg(a)) + "\n")
+	}
+	return b.String()
+}
+
 // viewText is v as the CLI shows a view, and true; false if v isn't one:
 //
 //	items      a line each, label, detail (and url) and action apart by tabs, for fzf;
@@ -51,17 +92,7 @@ func viewText(v puff.Value) (string, bool) {
 			}
 			for j := range actions.Len() {
 				a := actions.At(j)
-				msg := field(a, "action")
-				// One that asks for an answer gets "", no answer, as a
-				// client adds it: edit the line to give one.
-				if vec, ok := msg.(puff.Vector); ok && field(a, "ask") != nil {
-					args := make([]puff.Value, vec.Len(), vec.Len()+1)
-					for k := range vec.Len() {
-						args[k] = vec.At(k)
-					}
-					msg = puff.NewVector(append(args, puff.String(""))...)
-				}
-				b.WriteString(line + "\t" + str(a, "label") + "\t" + puff.Print(msg) + "\n")
+				b.WriteString(line + "\t" + str(a, "label") + "\t" + puff.Print(actionMsg(a)) + "\n")
 			}
 		}
 	}

@@ -103,7 +103,11 @@ only ever handling one message.
   `try` passes one up from the function it is in, and `catch` handles the
   ones its arms match, `(catch (read) [{:kind :not-found} (ok "")])`, and
   lets the rest go on. An err dropped in a `do` faults rather than going
-  unnoticed.
+  unnoticed. One may offer the next step as `:actions`, the messages
+  `:me/tell` and views offer, `(err {:kind :no-run :actions [{:label
+  "Merge whiff/2" :action [:pipeline/merge 2]}]})`: a stale action's
+  error offers the ones that hold now. `whiff call` prints them as lines
+  `whiff act` takes, and sniff as buttons under what it answered.
 - **Faults are bugs.** Bad arguments, a non-exhaustive `match`, `(fail e)`:
   the handler stops, its caller gets `(err {:kind :fault})`, and the service
   restarts from its file. A file that doesn't load keeps the old version

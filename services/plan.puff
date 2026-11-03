@@ -71,11 +71,29 @@
             (map/set-in [:runs run] n)))))
 
   ; finish ends plan n as status, telling you how it went, with actions,
-  ; what you can do about it.
+  ; what you can do about it, which it keeps for no-plan.
   (def (finish state n status note actions)
     (let [{:goal goal} (plan-of state n)]
       (do (or-else (call :me/tell (str "plan " n ", " goal ": " (keyword/name status) ". " note) {:actions actions}) :told)
-        (ok (set-plan state n {:step status})))))
+        (ok (set-plan state n {:step status :actions actions})))))
+
+  ; no-plan is (err {:kind :no-plan}) for an action plan n doesn't take
+  ; now, saying why, with :actions, the ones it does: those it offered as
+  ; it stopped, or its board while it plans or builds.
+  (def (no-plan state n why)
+    (err {:kind :no-plan :message why
+          :actions (match (map/get-in state [:plans n])
+                     [(some p) when (vector/contains? [:proposed :done :failed] (map/get-or p :step :none)) (map/get-or p :actions [])]
+                     [(some {:step s}) when (vector/contains? [:planning :building] s) [{:label "Show the board" :action [:plan/board]}]]
+                     [_ []])}))
+
+  (test "an action a plan doesn't take offers the ones it does"
+    (= [(no-plan {:plans {1 {:step :done :actions [{:label "Merge whiff/2" :action [:plan/merge 1]}]}}} 1 "done")
+        (no-plan {:plans {2 {:step :building}}} 2 "building")
+        (no-plan {:plans {}} 3 "none")]
+      [(err {:kind :no-plan :message "done" :actions [{:label "Merge whiff/2" :action [:plan/merge 1]}]})
+       (err {:kind :no-plan :message "building" :actions [{:label "Show the board" :action [:plan/board]}]})
+       (err {:kind :no-plan :message "none" :actions []})]))
 
   (def (show-action run) {:label "Show review and diff" :action [:pipeline/show run]})
 
@@ -293,7 +311,7 @@
              _ (vector/each (vector/filter built (fn (r) (not (= r run))))
                  (fn (r) (ok (or-else (call :pipeline/merge r) ""))))]
          (moved n (ok [b (set-plan state n {:step :merged})])))]
-      [_ (err {:kind :no-plan :message (str "plan " n " isn't done: nothing to merge")})]))
+      [_ (no-plan state n (str "plan " n " isn't done: nothing to merge"))]))
 
   (on (discard state n) :write :update
     "Discards plan n, done or failed: every run it built, worktrees, uncommitted work and branches, as :pipeline/discard does; it leaves the board. (ok :discarded); (err {:kind :no-plan}) unless plan n is done or failed."
@@ -302,14 +320,14 @@
        (let [_ (vector/each (map/get-or p :built [])
                  (fn (r) (ok (or-else (call :pipeline/discard r) ""))))]
          (moved n (ok [:discarded (set-plan state n {:step :discarded})])))]
-      [_ (err {:kind :no-plan :message (str "plan " n " isn't done or failed: nothing to discard")})]))
+      [_ (no-plan state n (str "plan " n " isn't done or failed: nothing to discard"))]))
 
   (on (approve state n) :write :update
     "Builds drafted plan n's tasks, as they are now, as start does. (ok :building); (err {:kind :no-plan}) unless plan n waits for approval."
     (match (map/get-in state [:plans n])
       [(some {:step :proposed :base base})
        (moved n (ok [:building (try (next-run state n 0 base))]))]
-      [_ (err {:kind :no-plan :message (str "plan " n " doesn't wait for approval")})]))
+      [_ (no-plan state n (str "plan " n " doesn't wait for approval"))]))
 
   (on (edit state n i task) :write :update
     "Sets task i, from 1, of drafted plan n to task, a string. (ok tasks); (err {:kind :no-plan}) unless plan n waits for approval, (err {:kind :no-task}) unless it has task i."
@@ -322,7 +340,7 @@
           (err {:kind :no-task :message (str "plan " n " has tasks 1 to " (vector/length ts))})]
          [_ (let [ts (vector/set ts (- i 1) task)]
               (moved n (ok [ts (set-plan state n {:tasks ts})])))])]
-      [_ (err {:kind :no-plan :message (str "plan " n " doesn't wait for approval")})]))
+      [_ (no-plan state n (str "plan " n " doesn't wait for approval"))]))
 
   (on (retry state n note) :write :update
     "Takes plan n on after the run of the task it stopped at gave up, failed or was cancelled: its dev Claude gets note, your words for it (\"\" for none), and up to 3 more rounds, and the plan goes on from there. (ok :retrying); (err {:kind :no-plan}) unless plan n stopped so."
@@ -330,7 +348,7 @@
       [(some {:step :failed :run run})
        (let [_ (try (call :pipeline/retry run note))]
          (moved n (ok [:retrying (-> state (set-plan n {:step :building}) (map/set-in [:runs run] n))])))]
-      [_ (err {:kind :no-plan :message (str "plan " n " didn't stop at a task's run: nothing to retry")})]))
+      [_ (no-plan state n (str "plan " n " didn't stop at a task's run: nothing to retry"))]))
 
   (on (review-again state n) :write :update
     "Takes plan n on after the reviewer of the task it stopped at failed, as by a timeout: only the reviewer runs again, as :pipeline/review-again does, and the plan goes on from there. (ok :reviewing); (err {:kind :no-plan}) unless plan n stopped at a task's run, and :pipeline/review-again's (err {:kind :no-run}) unless its reviewer failed."
@@ -338,4 +356,4 @@
       [(some {:step :failed :run run})
        (let [_ (try (call :pipeline/review-again run))]
          (moved n (ok [:reviewing (-> state (set-plan n {:step :building}) (map/set-in [:runs run] n))])))]
-      [_ (err {:kind :no-plan :message (str "plan " n " didn't stop at a task's run: nothing to review again")})])))
+      [_ (no-plan state n (str "plan " n " didn't stop at a task's run: nothing to review again"))])))

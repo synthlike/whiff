@@ -323,7 +323,9 @@ func TestViews(t *testing.T) {
     (ok (view/text (str (* (map/get-or s :n 0) k)))))
   (on (bump s k) :write :update "Adds k."
     (do (publish :board/changed {})
-      (ok [:done (map/update s :n (fn (n) (+ n k)))]))))`,
+      (ok [:done (map/update s :n (fn (n) (+ n k)))])))
+  (on (stuck s) :write "Fails, offering what to do instead."
+    (err {:kind :not-now :message "not now" :actions [{:label "Bump" :action [:board/bump 1]} {:label "Times" :action [:board/times 3]} {:label "Bad" :action "x"}]})))`,
 	})
 	cookie := &http.Cookie{Name: fmt.Sprintf("sniff-%d", s.port), Value: s.token}
 	do := func(method, path, ctype, body string, header ...string) (*http.Response, string) {
@@ -478,19 +480,19 @@ func TestViews(t *testing.T) {
 	}
 
 	// Back on the page, it shows what the form answered.
-	if _, b := do("GET", "/view/board/show?said=1", "", ""); !strings.Contains(b, `<p class="said ok">Sent <code>[:board/bump 2]</code>: (ok :done)</p>`) ||
+	if _, b := do("GET", "/view/board/show?said=1", "", ""); !strings.Contains(b, `<div class="said ok"><p>Sent <code>[:board/bump 2]</code>: (ok :done)</p></div>`) ||
 		!strings.Contains(b, `<span>n 2</span>`) {
 		t.Errorf("back on the page: %s", b)
 	}
 	// A tab of the main page gets the view with its topics, and what the
 	// form answered, without the page around it.
 	if r, b := do("GET", "/view/board/show?part=panel&said=1", "", ""); r.StatusCode != http.StatusOK || strings.Contains(b, "<html") ||
-		!strings.Contains(b, `<div class="shown" data-topics="board/changed">`) || !strings.Contains(b, `<p class="said ok">`) ||
+		!strings.Contains(b, `<div class="shown" data-topics="board/changed">`) || !strings.Contains(b, `<div class="said ok">`) ||
 		!strings.Contains(b, `name="back" value="/view/board/show"`) {
 		t.Errorf("the view as a tab: %s %s", r.Status, b)
 	}
 	// The review banner gets the first item, and a link to the rest.
-	if r, b := do("GET", "/view/board/show?part=first&said=1", "", ""); r.StatusCode != http.StatusOK || !strings.Contains(b, `<p class="said ok">`) ||
+	if r, b := do("GET", "/view/board/show?part=first&said=1", "", ""); r.StatusCode != http.StatusOK || !strings.Contains(b, `<div class="said ok">`) ||
 		!strings.Contains(b, `<div class="view first"><div class="item"><span>n 2</span>`) || strings.Contains(b, "<span>next</span>") ||
 		!strings.Contains(b, `<a class="more" href="/view/board/show">1 more</a>`) {
 		t.Errorf("the first item: %s %s", r.Status, b)
@@ -509,6 +511,18 @@ func TestViews(t *testing.T) {
 	s.mu.Unlock()
 	if sd.Sends != `[:board/bump "1"]` || sd.OK {
 		t.Errorf("an answered form sent %+v", sd)
+	}
+
+	// An err that offers actions shows them under what it answered: a
+	// :write one as a form, a :read one as a link, and none that isn't a
+	// message.
+	if r := post(url.Values{"action": {"[:board/stuck]"}, "back": {"/view/board/show"}}); r.Header.Get("Location") != "/view/board/show?said=3" {
+		t.Fatalf("the stuck form: %s %s", r.Status, r.Header.Get("Location"))
+	}
+	if _, b := do("GET", "/view/board/show?said=3", "", ""); !strings.Contains(b, `<div class="said err"><p>Sent <code>[:board/stuck]</code>: (err {:actions`) ||
+		!strings.Contains(b, `<input type="hidden" name="action" value="[:board/bump 1]">`) ||
+		!strings.Contains(b, `href="/view/board/times?args=%5B3%5D"`) || strings.Contains(b, ">Bad<") {
+		t.Errorf("an err's actions: %s", b)
 	}
 
 	// A past reply, drawn for the main page: its links, but no forms, as
