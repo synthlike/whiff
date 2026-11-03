@@ -229,7 +229,14 @@ func (sv *supervisor) reset(name string) puff.Value {
 func (d *daemon) remove(s *service) {
 	d.do(func(st *state) {
 		delete(st.addrs, s.name)
-		delete(st.modes, s.name)
+		// An agent's session keeps its mode for its next turn, until the
+		// agent itself goes.
+		if !agentSession(s.name) {
+			delete(st.modes, s.name)
+		}
+		if !s.client {
+			delete(st.modes, "agent/"+s.name)
+		}
 		for _, a := range st.inbox(s.name) {
 			st.take(s.name, a.id)
 			d.answer(st, a.ticket, s.name, puff.Errorf("no-address", "no address :%s", s.name))

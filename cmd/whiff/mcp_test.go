@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -175,5 +176,93 @@ func TestMCP(t *testing.T) {
 	cs.Close()
 	if err := <-served; err != nil {
 		t.Errorf("mcpServe = %v", err)
+	}
+}
+
+// TestMCPTurn serves whiff mcp as an agent's turn runs it, with the
+// WHIFF_SESSION its job got: it acts as the agent's session, lists only
+// the agent's :can functions with wait and cancel, and has no eval or
+// inbox.
+func TestMCPTurn(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "whiff-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	services, bin := filepath.Join(dir, "services"), filepath.Join(dir, "bin")
+	os.Mkdir(services, 0o700)
+	os.Mkdir(bin, 0o700)
+	files := map[string]string{
+		filepath.Join(services, "scout.puff"): `(agent scout :prompt "Greet people." :can [:greet/hello])`,
+		filepath.Join(services, "greet.puff"): `(service greet
+  (on (hello name) "Greets name." (ok (string/concat "hello, " name)))
+  (on (save x) :write "Saves x." (ok x)))`,
+		// The turn leaves its token and holds until the test is done.
+		filepath.Join(bin, "claude"): "#!/bin/sh\necho \"$WHIFF_SESSION\" > token\nwhile [ ! -e go ]; do sleep 0.02; done\necho done\n",
+	}
+	for path, src := range files {
+		if err := os.WriteFile(path, []byte(src), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("HOME", dir)
+	t.Setenv("WHIFF_TEST_DIR", dir)
+	t.Cleanup(func() { run([]string{"stop"}, dir, services, new(strings.Builder), new(strings.Builder)) })
+	home := filepath.Join(dir, ".whiff", "agents", "scout")
+	t.Cleanup(func() { os.WriteFile(filepath.Join(home, "go"), nil, 0o600) })
+
+	c, err := rpc.Dial(dir, startDaemon)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	var token string
+	for deadline := time.Now().Add(5 * time.Second); token == "" && time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if resp, err := c.Eval(`(call :scout/ask "hi")`, ""); err != nil || resp.Error != "" {
+			continue // scout may not have loaded yet
+		}
+		for wait := time.Now().Add(2 * time.Second); token == "" && time.Now().Before(wait); time.Sleep(20 * time.Millisecond) {
+			b, _ := os.ReadFile(filepath.Join(home, "token"))
+			token = strings.TrimSpace(string(b))
+		}
+	}
+	if token == "" {
+		t.Fatal("the turn left no token")
+	}
+	t.Setenv("WHIFF_SESSION", token)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	st, ct := mcp.NewInMemoryTransports()
+	go mcpServe(ctx, dir, st)
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil).Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+	list, err := cs.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, tool := range list.Tools {
+		names = append(names, tool.Name)
+	}
+	slices.Sort(names)
+	if want := []string{"cancel", "greet_hello", "wait"}; !slices.Equal(names, want) {
+		t.Errorf("tools = %v, want %v", names, want)
+	}
+	r, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "greet_hello", Arguments: map[string]any{"name": `"you"`}})
+	if err != nil || r.IsError || !strings.Contains(r.Content[0].(*mcp.TextContent).Text, "hello, you") {
+		t.Errorf("greet_hello = %+v %v", r, err)
+	}
+	// History has the call as the agent's session's.
+	hist, err := c.History()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(hist, func(e rpc.Entry) bool { return e.From == "agent/scout" && e.To == "greet/hello" }) {
+		t.Errorf("history has no call from :agent/scout to :greet/hello: %+v", hist)
 	}
 }

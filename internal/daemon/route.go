@@ -131,6 +131,15 @@ type state struct {
 	subs     map[*watcher]bool           // clients' subscriptions: whiff sub
 	tracers  map[*tracer]bool            // clients following history: whiff history -f
 	modes    map[string]*mode            // agent sessions that aren't gated, by address
+	grants   map[string]grant            // agent turns' session tokens: see grant
+}
+
+// grant is what an agent turn's session token lets its whiff mcp claim:
+// the session, :agent/<the agent's name>, and the functions it may call.
+// whiff makes one as the turn's job starts and drops it as the job ends.
+type grant struct {
+	session string
+	can     map[string]bool // address/fn
 }
 
 // watcher is a client subscribed to topics, every topic if topics is nil.
@@ -148,7 +157,7 @@ func (d *daemon) route() {
 	kick, final := make(chan struct{}, 1), make(chan batch, 1)
 	d.wg.Go(func() { d.writeHistory(kick, final) })
 	st := &state{db: d.db, log: d.log, kick: kick, addrs: map[string]*service{}, jobs: map[int64]*job{}, waiters: map[int64][]chan puff.Value{},
-		subs: map[*watcher]bool{}, tracers: map[*tracer]bool{}, modes: map[string]*mode{}}
+		subs: map[*watcher]bool{}, tracers: map[*tracer]bool{}, modes: map[string]*mode{}, grants: map[string]grant{}}
 	defer func() { final <- st.takeUnstored() }()
 	st.load()
 	for {

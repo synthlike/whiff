@@ -146,7 +146,8 @@ only ever handling one message.
 A service is a file, `(service name forms...)`: `(on (fn params...) "doc"
 body...)` handlers, `(ask ...)` functions, `(on :topic (v) ...)`
 subscribers and private `def`s. An agent is a file too, `(agent name
-:prompt "..." [:model "..."] [:every d])`, which whiff runs as a service of
+:prompt "..." [:model "..."] [:can [:addr/fn ...]] [:every d])`, which
+whiff runs as a service of
 its own turn loop (`internal/daemon/agent.puff`): `tell`, whose answer
 lands in `:me`'s inbox, `ask`, whose answer goes back to whoever asked,
 `forget`, and a `wake` with `:every`.
@@ -299,6 +300,16 @@ and marks in the descriptions, plus `eval`, `wait` (by id, so it works after
 a reconnect) and `inbox`. Tool arguments are puff values written as strings,
 as on the command line. A `:write` tool answers pending, like any gated
 message; `wait` gives the result once you accept it.
+
+An agent with `:can` gets those functions as its turns' tools. Its turn's
+job runs with `:session can`: whiff gives the job a token in
+`WHIFF_SESSION`, which its `whiff mcp` claims the agent's own session with,
+`:agent/<name>`, until the job ends. So every turn is the same session,
+whose mode holds from one turn to the next (`whiff trust agent/researcher
+gh`), and history has its calls under it. The session may call or send to
+its `:can` functions and nothing else: no eval, publish, subscribe or
+other inbox, enforced by whiff, not by Claude's permissions. The fence
+holds because a turn has no shell: `--tools ""`, and `whiff mcp` alone.
 
 ## History
 

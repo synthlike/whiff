@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/synthlike/whiff/internal/puff"
+	"github.com/synthlike/whiff/internal/rpc"
 )
 
 // TestGitService tries services/git.puff, as whiff try does, in a scratch
@@ -378,7 +379,8 @@ echo "reviewed:"; grep '^+[^+]'
 
 // fakeClaude puts a fake claude on PATH, with HOME at dir. It says whether
 // it starts or resumes the session and echoes the message; "slow" takes a
-// second and "fail" exits 1. A scheduled turn of an agent whose prompt is
+// second, "fail" exits 1, and "hold" waits for a file go in its directory.
+// A turn with whiff mcp's flags leaves its WHIFF_SESSION in a file token. A scheduled turn of an agent whose prompt is
 // "Watch the thread." has nothing to say the first time, then news from
 // its model, then nothing again.
 func fakeClaude(t *testing.T, dir string) {
@@ -391,12 +393,16 @@ case "$*" in *--session-id*) mode=new ;; *--resume*) mode=resume ;; esac
 model=default
 for a; do case "$prev" in --session-id|--resume) echo "$a" > last-id ;; --model) model=$a ;; --append-system-prompt) sys=$a ;; esac; prev=$a; done
 msg=$(cat)
+case "$*" in *--mcp-config*)
+  case "$*" in *"--strict-mcp-config --allowedTools mcp__whiff"*) ;; *) echo "want whiff mcp alone, got $*" >&2; exit 9 ;; esac
+  echo "$WHIFF_SESSION" > token ;;
+esac
 case "$msg" in *"scheduled turn"*)
   case "$sys" in *"Watch the thread."*) ;; *) echo "no prompt in $sys" >&2; exit 9 ;; esac
   if [ -e told ]; then echo nothing; elif [ -e woke ]; then touch told; echo "news from $model"; else touch woke; echo " Nothing "; fi
   exit ;;
 esac
-case "$msg" in slow) sleep 1 ;; fail) echo "it broke" >&2; exit 1 ;; esac
+case "$msg" in slow) sleep 1 ;; fail) echo "it broke" >&2; exit 1 ;; hold) while [ ! -e go ]; do sleep 0.02; done ;; esac
 echo "$mode in $(basename "$PWD"): $msg"
 `
 	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(fake), 0o700); err != nil {
@@ -1181,4 +1187,125 @@ func TestAgentAsk(t *testing.T) {
 		t.Fatalf("agent's ask = %+v %v, want a pending", resp, err)
 	}
 	wait(strings.Fields(strings.TrimPrefix(resp.Value, "(err {:id "))[0], `(err {:kind :no-reviewer`)
+}
+
+// TestAgentSession runs an agent with :can: its turn's whiff mcp claims
+// the agent's session with the token whiff gave the job, and reaches only
+// the :can functions, and the reads whiff mcp lists them with, until the
+// turn ends.
+func TestAgentSession(t *testing.T) {
+	dir := tempDir(t)
+	fakeClaude(t, dir)
+	writeServices(t, dir, map[string]string{
+		"scout": `(agent scout :prompt "Look things up." :can [:notes/list])`,
+		"notes": `(service notes
+  (on (list) "The notes." (ok ["a"]))
+  (on (add text) "Adds a note." (file/write "note" text)))`,
+	})
+	start(t, dir)
+	c := dial(t, dir)
+	resp, err := c.Eval(`(call :scout/ask "hold")`, "")
+	if err != nil || !strings.HasPrefix(resp.Value, "(err {:id ") {
+		t.Fatalf("ask = %+v %v", resp, err)
+	}
+	asked := strings.Fields(strings.TrimPrefix(resp.Value, "(err {:id "))[0]
+	home := filepath.Join(dir, ".whiff", "agents", "scout")
+	var token string
+	eventually(t, "the turn's token", func() string {
+		b, _ := os.ReadFile(filepath.Join(home, "token"))
+		token = strings.TrimSpace(string(b))
+		return fmt.Sprint(len(token))
+	}, "32")
+
+	turn := dial(t, dir)
+	turn.Agent = true
+	claim, err := turn.ClaimSession(token, `(ask (tell text) "Leaves the agent a message.")`)
+	if err != nil || claim.Value != "(ok [:agent/scout [:notes/list]])" {
+		t.Fatalf("claim = %+v %v", claim, err)
+	}
+	// It may call :notes/list, and describe :notes, but nothing else.
+	for _, tt := range []struct{ op, target, src, want string }{
+		{"call", "notes/list", "", `(ok ["a"])`},
+		{"call", "notes/add", "", "error: :agent/scout may call only :notes/list, its agent's :can, not notes/add"},
+		{"send", "scout/ask", "", "error: :agent/scout may call only :notes/list, its agent's :can, not scout/ask"},
+		{"pub", "notes/changed", "", "error: :agent/scout may only call :notes/list, its agent's :can: no pub"},
+		{"inbox", "me", "", "error: :agent/scout reads only its own inbox"},
+		{"eval", "", "(session/mode)", "(ok {:mode :gated})"},
+		{"eval", "", "(address/describe :notes)", "(ok [{"},
+		{"eval", "", "(address/describe :scout)", "error: :agent/scout may only call :notes/list, its agent's :can: no eval"},
+		{"eval", "", `(call :notes/list)`, "error: :agent/scout may only call :notes/list, its agent's :can: no eval"},
+	} {
+		var r rpc.Response
+		var err error
+		switch tt.op {
+		case "eval":
+			r, err = turn.Eval(tt.src, "")
+		case "inbox":
+			var out string
+			out, err = turn.Inbox(tt.target)
+			r.Value = out
+			if err != nil {
+				r.Error, err = err.Error(), nil
+			}
+		default:
+			r, err = turn.Message(tt.op, tt.target, `["x"]`, "")
+			if tt.target == "notes/list" {
+				r, err = turn.Message(tt.op, tt.target, "[]", "")
+			}
+		}
+		got := r.Value
+		if r.Error != "" {
+			got, err = "error: "+r.Error, nil
+		}
+		if err != nil || !strings.HasPrefix(got, tt.want) {
+			t.Errorf("%s %s%s = %q %v, want %q", tt.op, tt.target, tt.src, got, err, tt.want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "note")); err == nil {
+		t.Error("the fenced session wrote a note")
+	}
+
+	// Once the turn ends, its token claims nothing. Its whiff mcp hangs up
+	// as its claude exits.
+	os.WriteFile(filepath.Join(home, "go"), nil, 0o600)
+	turn.Close()
+	if r, err := c.Message("wait", "", "["+asked+"]", ""); err != nil || r.Value != `(ok "new in scout: hold")` {
+		t.Errorf("wait = %+v %v", r, err)
+	}
+	again := dial(t, dir)
+	again.Agent = true
+	if r, err := again.ClaimSession(token, ""); err != nil || !strings.HasPrefix(r.Value, "(err {:kind :no-session") {
+		t.Errorf("claim after the turn = %+v %v", r, err)
+	}
+
+	// Its mode holds between turns: you can trust it while no turn runs,
+	// and the next turn's session is trusted.
+	if r, err := c.Mode("agent/scout", "trusted", []string{"notes"}, 0); err != nil || r.Value != "(ok :done)" {
+		t.Fatalf("trust between turns = %+v %v", r, err)
+	}
+	os.Remove(filepath.Join(home, "go"))
+	os.Remove(filepath.Join(home, "token"))
+	resp, err = c.Eval(`(call :scout/ask "hold")`, "")
+	if err != nil || !strings.HasPrefix(resp.Value, "(err {:id ") {
+		t.Fatalf("second ask = %+v %v", resp, err)
+	}
+	eventually(t, "the second turn's token", func() string {
+		b, _ := os.ReadFile(filepath.Join(home, "token"))
+		token = strings.TrimSpace(string(b))
+		return fmt.Sprint(len(token))
+	}, "32")
+	next := dial(t, dir)
+	next.Agent = true
+	if r, err := next.ClaimSession(token, ""); err != nil || !strings.HasPrefix(r.Value, "(ok [:agent/scout") {
+		t.Fatalf("second claim = %+v %v", r, err)
+	}
+	if r, err := next.Eval("(session/mode)", ""); err != nil || r.Value != "(ok {:mode :trusted :services [:notes]})" {
+		t.Errorf("the second turn's mode = %+v %v", r, err)
+	}
+	os.WriteFile(filepath.Join(home, "go"), nil, 0o600)
+
+	// Only a service's job gets a session.
+	if r, err := c.Eval(`(call :jobs/run ["true"] {:session [:notes/list]})`, ""); err != nil || !strings.Contains(r.Value, ":session is for an agent's turn") {
+		t.Errorf(":session from a client = %+v %v", r, err)
+	}
 }

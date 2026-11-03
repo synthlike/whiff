@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -27,6 +28,12 @@ eval runs puff code in the daemon, under the same rule: code that reaches anythi
 
 The user may trust your session with some services, or free it, for a while: then the tools' descriptions say what goes straight through, and change when the mode does.`
 
+// turnInstructions are mcpInstructions for an agent's turn, whose session
+// reaches only the functions its agent's :can names.
+const turnInstructions = `whiff is the user's message daemon: small services written in puff, a lisp, answer messages, and whiff keeps a history of every one. This is your turn as one of its agents, and your tools are the whiff functions you may use, nothing else.
+
+Each tool named address_fn calls that service function. Its arguments are puff values written as strings: 12, :key, [1 2], {:a 1}, "text" with quotes; anything that doesn't read as a value is taken as a string. A :read function answers at once. A :write one waits for the user to review it: you get a pending id at once, and wait gives you the result once they accept or reject it; you needn't wait for it to end your turn.`
+
 // agentIface is what an agent's address offers others: messages to it wait
 // in its inbox.
 const agentIface = `(ask (tell text) "Leaves the agent a message, which it reads from its inbox and answers when it next looks.")`
@@ -38,9 +45,13 @@ func mcpServe(ctx context.Context, dir string, t mcp.Transport) error {
 	if err != nil {
 		return err
 	}
-	a := &agent{dir: dir, wd: wd, tools: map[string]string{}}
+	a := &agent{dir: dir, wd: wd, tools: map[string]string{}, token: os.Getenv("WHIFF_SESSION")}
+	instructions := mcpInstructions
+	if a.token != "" {
+		instructions = turnInstructions
+	}
 	a.server = mcp.NewServer(&mcp.Implementation{Name: "whiff", Version: fmt.Sprint(rpc.Version)},
-		&mcp.ServerOptions{Instructions: mcpInstructions, Capabilities: &mcp.ServerCapabilities{}})
+		&mcp.ServerOptions{Instructions: instructions, Capabilities: &mcp.ServerCapabilities{}})
 	a.addFixed()
 	if err := a.refresh(); err != nil {
 		return err
@@ -63,9 +74,15 @@ type agent struct {
 	dir, wd string
 	server  *mcp.Server
 
+	// token is an agent turn's session token, from WHIFF_SESSION: then
+	// it claims that agent's session, and offers only its :can functions,
+	// with no eval or inbox.
+	token string
+
 	mu    sync.Mutex
 	c     *rpc.Client
 	addr  string            // its :agent/<n>, without the colon
+	can   map[string]bool   // with a token: the functions it may call, address/fn
 	tools map[string]string // the function tools listed, by name: their JSON, to see a change
 	fns   map[string]fnTool // the same, by address/fn, to name an action's tool
 	mode  string            // the session's mode as the tools describe it, printed
@@ -143,13 +160,33 @@ func (a *agent) client() (*rpc.Client, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	resp, err := c.Claim("agent", agentIface)
+	var resp rpc.Response
+	if a.token != "" {
+		resp, err = c.ClaimSession(a.token, agentIface)
+	} else {
+		resp, err = c.Claim("agent", agentIface)
+	}
 	var addr string
+	var can map[string]bool
+	if err == nil && resp.Error != "" {
+		err = errors.New(resp.Error)
+	}
 	if err == nil {
 		v, _ := puff.ReadValue(resp.Value)
-		if k, ok := okValue(v).(puff.Keyword); ok {
-			addr = string(k)
-		} else {
+		switch v := okValue(v).(type) {
+		case puff.Keyword:
+			addr = string(v)
+		case puff.Vector: // [:agent/<name> [fns...]], for a token
+			k, _ := v.At(0).(puff.Keyword)
+			fns, _ := v.At(1).(puff.Vector)
+			addr, can = string(k), map[string]bool{}
+			for i := range fns.Len() {
+				if fn, ok := fns.At(i).(puff.Keyword); ok {
+					can[string(fn)] = true
+				}
+			}
+		}
+		if addr == "" {
 			err = fmt.Errorf("claiming an agent's address: %s", resp.Value)
 		}
 	}
@@ -157,7 +194,7 @@ func (a *agent) client() (*rpc.Client, string, error) {
 		c.Close()
 		return nil, "", err
 	}
-	a.c, a.addr = c, addr
+	a.c, a.addr, a.can = c, addr, can
 	return c, addr, nil
 }
 
@@ -203,12 +240,34 @@ type fnTool struct {
 // functions are every address's functions as tools, but the agent's own
 // and those only you may use, :yours, described as mode treats them.
 func (a *agent) functions(mode sessionMode) ([]fnTool, error) {
-	v, err := a.eval("(address/list)")
+	_, self, err := a.client()
 	if err != nil {
 		return nil, err
 	}
-	_, self, _ := a.client()
-	addrs, _ := okValue(v).(puff.Vector)
+	a.mu.Lock()
+	can := a.can
+	a.mu.Unlock()
+	var addrs puff.Vector
+	if can != nil {
+		// Only the addresses of its :can functions, which it may describe.
+		seen := map[string]bool{}
+		var vals []puff.Value
+		for _, fn := range slices.Sorted(maps.Keys(can)) {
+			addr := fn[:strings.LastIndex(fn, "/")]
+			if !seen[addr] {
+				seen[addr] = true
+				m, _ := puff.NewMap(puff.Entry{Key: puff.Keyword("address"), Val: puff.Keyword(addr)})
+				vals = append(vals, m)
+			}
+		}
+		addrs = puff.NewVector(vals...)
+	} else {
+		v, err := a.eval("(address/list)")
+		if err != nil {
+			return nil, err
+		}
+		addrs, _ = okValue(v).(puff.Vector)
+	}
 	var tools []fnTool
 	taken := map[string]bool{}
 	for i := range addrs.Len() {
@@ -233,7 +292,7 @@ func (a *agent) functions(mode sessionMode) ([]fnTool, error) {
 			ps, _ := field(f, "params").(puff.Vector)
 			t := fnTool{target: string(addr) + "/" + string(fn)}
 			name := toolName(t.target)
-			if taken[name] {
+			if can != nil && !can[t.target] || taken[name] {
 				continue
 			}
 			taken[name] = true
@@ -290,7 +349,9 @@ func (a *agent) refresh() error {
 	defer a.mu.Unlock()
 	if mode.printed != a.mode {
 		a.mode = mode.printed
-		a.addEval(mode)
+		if a.token == "" {
+			a.addEval(mode)
+		}
 	}
 	now := map[string]bool{}
 	a.fns = map[string]fnTool{}
@@ -452,6 +513,9 @@ func (a *agent) addFixed() {
 			}
 			return a.answer(resp.Value), nil
 		})
+	if a.token != "" {
+		return // an agent's turn answers its service, not an inbox
+	}
 	a.server.AddTool(&mcp.Tool{Name: "inbox",
 		Description: "Lists the messages sent to you that wait for your answer, oldest first, each {:id :fn :args :from :origin :cwd :at}. Answer one with eval (reply id (ok value)).",
 		InputSchema: obj(map[string]any{}),

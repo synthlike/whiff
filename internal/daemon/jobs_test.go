@@ -233,9 +233,9 @@ func TestJobs(t *testing.T) {
 
 	tests := []struct{ src, want string }{
 		{`(call :jobs/run [])`, `(err {:kind :bad-call :message ":jobs/run: want a command like [\"go\" \"test\"], got []"})`},
-		{`(call :jobs/run ["true"] {:wait 1s})`, `(err {:kind :bad-call :message ":jobs/run: want {:timeout d :stdin s :dir path :as :text :origin :agent :retry n :idempotent b}, a positive duration or :none, a count and strings, got {:wait 1s}"})`},
-		{`(call :jobs/run ["true"] {:as :json})`, `(err {:kind :bad-call :message ":jobs/run: want {:timeout d :stdin s :dir path :as :text :origin :agent :retry n :idempotent b}, a positive duration or :none, a count and strings, got {:as :json}"})`},
-		{`(call :jobs/run ["true"] {:timeout :never})`, `(err {:kind :bad-call :message ":jobs/run: want {:timeout d :stdin s :dir path :as :text :origin :agent :retry n :idempotent b}, a positive duration or :none, a count and strings, got {:timeout :never}"})`},
+		{`(call :jobs/run ["true"] {:wait 1s})`, `(err {:kind :bad-call :message ":jobs/run: want {:timeout d :stdin s :dir path :as :text :origin :agent :retry n :idempotent b :session [:addr/fn ...]}, a positive duration or :none, a count and strings, got {:wait 1s}"})`},
+		{`(call :jobs/run ["true"] {:as :json})`, `(err {:kind :bad-call :message ":jobs/run: want {:timeout d :stdin s :dir path :as :text :origin :agent :retry n :idempotent b :session [:addr/fn ...]}, a positive duration or :none, a count and strings, got {:as :json}"})`},
+		{`(call :jobs/run ["true"] {:timeout :never})`, `(err {:kind :bad-call :message ":jobs/run: want {:timeout d :stdin s :dir path :as :text :origin :agent :retry n :idempotent b :session [:addr/fn ...]}, a positive duration or :none, a count and strings, got {:timeout :never}"})`},
 		{`(call :jobs/run)`, `(err {:kind :bad-call :message ":jobs/run takes 1 to 2 arguments, got 0"})`},
 		{`(match (call :jobs/run ["no-such-program-whiff"]) [(err {:kind k}) k])`, `:start`},
 		{`(call :jobs/cancel 999)`, `(err {:kind :no-id :message "no job 999 is running"})`},

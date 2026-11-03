@@ -18,10 +18,10 @@ import (
 )
 
 // Version is the protocol version. Bump it when a message changes, or a
-// function clients evaluate is renamed (19: address/describe and the other
-// modules); hello and stop must stay readable by every version, so an old
+// function clients evaluate is renamed (20: a claim's session token, which
+// an older daemon would ignore and hand out an unfenced session); hello and stop must stay readable by every version, so an old
 // daemon can be stopped.
-const Version = 19
+const Version = 20
 
 // Request is a client's message to the daemon. The daemon answers each with
 // a Response, in order, except an answer or a cancel, which have none.
@@ -37,6 +37,10 @@ type Request struct {
 	// Agent says the client acts for an agent: its messages' origin is
 	// :agent, not :user. eval, call, send, pub.
 	Agent bool `json:"agent,omitempty"`
+	// Token is, for a claim of "agent", an agent turn's session token,
+	// from the job's WHIFF_SESSION: the claim gets the session it names,
+	// fenced to that agent's :can functions.
+	Token string `json:"token,omitempty"`
 }
 
 // Response is the daemon's answer to one Request; or, with Delivery set, a
@@ -536,6 +540,15 @@ func (c *Client) Ls() (string, error) {
 func (c *Client) Claim(addr, iface string) (Response, error) {
 	var resp Response
 	err := c.roundTrip(Request{Op: "claim", Target: addr, Src: iface}, &resp)
+	return resp, err
+}
+
+// ClaimSession claims the agent session token names, for an agent's turn,
+// with the interface in iface: its Value is (ok [:agent/<name> [fns...]]),
+// the session and the functions it may call.
+func (c *Client) ClaimSession(token, iface string) (Response, error) {
+	var resp Response
+	err := c.roundTrip(Request{Op: "claim", Target: "agent", Src: iface, Token: token}, &resp)
 	return resp, err
 }
 

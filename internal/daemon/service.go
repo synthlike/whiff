@@ -22,8 +22,11 @@ var loadTimeout = 5 * time.Second
 // running it. Its name, fns, code and forms don't change after loading, so
 // anyone can read them.
 type service struct {
-	name    string
-	client  bool // held by a client connection
+	name   string
+	client bool // held by a client connection
+	// can is, for an agent turn's session, the functions it may call,
+	// address/fn: it may do nothing else. nil for any other address.
+	can     map[string]bool
 	env     *puff.Env
 	fns     map[string]handler
 	subs    map[string]subscriber   // by topic

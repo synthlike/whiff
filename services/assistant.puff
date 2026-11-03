@@ -11,8 +11,9 @@
 ;   whiff call assistant/forget  ; start a new conversation
 ;
 ; Its home is ~/.whiff/agents/<its name>. For another agent, write another
-; (agent name :prompt "...") file; :model picks Claude's model, and :every 1d
-; gives it a turn of its own each day, which answers only with news.
+; (agent name :prompt "...") file; :model picks Claude's model, :can
+; [:gh/prs :todo/add] gives it those whiff functions as tools, and :every
+; 1d gives it a turn of its own each day, which answers only with news.
 
 (agent assistant
   :prompt "Help the user keep track of what they tell you.")

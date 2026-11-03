@@ -152,8 +152,7 @@ func (d *daemon) clientMode(req rpc.Request) rpc.Response {
 	var res puff.Value
 	var note string
 	d.do(func(st *state) {
-		s := st.addrs[addr]
-		if s == nil || !s.client || !strings.HasPrefix(addr, "agent/") {
+		if !st.isSession(addr) {
 			res = puff.Errorf("no-address", "no agent session :%s", addr)
 			return
 		}
@@ -176,11 +175,31 @@ func (d *daemon) clientMode(req rpc.Request) rpc.Response {
 	return rpc.Response{Value: puff.Print(res)}
 }
 
+// isSession is whether addr is an agent session: one a client holds, or
+// an agent's, :agent/<name>, while the agent :<name> is loaded, between
+// its turns too, so its mode holds from one turn to the next.
+func (st *state) isSession(addr string) bool {
+	if !strings.HasPrefix(addr, "agent/") {
+		return false
+	}
+	if s := st.addrs[addr]; s != nil {
+		return s.client
+	}
+	return agentSession(addr) && st.addrs[strings.TrimPrefix(addr, "agent/")] != nil
+}
+
+// agentSession is whether addr is an agent's own session, :agent/<name>,
+// rather than a whiff mcp client's :agent/<n>.
+func agentSession(addr string) bool {
+	name, ok := strings.CutPrefix(addr, "agent/")
+	return ok && name != "" && strings.Trim(name, "0123456789") != ""
+}
+
 // trust adds service to the services the agent session addr is trusted
 // for, making it trusted if it was gated, for as long as its mode lasts.
 // A free session stays free.
 func (st *state) trust(addr, service string) puff.Value {
-	if s := st.addrs[addr]; s == nil || !s.client || !strings.HasPrefix(addr, "agent/") {
+	if !st.isSession(addr) {
 		return puff.Errorf("no-address", "no agent session :%s to trust: it has gone", addr)
 	}
 	if st.addrs[service] == nil {

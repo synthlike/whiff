@@ -227,8 +227,14 @@ turn. `assistant.puff` is one form, and another agent is another file:
 (agent researcher
   :prompt "Follow the BIP-360 discussion for the user."
   :model "opus"
+  :can [:gh/prs :todo/add]
   :every 1d)
 ```
+
+`:can` gives its turns those functions as tools: it reads pull requests
+itself, and its `todo/add` waits for your review like any agent's write,
+unless you `whiff trust agent/researcher todo`. Without `:can` it has no
+tools.
 
 `:every` gives it a turn of its own each day, which reaches your inbox only
 if it has something to say. A service uses an agent with `ask`, whose

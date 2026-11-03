@@ -2,9 +2,12 @@ package daemon
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"maps"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -53,6 +56,11 @@ type jobOpts struct {
 	text       bool   // :as :text
 	retry      int    // how many times it may run again
 	idempotent bool   // running it twice does what running it once does
+	// can is, for :session, the functions the job's whiff mcp may call as
+	// its sender's agent session; nil without it. token is that session's,
+	// in the job's WHIFF_SESSION while it runs.
+	can   map[string]bool
+	token string
 }
 
 // attempt is one try at a job. The last one ends with the job, which has
@@ -79,7 +87,7 @@ func (d *daemon) jobsService() *service {
 	return &service{name: "jobs", d: d, cur: caller{addr: "jobs"},
 		fns: map[string]handler{
 			"run": {params: []string{"cmd", "opts"}, optional: 1, mark: puff.MarkWrite, marked: true, native: d.runJob, cmd: true,
-				doc: "Run cmd, [program args...], here; pending now, {:exit :stdout :stderr} when done. Options: :timeout (1h), or :none for a server; :stdin, a string; :dir, where it runs; :as :text answers (ok stdout), or (err {:kind :exit}) unless it exits 0; :origin :agent, for a job whose output a model writes, answers as :agent's; :retry n runs it again, up to n times, under its id, if a timeout or whiff stopped it, or whiff died while it ran, and only if it is :read or :idempotent #t says running it twice is safe. :read for a read-only command, as whiff ls lists them."},
+				doc: "Run cmd, [program args...], here; pending now, {:exit :stdout :stderr} when done. Options: :timeout (1h), or :none for a server; :stdin, a string; :dir, where it runs; :as :text answers (ok stdout), or (err {:kind :exit}) unless it exits 0; :origin :agent, for a job whose output a model writes, answers as :agent's; :retry n runs it again, up to n times, under its id, if a timeout or whiff stopped it, or whiff died while it ran, and only if it is :read or :idempotent #t says running it twice is safe; :session [:addr/fn ...], for an agent's turn, from its service: the job's whiff mcp acts as :agent/<service>, reaching only those functions, and it answers as :agent's. :read for a read-only command, as whiff ls lists them."},
 			"list": {mark: puff.MarkRead, marked: true, native: d.listJobs,
 				doc: "The running jobs, each {:id :cmd :cwd :from}."},
 			"cancel": {params: []string{"id"}, mark: puff.MarkWrite, marked: true, native: d.cancelJob,
@@ -99,10 +107,16 @@ func (d *daemon) runJob(m message, args []puff.Value) (puff.Value, error) {
 		return nil, err
 	}
 	j := &job{cmd: cmdv, opts: opts}
+	if opts.can != nil {
+		if r := d.grantSession(j, m); r != nil {
+			return r, nil
+		}
+	}
 	j.ctx, j.cancel = context.WithCancel(d.ctx)
 	p, err := d.spawn(j)
 	if err != nil {
 		j.cancel()
+		d.revoke(j)
 		return puff.Errorf("start", "%v", err), nil
 	}
 	d.do(func(st *state) {
@@ -169,11 +183,66 @@ func jobArgs(m message, args []puff.Value) (puff.Vector, jobOpts, bool, error) {
 			o.retry = int(n)
 		case puff.Equal(e.Key, puff.Keyword("idempotent")) && isBool:
 			o.idempotent = bool(b)
+		case puff.Equal(e.Key, puff.Keyword("session")):
+			can, err := canSet(e.Val)
+			if err != nil {
+				return cmdv, o, user, err
+			}
+			o.can, user = can, false
 		default:
-			return cmdv, o, user, fmt.Errorf("want {:timeout d :stdin s :dir path :as :text :origin :agent :retry n :idempotent b}, a positive duration or :none, a count and strings, got %s", puff.Print(opts))
+			return cmdv, o, user, fmt.Errorf("want {:timeout d :stdin s :dir path :as :text :origin :agent :retry n :idempotent b :session [:addr/fn ...]}, a positive duration or :none, a count and strings, got %s", puff.Print(opts))
 		}
 	}
 	return cmdv, o, user, nil
+}
+
+// canSet reads :session's functions, [:addr/fn ...], as address/fn.
+func canSet(v puff.Value) (map[string]bool, error) {
+	fns, ok := v.(puff.Vector)
+	can := map[string]bool{}
+	for i := range fns.Len() {
+		k, isKey := fns.At(i).(puff.Keyword)
+		if !isKey || !strings.Contains(string(k), "/") {
+			ok = false
+			break
+		}
+		can[string(k)] = true
+	}
+	if !ok {
+		return nil, fmt.Errorf("want :session [:addr/fn ...], the functions its agent may call, got %s", puff.Print(v))
+	}
+	return can, nil
+}
+
+// grantSession gives j a session token for its sender, a service: the
+// job's whiff mcp claims :agent/<sender> with it, fenced to j's :session
+// functions, until j ends. nil, or why it can't.
+func (d *daemon) grantSession(j *job, m message) puff.Value {
+	token := make([]byte, 16)
+	if _, err := rand.Read(token); err != nil {
+		return puff.Errorf("start", "a session token: %v", err)
+	}
+	var r puff.Value
+	d.do(func(st *state) {
+		s := st.addrs[m.from]
+		if s == nil || s.client || strings.Contains(m.from, "/") || !agentSession("agent/"+m.from) {
+			r = puff.Errorf("bad-call", ":session is for an agent's turn, from its service; :%s isn't one", m.from)
+			return
+		}
+		j.opts.token = hex.EncodeToString(token)
+		st.grants[j.opts.token] = grant{session: "agent/" + m.from, can: j.opts.can}
+	})
+	return r
+}
+
+// revoke drops j's session token, if it has one: its whiff mcp can't
+// claim the session again. One holding it keeps it until it hangs up,
+// which it does as j's process ends.
+func (d *daemon) revoke(j *job) {
+	if j.opts.token == "" {
+		return
+	}
+	d.do(func(st *state) { delete(st.grants, j.opts.token) })
 }
 
 // argv is j's command as strings.
@@ -202,6 +271,9 @@ func (d *daemon) spawn(j *job) (*proc, error) {
 	cmd.Stdout, cmd.Stderr = &p.stdout, &p.stderr
 	if j.opts.stdin != nil {
 		cmd.Stdin = strings.NewReader(*j.opts.stdin)
+	}
+	if j.opts.token != "" {
+		cmd.Env = append(os.Environ(), "WHIFF_SESSION="+j.opts.token)
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
@@ -379,6 +451,7 @@ func errMessage(r puff.Value) string {
 // waits, unhandled, for the next daemon.
 func (d *daemon) end(j *job, r puff.Value) {
 	j.cancel()
+	d.revoke(j)
 	told := d.do(func(st *state) {
 		delete(st.jobs, j.id)
 		d.answer(st, j.ticket, "jobs", r)

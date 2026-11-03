@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -247,6 +249,14 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 		if held != nil {
 			from = held.name
 		}
+		if held != nil && held.can != nil {
+			if why := fenced(held, req); why != "" {
+				if err := conn.Send(rpc.Response{Error: why}); err != nil {
+					return
+				}
+				continue
+			}
+		}
 		switch req.Op {
 		case "hello":
 			resp.Version = rpc.Version
@@ -321,6 +331,51 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 			return
 		}
 	}
+}
+
+// fenced is why s, an agent turn's session, may not make req: it may call
+// or send only to its :can functions, read its own inbox, answer it, and
+// wait on or cancel tasks; "" if it may. Its only evals are the reads
+// whiff mcp lists its tools with, exactly: (session/mode), and (address/
+// describe :addr) for an address in :can.
+func fenced(s *service, req rpc.Request) string {
+	switch req.Op {
+	case "hello", "wait", "reply", "cancel-task":
+		return ""
+	case "eval":
+		if req.Src == "(session/mode)" {
+			return ""
+		}
+		for fn := range s.can {
+			addr := fn[:strings.LastIndex(fn, "/")]
+			if req.Src == "(address/describe :"+addr+")" {
+				return ""
+			}
+		}
+	case "inbox":
+		if strings.TrimPrefix(req.Target, ":") == s.name {
+			return ""
+		}
+		return ":" + s.name + " reads only its own inbox"
+	case "call", "send":
+		if s.can[strings.TrimPrefix(req.Target, ":")] {
+			return ""
+		}
+		return fmt.Sprintf(":%s may call only %s, its agent's :can, not %s", s.name, canList(s.can), req.Target)
+	}
+	return fmt.Sprintf(":%s may only call %s, its agent's :can: no %s", s.name, canList(s.can), req.Op)
+}
+
+// canList is can's functions, as puff keywords in order.
+func canList(can map[string]bool) string {
+	fns := slices.Sorted(maps.Keys(can))
+	for i, fn := range fns {
+		fns[i] = ":" + fn
+	}
+	if len(fns) == 0 {
+		return "nothing"
+	}
+	return strings.Join(fns, " ")
 }
 
 // message calls or sends req.Target, :address/fn, with req.Args, a printed

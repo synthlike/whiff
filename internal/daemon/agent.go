@@ -3,6 +3,7 @@ package daemon
 import (
 	_ "embed"
 	"fmt"
+	"strings"
 
 	"github.com/synthlike/whiff/internal/puff"
 )
@@ -13,8 +14,9 @@ import (
 var agentSrc string
 
 // agentService expands f, an (agent name :prompt "..." [:model "..."]
-// [:every d]), into the (service name ...) whiff runs: agent.puff's forms,
-// after defs of prompt, model and every. Without :every there's no wake.
+// [:can [:addr/fn ...]] [:every d]), into the (service name ...) whiff
+// runs: agent.puff's forms, after defs of prompt, model, can and every.
+// Without :every there's no wake.
 func agentService(f *puff.Form) (*puff.Form, error) {
 	if len(f.Items) < 2 || f.Items[1].Kind != puff.FormSymbol {
 		return nil, &puff.Error{Pos: f.Pos, Msg: "agent wants its name"}
@@ -24,6 +26,7 @@ func agentService(f *puff.Form) (*puff.Form, error) {
 		"prompt": ":prompt wants a string, what the agent is for",
 		"model":  ":model wants a string, Claude's model name",
 		"every":  ":every wants a duration, as 1d",
+		"can":    ":can wants the functions the agent may use, as [:gh/prs :todo/add]",
 	}
 	rest := f.Items[2:]
 	for len(rest) > 0 {
@@ -35,7 +38,7 @@ func agentService(f *puff.Form) (*puff.Form, error) {
 		want, ok := wants[k]
 		switch {
 		case !ok:
-			return nil, &puff.Error{Pos: o.Pos, Msg: "unknown agent option " + o.String() + "; it takes :prompt, :model and :every"}
+			return nil, &puff.Error{Pos: o.Pos, Msg: "unknown agent option " + o.String() + "; it takes :prompt, :model, :can and :every"}
 		case opts[k] != nil:
 			return nil, &puff.Error{Pos: o.Pos, Msg: "agent takes " + o.String() + " once"}
 		case len(rest) < 2 || !agentOptOK(k, rest[1]):
@@ -53,6 +56,9 @@ func agentService(f *puff.Form) (*puff.Form, error) {
 	if opts["every"] == nil {
 		opts["every"] = lit(puff.Duration(0))
 	}
+	if opts["can"] == nil {
+		opts["can"] = &puff.Form{Kind: puff.FormVector, Pos: f.Pos}
+	}
 	sym := func(name string) *puff.Form { return &puff.Form{Kind: puff.FormSymbol, Pos: f.Pos, Name: name} }
 	list := func(items ...*puff.Form) *puff.Form { return &puff.Form{Kind: puff.FormList, Pos: f.Pos, Items: items} }
 
@@ -69,7 +75,7 @@ func agentService(f *puff.Form) (*puff.Form, error) {
 		}
 		items = append(items, lit(puff.Keyword("start")), start[0])
 	}
-	for _, k := range []puff.Keyword{"prompt", "model", "every"} {
+	for _, k := range []puff.Keyword{"prompt", "model", "can", "every"} {
 		items = append(items, list(sym("def"), sym(string(k)), opts[k]))
 	}
 	for _, g := range loop {
@@ -83,6 +89,17 @@ func agentService(f *puff.Form) (*puff.Form, error) {
 
 // agentOptOK is whether v is a literal of the kind option k wants.
 func agentOptOK(k puff.Keyword, v *puff.Form) bool {
+	if k == "can" {
+		if v.Kind != puff.FormVector {
+			return false
+		}
+		for _, fn := range v.Items {
+			if k, ok := fn.Val.(puff.Keyword); fn.Kind != puff.FormLiteral || !ok || !strings.Contains(string(k), "/") {
+				return false
+			}
+		}
+		return true
+	}
 	if v.Kind != puff.FormLiteral {
 		return false
 	}

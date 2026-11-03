@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/synthlike/whiff/internal/puff"
@@ -75,7 +77,25 @@ func (d *daemon) claim(l *link, req rpc.Request) (*service, rpc.Response) {
 		return nil, rpc.Response{Value: puff.Print(puff.Errorf("taken", ":%s %s", name, why))}
 	}
 	done := puff.Done
-	if name == "agent" && req.Agent {
+	var can map[string]bool
+	if req.Token != "" {
+		if name != "agent" || !req.Agent {
+			return nil, rpc.Response{Error: "a session token claims :agent, for an agent"}
+		}
+		var g grant
+		var ok bool
+		d.do(func(st *state) { g, ok = st.grants[req.Token] })
+		if !ok {
+			return nil, rpc.Response{Value: puff.Print(puff.Errorf("no-session", "that session token isn't whiff's, or its agent's turn has ended"))}
+		}
+		name, can = g.session, g.can
+		fns := slices.Sorted(maps.Keys(can))
+		vals := make([]puff.Value, len(fns))
+		for i, fn := range fns {
+			vals[i] = puff.Keyword(fn)
+		}
+		done = puff.Ok(puff.NewVector(puff.Keyword(name), puff.NewVector(vals...)))
+	} else if name == "agent" && req.Agent {
 		name = fmt.Sprintf("agent/%d", d.newAgent())
 		done = puff.Ok(puff.Keyword(name))
 	} else if name == "jobs" || name == "me" || name == "review" || name == "agent" || strings.HasPrefix(name, "agent/") ||
@@ -89,7 +109,7 @@ func (d *daemon) claim(l *link, req rpc.Request) (*service, rpc.Response) {
 	quit := make(chan struct{})
 	s := &service{name: name, fns: fns, subs: map[string]subscriber{}, code: map[string][]*puff.Form{},
 		mailbox: make(chan message, mailboxSize), cur: caller{addr: name, stop: quit}, d: d,
-		quit: quit, done: make(chan struct{}), client: true}
+		quit: quit, done: make(chan struct{}), client: true, can: can}
 	held := false
 	d.do(func(st *state) {
 		if held = st.addrs[name] != nil; !held {
