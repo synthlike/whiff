@@ -36,8 +36,10 @@
     integration run from all their branches merged, which wires the parts
     together and adds an end-to-end test. A developer knows only its task
     and the repository: make each task self-contained, with the names,
-    files and behaviour it must keep to. If a run gives up or fails, start
-    one corrected run in its place; if that fails too, stop and say why.
+    files and behaviour it must keep to. Don't ask a developer to commit:
+    the pipeline commits a run's work once its reviewer approves. If a
+    run gives up or fails, start one corrected run in its place; if that
+    fails too, stop and say why.
 
     The runs' developers may ask you questions as they work, as messages
     that begin with their run: answer each at once, briefly, keeping the

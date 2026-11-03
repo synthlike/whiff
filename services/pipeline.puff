@@ -33,8 +33,10 @@
   (def dev-system """
     You are the developer in a small pipeline. Make the change you are asked
     for in this repository, keeping to its style, and add or update tests.
-    You can read and edit files and run the check command. Don't commit. End
-    with a short summary of what you changed.
+    You can read and edit files, run the check command, and go vet, go
+    build, gofmt and git status, diff and log. Don't commit: the pipeline
+    commits your work once its reviewer approves. End with a short summary
+    of what you changed.
     """)
 
   ; from-of is who sent build id, still in the inbox: its address, or :you
@@ -61,10 +63,13 @@
 
   (def review-prompt """
     You are the reviewer in a small pipeline. Below are the task, the result
-    of the project's check and the diff the developer made. List the real
-    problems (bugs, missing tests, the task not done), most important first,
-    each with its file and line and why. Skip style nits. End with one line
-    on its own:
+    of the project's check and the diff the developer made. You have no
+    tools: judge from these alone, and take the check's result as given.
+    The work is uncommitted on purpose: the pipeline commits it once you
+    approve, so don't count that, or a task's asking for it, against it.
+    List the real problems (bugs, missing tests, the task not done), most
+    important first, each with its file and line and why. Skip style nits.
+    End with one line on its own:
 
     VERDICT: approve, if it is ready to commit, or
     VERDICT: changes, if it needs another round.
@@ -101,8 +106,9 @@
            ["" []]
            [_ ["--mcp-config" (json/to-string {:mcpServers {:whiff {:command "whiff" :args ["mcp"]}}})]])
          ["--strict-mcp-config" "--tools" "Read,Edit,Write,Glob,Grep,Bash"
-          "--allowedTools" (str "Bash(" (string/join check " ") ")") (str "Bash(" (string/join check " ") ":*)")]
-         (match (map/get-or run :lead "") ["" []] [_ ["--allowedTools" "mcp__whiff"]])
+          "--allowedTools" (str "Bash(" (string/join check " ") ")") (str "Bash(" (string/join check " ") ":*)")
+          "Bash(go vet:*)" "Bash(go build:*)" "Bash(gofmt:*)" "Bash(git status:*)" "Bash(git diff:*)" "Bash(git log:*)"]
+         (match (map/get-or run :lead "") ["" []] [_ ["mcp__whiff"]])
          ["--permission-mode" "acceptEdits" "--append-system-prompt" dev-system]
          (match (map/get-or run :model "") ["" []] [m ["--model" m]])
          (if (map/get-or run :resumable #f) ["--resume" s] ["--session-id" s]))]))
@@ -138,7 +144,7 @@
         (finish state n :failed "The developer changed nothing.")
         (let [input (str review-prompt "\n\nTask: " task "\n\nThe check " (check-text checked) "\n\nThe diff:\n" diff)
               id (try (submitted (call :jobs/run ["claude" "-p" "--strict-mcp-config" "--tools" "" "--no-session-persistence"]
-                                   {:stdin input :dir dir :as :text :timeout 5m})))]
+                                   {:stdin input :dir dir :as :text :timeout 10m})))]
           (ok (waiting (set-run state n {:checked checked :diff diff}) n :review id))))))
 
   ; subject is task's first sentence, as a commit's subject: at most 72
