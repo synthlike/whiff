@@ -249,12 +249,23 @@ func (d *daemon) owes(st *state, addr string) bool {
 	return err == nil
 }
 
+// agentResult is the function of agent.puff that whiff tells, in its
+// inbox, of what one of the agent's turns started and has since ended.
+const agentResult = "whiff/result"
+
 // tell gives t's sender result, from by: [:whiff/done id result] in its
 // mailbox if it is a service with an (on (whiff/done id result) ...), else
 // a line in history. One for a service that isn't loaded waits until it
-// is. It says whether the result is still owed: in a mailbox, or waiting.
+// is. One for an agent's session, :agent/<name>, goes to the agent. It says whether the result is still owed: in a mailbox, or waiting.
 func (d *daemon) tell(st *state, t ticket, by string, result puff.Value) bool {
 	m := message{id: st.msgID(), cause: t.msg, from: by, fn: "whiff/done", args: puff.Print(puff.NewVector(puff.Int(t.id), result)), dir: t.dir, user: t.user, reviewed: t.reviewed, session: t.session}
+	// What an agent's turn started ends after the turn: the agent hears
+	// of it as a message of its own, which waits its turn.
+	if a := st.addrs[strings.TrimPrefix(t.from, "agent/")]; agentSession(t.from) && a != nil && a.agent && a.fns[agentResult].ask {
+		m.fn = agentResult
+		d.put(st, a.name, m)
+		return false
+	}
 	owed := d.owes(st, t.from)
 	if s := st.addrs[t.from]; s != nil {
 		if h, ok := s.fns[m.fn]; ok && !h.ask {

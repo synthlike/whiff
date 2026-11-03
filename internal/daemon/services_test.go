@@ -398,7 +398,7 @@ model=default
 for a; do case "$prev" in --session-id|--resume) echo "$a" > last-id ;; --model) model=$a ;; --append-system-prompt) sys=$a ;; --max-budget-usd) budget=$a ;; esac; prev=$a; done
 case "$*" in *"--output-format json"*) ;; *) echo "want json, got $*" >&2; exit 9 ;; esac
 cost=$(cat cost 2>/dev/null || echo 0.01)
-answer() { printf '{"type":"result","subtype":"success","is_error":false,"result":"%s","total_cost_usd":%s}\n' "$1" "$cost"; }
+answer() { printf '{"type":"result","subtype":"success","is_error":false,"result":"%s","total_cost_usd":%s}\n' "$(printf '%s' "$1" | sed 's/["\\]/\\&/g')" "$cost"; }
 msg=$(cat)
 case "$*" in *--mcp-config*)
   case "$*" in *"--strict-mcp-config --allowedTools mcp__whiff"*) ;; *) echo "want whiff mcp alone, got $*" >&2; exit 9 ;; esac
@@ -1199,9 +1199,8 @@ func TestAgentAsk(t *testing.T) {
 		t.Errorf("sage's inbox after every answer:\n%s", text)
 	}
 
-	// An agent session's ask is its write: the turn goes through the
-	// review gate, which refuses it here as nobody reviews, and the ask
-	// is answered with why.
+	// An agent session's ask has its turn too: a turn passes the review
+	// gate, as the writes of its tools don't.
 	agent := dial(t, dir)
 	agent.Agent = true
 	if _, err := agent.Claim("agent", ""); err != nil {
@@ -1211,7 +1210,7 @@ func TestAgentAsk(t *testing.T) {
 	if err != nil || !strings.HasPrefix(resp.Value, "(err {:id ") {
 		t.Fatalf("agent's ask = %+v %v, want a pending", resp, err)
 	}
-	wait(strings.Fields(strings.TrimPrefix(resp.Value, "(err {:id "))[0], `(err {:kind :no-reviewer`)
+	wait(strings.Fields(strings.TrimPrefix(resp.Value, "(err {:id "))[0], `(ok "resume in sage: from an agent")`)
 }
 
 // TestAgentSession runs an agent with :can: its turn's whiff mcp claims
@@ -1426,5 +1425,55 @@ func TestAgentLimits(t *testing.T) {
 	}
 	if got := eval(`(call :long/stop)`); got != "(ok :idle)" {
 		t.Errorf("stop with no turn = %s", got)
+	}
+}
+
+// TestAgentDelegate has lead, an agent whose :can is helper's ask, ask
+// helper something in its turn. helper's turn, in lead's chain, passes the
+// review gate, and its answer comes back to lead, once lead's turn has
+// ended, as a turn of its own, whose news reaches your inbox.
+func TestAgentDelegate(t *testing.T) {
+	dir := tempDir(t)
+	fakeClaude(t, dir)
+	writeServices(t, dir, map[string]string{
+		"lead":   `(agent lead :prompt "Delegate." :can [:helper/ask])`,
+		"helper": `(agent helper :prompt "Help.")`,
+	})
+	start(t, dir)
+	c := dial(t, dir)
+	resp, err := c.Eval(`(call :lead/tell "hold")`, "")
+	if err != nil || !strings.HasPrefix(resp.Value, "(err {:id ") {
+		t.Fatalf("tell = %+v %v", resp, err)
+	}
+	home := filepath.Join(dir, ".whiff", "agents", "lead")
+	var token string
+	eventually(t, "the turn's token", func() string {
+		b, _ := os.ReadFile(filepath.Join(home, "token"))
+		token = strings.TrimSpace(string(b))
+		return fmt.Sprint(len(token))
+	}, "32")
+	turn := dial(t, dir)
+	turn.Agent = true
+	if r, err := turn.ClaimSession(token, ""); err != nil || r.Value != "(ok [:agent/lead [:helper/ask]])" {
+		t.Fatalf("claim = %+v %v", r, err)
+	}
+	r, _ := turn.Message("call", "helper/ask", `["sum it up"]`, "")
+	if !strings.HasPrefix(r.Value, "(err {:id ") {
+		t.Fatalf("helper/ask = %+v", r)
+	}
+	task := strings.Fields(strings.TrimPrefix(r.Value, "(err {:id "))[0]
+	// helper answers while lead's turn still runs; lead hears once it ends.
+	if r, err := c.Message("wait", "", "["+task+"]", ""); err != nil || r.Value != `(ok "new in helper: sum it up")` {
+		t.Fatalf("helper's answer = %+v %v", r, err)
+	}
+	os.WriteFile(filepath.Join(home, "go"), nil, 0o600)
+	turn.Close()
+	want := "Task " + task + `, which you started in an earlier turn, has ended: (ok \"new in helper: sum it up\")`
+	eventually(t, "lead's turn on helper's answer", func() string {
+		text, _ := c.Inbox("me")
+		return fmt.Sprint(strings.Contains(text, "resume in lead: "+want))
+	}, "true")
+	if text, _ := c.Inbox("review"); strings.Contains(text, "jobs/run") {
+		t.Errorf("an agent's turn waits for review:\n%s", text)
 	}
 }

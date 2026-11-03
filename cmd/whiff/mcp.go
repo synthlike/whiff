@@ -32,7 +32,7 @@ The user may trust your session with some services, or free it, for a while: the
 // reaches only the functions its agent's :can names.
 const turnInstructions = `whiff is the user's message daemon: small services written in puff, a lisp, answer messages, and whiff keeps a history of every one. This is your turn as one of its agents, and your tools are the whiff functions you may use, nothing else.
 
-Each tool named address_fn calls that service function. Its arguments are puff values written as strings: 12, :key, [1 2], {:a 1}, "text" with quotes; anything that doesn't read as a value is taken as a string. A :read function answers at once. A :write one waits for the user to review it: you get a pending id at once, and wait gives you the result once they accept or reject it; you needn't wait for it to end your turn.`
+Each tool named address_fn calls that service function. Its arguments are puff values written as strings: 12, :key, [1 2], {:a 1}, "text" with quotes; anything that doesn't read as a value is taken as a string. A :read function answers at once. A :write one waits for the user to review it: you get a pending id at once, as you do for another agent's ask. Don't wait for it: end your turn, and its result comes to you later, as a message of its own.`
 
 // agentIface is what an agent's address offers others: messages to it wait
 // in its inbox.

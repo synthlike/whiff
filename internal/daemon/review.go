@@ -31,6 +31,11 @@ func (d *daemon) gated(st *state, s *service, m message) bool {
 	if !ok || h.ask || h.yours {
 		return false
 	}
+	// An agent's turn has no effects of its own: no tools but its :can,
+	// whose writes its session's mode gates, and dollars its :limits cap.
+	if from := st.addrs[m.from]; s.name == "jobs" && m.fn == "run" && from != nil && from.agent {
+		return false
+	}
 	mk := &marker{base: d.base, services: st.addrs}
 	return mk.msgMark(s, m) == puff.MarkWrite
 }

@@ -26,7 +26,10 @@ type service struct {
 	client bool // held by a client connection
 	// can is, for an agent turn's session, the functions it may call,
 	// address/fn: it may do nothing else. nil for any other address.
-	can     map[string]bool
+	can map[string]bool
+	// agent is a service an (agent name ...) file expands to: its turns,
+	// the jobs it runs, pass the review gate, as what they do is gated.
+	agent   bool
 	env     *puff.Env
 	fns     map[string]handler
 	subs    map[string]subscriber   // by topic
@@ -179,7 +182,7 @@ func (d *daemon) loadSource(file, dir, src, addr string, start bool) (*service, 
 	quit, placed := make(chan struct{}), make(chan struct{})
 	s := &service{name: addr, fns: map[string]handler{}, subs: map[string]subscriber{}, code: map[string][]*puff.Form{},
 		forms: srv.Items[2:], mailbox: make(chan message, mailboxSize), cur: caller{addr: addr, stop: quit, placed: placed}, d: d,
-		quit: quit, placed: placed, done: make(chan struct{}), stateful: init != nil, keep: keep}
+		quit: quit, placed: placed, done: make(chan struct{}), stateful: init != nil, keep: keep, agent: isList(forms[0], "agent")}
 	var loads []*puff.Form
 	fns := map[string]*puff.Form{} // each subscriber's (fn (v) body...)
 	// add adds a handler named at pos, unless the name is taken.

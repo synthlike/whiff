@@ -41,7 +41,8 @@ Or try one without installing it: `whiff try services/git.puff status`.
   service can use it. Its home is `~/.whiff/agents/assistant`. Another
   agent is another file, with its own `:prompt`, and `:model`, `:can
   [:gh/prs]` for the functions it may use as tools, `:limits {:day 2}` and
-  `:every 1d` if you like. `usage` says what it spent, and `stop` ends the
+  `:every 1d` if you like; `:can [:assistant/ask]` lets it delegate to
+  another agent, whose answer comes back as a turn of its own. `usage` says what it spent, and `stop` ends the
   turn running now. Needs the claude CLI.
 - `digest`: an agent that briefs you on this repository once a day: open
   pull requests and their checks, open TODO items and uncommitted work, in

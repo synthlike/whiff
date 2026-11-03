@@ -13,7 +13,8 @@
 ;
 ; Its home is ~/.whiff/agents/<its name>. For another agent, write another
 ; (agent name :prompt "...") file; :model picks Claude's model, :can
-; [:gh/prs :todo/add] gives it those whiff functions as tools, and :every
+; [:gh/prs :todo/add] gives it those whiff functions as tools (another
+; agent's :helper/ask too, whose answer comes back as a turn), and :every
 ; 1d gives it a turn of its own each day, which answers only with news.
 
 (agent assistant

@@ -22,7 +22,7 @@
 (def session-file (path/join home "session")) ; the conversation's id
 (def started (path/join home "started"))      ; the id once it has begun
 (def turns (path/join home "turns"))          ; each turn's job id, a line each
-(def asks (path/join home "asks"))            ; "turn message kind" for each turn: kind is ask, tell or wake
+(def asks (path/join home "asks"))            ; "turn message kind" for each turn: kind is ask, tell, wake or whiff/result
 (def costs (path/join home "costs"))          ; "time usd" for each turn, the last 24 hours'
 (def day-usd (unwrap (map/get limits :day)))
 (def turn-usd (unwrap (map/get limits :turn)))
@@ -35,8 +35,9 @@
   next message.
   """ "\n" (if (vector/empty? can) "" (str """
   Your tools are the whiff functions you may use: a :write one waits for
-  the user's review, so it is pending when your turn ends, and the user
-  sees it then.
+  the user's review, and another agent's ask for its answer. Don't wait
+  for them: end your turn, and each result comes to you later as a
+  message of its own.
   """ "\n")) prompt))
 
 (def (read-file path) (string/trim (or-else (file/read-text path) "")))
@@ -62,12 +63,17 @@
     (if (vector/empty? can) [] ["--mcp-config" mcp "--strict-mcp-config" "--allowedTools" "mcp__whiff"])
     (if (= (read-file started) id) ["--resume" id] ["--session-id" id])))
 
-; busy? is whether the last turn's job still runs.
+; busy? is whether the last turn runs: its message is in the inbox until
+; the agent has its answer, after its job ends. A turn from before turns
+; kept their message runs while its job does.
 (def (busy?)
-  (match [(vector/last (read-lines turns)) (call :jobs/list)]
-    [[(some last) (ok js)]
-     (vector/any? js (fn ({:id i}) (= (int/to-string i) last)))]
-    [_ #f]))
+  (match (vector/last (read-lines turns))
+    [(none) #f]
+    [(some last)
+     (match [(asked last) (call :jobs/list)]
+       [[(some [a _]) _] (vector/any? (inbox) (fn ({:id i}) (= (int/to-string i) a)))]
+       [[(none) (ok js)] (vector/any? js (fn ({:id i}) (= (int/to-string i) last)))]
+       [_ #f])]))
 
 ; dollars is usd for people: $0.42.
 (def (dollars usd) (str "$" (float/to-string (float/div (float/round (* usd 100.0)) 100.0))))
@@ -167,8 +173,14 @@
 (def wake-text (str "This is your scheduled turn; you have one every " (value/to-string every)
                  ". Look again at what the user asked you to keep track of. If there is nothing worth telling them, answer only: nothing"))
 
+; result-text is a turn's text for task t, which an earlier turn of the
+; agent's started, and which ended with r.
+(def (result-text t r)
+  (str "Task " (int/to-string t) ", which you started in an earlier turn, has ended: " (value/to-string r)
+    ". Carry on with what it was for. If the user should hear of it, say so in your answer; otherwise answer only: nothing"))
+
 ; next-ask starts a turn for the oldest message in the inbox, a tell, an
-; ask or a wake, that hasn't one, unless a turn is running: (ok :waiting),
+; ask, a wake or a result, that hasn't one, unless a turn is running: (ok :waiting),
 ; (ok :idle) or (ok :thinking). One whose turn can't start, as the review
 ; gate or the day's budget refuses it, is answered with why: (ok
 ; :refused). A wake sets the next as it leaves the queue. whiff tells the
@@ -183,7 +195,10 @@
       [_ when (busy?) (ok :waiting)]
       [(some {:id i :fn f :args args})
        (let [_ (if (= f :wake) (send-after every :wake) (ok :done))
-             text (match args [[t] t] [_ wake-text])]
+             text (match [f args]
+                    [[:whiff/result [t r]] (result-text t r)]
+                    [[_ [t]] t]
+                    [_ wake-text])]
          (match (start text)
            [(ok t) (do (try (file/append asks (str t " " (int/to-string i) " " (keyword/name f) "\n"))) (ok :thinking))]
            [(err e) (do (reply i (err e)) (ok :refused))]))])))
@@ -198,7 +213,7 @@
 
 ; finished answers message a, of kind, with its turn's outcome o: an ask's
 ; sender gets the answer; a tell's answer goes to your inbox and its sender
-; hears it was told; a wake's, if it has news, to your inbox.
+; hears it was told; a wake's or a result's, if it has news, to your inbox.
 (def (finished a kind o)
   (let [i (unwrap (int/from-string a))]
     (match kind
@@ -244,6 +259,9 @@
   (do (try (file/write session-file ""))
     (try (file/write started ""))
     (ok :forgotten)))
+
+(ask (whiff/result id r)
+  "A task one of the agent's turns started, as a call to a :write function or another agent's ask, ended with r: it waits its turn, and the turn answers only with news. whiff's own.")
 
 (ask (wake)
   "A scheduled turn, which whiff sends every :every and which waits its turn: it answers only if there's something to tell you. whiff's own loop: tell the agent instead.")

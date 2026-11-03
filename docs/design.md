@@ -151,7 +151,7 @@ subscribers and private `def`s. An agent is a file too, `(agent name
 of its own turn loop (`internal/daemon/agent.puff`): `tell`, whose answer
 lands in `:me`'s inbox, `ask`, whose answer goes back to whoever asked,
 `forget`, `usage`, `stop`, and a `wake` with `:every`. Tells, asks and
-wakes are all asks of the agent, so they wait in its inbox while a turn
+wakes, and the results of what its turns started, are all asks of the agent, so they wait in its inbox while a turn
 runs and take turns oldest first; your reply to an answer is a tell. Its turns are held
 to `:limits`, $1 and 10 minutes a turn and $5 a day unless it says
 otherwise: claude stops a turn at its dollars, whiff at its time, and once
@@ -318,6 +318,16 @@ other inbox, enforced by whiff, not by Claude's permissions. Its tools act
 in the agent's `:dir`, `whiff mcp --dir`, while its Claude session stays in
 its home. The fence
 holds because a turn has no shell: `--tools ""`, and `whiff mcp` alone.
+
+So a turn has no effects of its own: what it does is its tools' writes,
+which its session's mode gates, and its cost, which `:limits` caps. Its
+job therefore passes the review gate, whoever's message it answers: an
+agent may ask another (`:can [:helper/ask]`) without you reviewing each
+turn either one takes. What a turn started and couldn't wait for, as a
+pending write or another agent's ask, ends after it: whiff leaves the
+result in the agent's inbox as `whiff/result`, which takes a turn like a
+tell and answers only with news. A loop of asks between agents is bounded
+by their `:limits`, each turn costing its dollars of each one's day.
 
 ## History
 
