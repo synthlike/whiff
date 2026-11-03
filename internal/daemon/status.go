@@ -107,12 +107,12 @@ func serviceName(file string) string { return strings.TrimSuffix(filepath.Base(f
 type status struct {
 	name  string
 	agent bool
-	state string // ok, failed, faulting, over-budget, waiting, thinking, busy, idle
+	state string // ok, failed, faulting, over-budget, paused, waiting, thinking, busy, idle
 	note  string
 }
 
 // statusRank orders whiff services: what needs you first, what runs next.
-var statusRank = map[string]int{"failed": 0, "faulting": 1, "over-budget": 2, "waiting": 3, "thinking": 4, "busy": 4}
+var statusRank = map[string]int{"failed": 0, "faulting": 1, "over-budget": 2, "paused": 3, "waiting": 3, "thinking": 4, "busy": 4}
 
 // statuses are the service files' statuses, those that need you first.
 func (st *state) statuses(now time.Time) []status {
@@ -181,6 +181,11 @@ func (st *state) statusOf(name string, now time.Time) status {
 		r.state, r.note = "faulting", fmt.Sprintf("restarted %s today", times(len(h.faults)))
 	case r.agent && s.dayUSD > 0 && agentSpent(name, now).usd >= s.dayUSD:
 		r.state, r.note = "over-budget", fmt.Sprintf("$%.2f of its $%.2f a day", agentSpent(name, now).usd, s.dayUSD)
+	case r.agent && agentPaused(name):
+		r.state = "paused"
+		if q := len(st.inbox(name)); q > 0 {
+			r.note = fmt.Sprintf("%d queued", q)
+		}
 	case answers > 0 || reviews > 0:
 		r.state = "waiting"
 		var parts []string
@@ -211,6 +216,17 @@ func (st *state) statusOf(name string, now time.Time) status {
 		r.state = "ok"
 	}
 	return r
+}
+
+// agentPaused is whether agent name is paused, by the file its turn loop
+// keeps.
+func agentPaused(name string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	b, _ := os.ReadFile(filepath.Join(home, ".whiff", "agents", name, "paused"))
+	return strings.TrimSpace(string(b)) == "paused"
 }
 
 // spending is what an agent's turns of the last 24 hours cost: dollars,

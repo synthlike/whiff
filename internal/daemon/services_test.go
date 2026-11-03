@@ -1477,3 +1477,40 @@ func TestAgentDelegate(t *testing.T) {
 		t.Errorf("an agent's turn waits for review:\n%s", text)
 	}
 }
+
+// TestAgentPause pauses an agent: what you tell it waits, whiff services
+// says so, and resuming it takes what waits, oldest first.
+func TestAgentPause(t *testing.T) {
+	dir := tempDir(t)
+	fakeClaude(t, dir)
+	writeServices(t, dir, map[string]string{"napper": `(agent napper :prompt "Nap.")`})
+	start(t, dir)
+	c := dial(t, dir)
+	eval := func(src string) string {
+		r, _ := c.Eval(src, "")
+		return r.Value + r.Error
+	}
+	if got := eval(`(call :napper/pause)`); got != "(ok :paused)" {
+		t.Fatalf("pause = %s", got)
+	}
+	eval(`(call :napper/tell "one")`)
+	eval(`(call :napper/tell "two")`)
+	line := func() string {
+		got := eval(`(service/list)`)
+		return got[strings.Index(got, "{"):strings.LastIndex(got, "}")+1]
+	}
+	eventually(t, "napper, paused", line, `{:agent #t :note "2 queued" :service :napper :status :paused}`)
+	home := filepath.Join(dir, ".whiff", "agents", "napper")
+	if b, _ := os.ReadFile(filepath.Join(home, "turns")); len(b) > 0 {
+		t.Errorf("a paused agent took turns: %s", b)
+	}
+	if got := eval(`(call :napper/resume)`); got != "(ok :thinking)" {
+		t.Errorf("resume = %s", got)
+	}
+	eventually(t, "both answered, in order", func() string {
+		text, _ := c.Inbox("me")
+		one, two := strings.Index(text, "new in napper: one"), strings.Index(text, "resume in napper: two")
+		return fmt.Sprint(one >= 0 && two > one)
+	}, "true")
+	eventually(t, "napper, its answers waiting for you", line, `{:agent #t :note "2 answers in your inbox" :service :napper :status :waiting}`)
+}

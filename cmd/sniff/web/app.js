@@ -655,7 +655,7 @@ setInterval(loadServices, 15000);
 // statusClass is the dot a service's status draws: broken, wanting you,
 // working, or none for idle and ok.
 function statusClass(status) {
-  return { failed: "fault", faulting: "fault", "over-budget": "warn", waiting: "warn", thinking: "busy", busy: "busy" }[status] || "";
+  return { failed: "fault", faulting: "fault", "over-budget": "warn", paused: "warn", waiting: "warn", thinking: "busy", busy: "busy" }[status] || "";
 }
 
 // roughly is ms for people, in its largest unit: 40s, 12m, 3h, 2d; ago an
@@ -700,6 +700,25 @@ async function statusBox(name) {
     const dl = el("dl");
     for (const [k, v] of serviceLines(st)) dl.append(el("dt", "", k), el("dd", "", v));
     box.replaceChildren(head, dl);
+    // An agent pauses and resumes here, as you.
+    if (st.agent) {
+      const paused = st.status === "paused";
+      const b = el("button", "svc-act", paused ? "Resume" : "Pause");
+      b.type = "button";
+      b.title = paused ? "take what waits in its inbox, oldest first" : "take no more turns; messages wait in its inbox";
+      b.onclick = async () => {
+        b.disabled = true;
+        try {
+          const r = await fetch("api/call", { method: "POST", body: new URLSearchParams({ action: `[:${name}/${paused ? "resume" : "pause"}]` }) });
+          if (!r.ok) throw new Error((await r.text()).trim());
+        } catch (err) {
+          box.append(el("p", "query-error", err.message));
+        }
+        await loadServices();
+        box.replaceWith(await statusBox(name));
+      };
+      box.append(b);
+    }
   } catch (err) {
     box.replaceChildren(el("p", "hint", err.message));
   }

@@ -215,7 +215,7 @@ mark rather than `:write`, and `publish` to a literal topic as its subscribers'.
 - `(address/describe address)`: (ok fns): address's functions, each {:fn :params :doc :mark :form}, and :yours #t on one only your connections may use.
 - `(service/reset service)` `:write`: Deletes service's stored state and reloads it from its file, so it starts from its :state again: (ok :done), or (err e).
 - `(address/list)`: (ok addrs): every address, sorted, each {:address :client :state}: :client for a client's, :state for a service with :state.
-- `(service/list)`: (ok services): each service file, what needs you first, as {:service :agent :status :note}: :status one of :failed, :faulting, :over-budget, :waiting, :thinking, :busy, :idle or :ok, and :note what is most worth knowing, or "".
+- `(service/list)`: (ok services): each service file, what needs you first, as {:service :agent :status :note}: :status one of :failed, :faulting, :over-budget, :paused, :waiting, :thinking, :busy, :idle or :ok, and :note what is most worth knowing, or "".
 - `(service/status service)`: (ok s): service's line of service/list, {:service :agent :status :note}, and what else whiff knows of it: :file, :load-error, :last {:fn :at} handled, :faults today and the last :fault {:at :message}, :inbox and :timers [{:fn :due}]; for an agent :spent, :turns and :day of the last 24 hours, :last-turn and :every. (err {:kind :no-address}) if there is none.
 - `(service/state service)`: (ok state): service's state as it last committed it; (err {:kind :stateless}) for a service without :state, (err {:kind :no-address}) if there is none.
 - `(inbox [fn])`: This service's messages waiting for a reply, oldest first, each {:id :fn :args :from :cwd :at}; only fn's, a keyword, if given.

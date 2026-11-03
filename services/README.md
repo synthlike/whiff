@@ -42,8 +42,8 @@ Or try one without installing it: `whiff try services/git.puff status`.
   agent is another file, with its own `:prompt`, and `:model`, `:can
   [:gh/prs]` for the functions it may use as tools, `:limits {:day 2}` and
   `:every 1d` if you like; `:can [:assistant/ask]` lets it delegate to
-  another agent, whose answer comes back as a turn of its own. `usage` says what it spent, and `stop` ends the
-  turn running now. Needs the claude CLI.
+  another agent, whose answer comes back as a turn of its own. `usage` says what it spent, `stop` ends the
+  turn running now, and `pause`/`resume` hold its turns while messages wait. Needs the claude CLI.
 - `digest`: an agent that briefs you on this repository once a day: open
   pull requests and their checks, open TODO items and uncommitted work, in
   your inbox, and only what changed. `ask "brief me"` for one now. Its

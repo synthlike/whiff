@@ -329,7 +329,7 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 				return puff.Ok(puff.NewVector(addrs...)), nil
 			}},
 		{Name: "service/list", Mark: puff.MarkRead,
-			Doc: "(ok services): each service file, what needs you first, as {:service :agent :status :note}: :status one of :failed, :faulting, :over-budget, :waiting, :thinking, :busy, :idle or :ok, and :note what is most worth knowing, or \"\".",
+			Doc: "(ok services): each service file, what needs you first, as {:service :agent :status :note}: :status one of :failed, :faulting, :over-budget, :paused, :waiting, :thinking, :busy, :idle or :ok, and :note what is most worth knowing, or \"\".",
 			Fn: func(_ *puff.Call, _ []puff.Value) (puff.Value, error) {
 				var all []puff.Value
 				d.do(func(st *state) {
