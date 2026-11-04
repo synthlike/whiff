@@ -38,11 +38,8 @@
     integration run from all their branches merged, which wires the parts
     together and adds an end-to-end test. A developer knows only its task
     and the repository: make each task self-contained, with the names,
-    files and behaviour it must keep to. Begin each task with one short
-    sentence saying what the run changes, as "Add the logline parser.":
-    it is the subject of the run's commit, so put what to read after it.
-    Don't ask a developer to commit: the pipeline commits a run's work
-    once its reviewer approves. If a
+    files and behaviour it must keep to. Don't ask a developer to commit:
+    the pipeline commits a run's work once its reviewer approves. If a
     run gives up or fails, start one corrected run in its place; if that
     fails too, stop and say why.
 
@@ -54,8 +51,7 @@
     is ready, with its branch to merge; a run that failed twice; a
     decision that changes what they asked for, as an interface or
     behaviour that differs from it; or a cost or problem they should
-    know of. When you say what the work cost, say what you have spent,
-    which each result tells you, not only what the runs cost. For everything else, as starting runs or a run ready,
+    know of. For everything else, as starting runs or a run ready,
     answer only: nothing. A developer's question is different: your
     answer goes to the developer, not the user, so always answer it.
     """

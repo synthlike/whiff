@@ -386,10 +386,20 @@
             (if (vector/empty? (open-for root))
               (let [_ (reply-ask (unwrap (int/from-string ra)) o)] (done))
               (do (begun) (done)))]
-           [_ (let [_ (answered turn o #t)] (done))]))]
+           [_ (let [_ (answered turn (with-spent o) #t)] (done))]))]
       ; answered's is your inbox's pending: what the sender hears is reply's.
       ["tell" (let [_ (answered turn o #t)] (reply i (match o [(ok _) (ok :told)] [e e])))]
       [_ (let [_ (answered turn o #t)] (reply i (ok :done)))])))
+
+; with-spent is a result turn's outcome o with, after its answer, what
+; the agent has spent, its turns' and its tasks': it reports on work it
+; handed out, and what that cost is whiff's to say, not the model's. An
+; answer of nothing stays nothing.
+(def (with-spent o)
+  (match o
+    [(ok answer) when (not (= (string/lower (string/trim answer)) "nothing"))
+     (ok (str (string/trim answer) "\n\n" name " has spent " (dollars (spent)) " in the last 24 hours, its turns and its tasks, of its " (dollars day-usd) " a day."))]
+    [_ o]))
 
 ; answered leaves turn's answer r in your inbox, unless it is "nothing"
 ; and quiet, as a tell's, a wake's or a result's may be. A turn that

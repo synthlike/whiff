@@ -1720,7 +1720,7 @@ func TestPipelineBuild(t *testing.T) {
 	// same.txt saying so too: two runs' same.txt don't merge. It notes its
 	// model, and what it found.
 	claude := `#!/bin/sh
-if [ "$1 $2 $3 $4" = "-p --strict-mcp-config --tools " ]; then cat >/dev/null; printf '%s\n' '{"type":"result","result":"Fine.\nVERDICT: approve","total_cost_usd":0.02}'; exit 0; fi
+if [ "$1 $2 $3 $4" = "-p --strict-mcp-config --tools " ]; then cat >/dev/null; printf '%s\n' '{"type":"result","result":"Fine.\nSUBJECT: Add the file\nVERDICT: approve","total_cost_usd":0.02}'; exit 0; fi
 cat >/dev/null
 if [ -e "$FAKE/hang" ]; then touch "$FAKE/hung"; sleep 30; touch "$FAKE/woke"; exit 0; fi
 case "$*" in *"--model haiku"*) m=haiku ;; *"--model"*) m=other ;; *) m=default ;; esac
@@ -1768,8 +1768,12 @@ echo done
 	}
 	// What the reviewer's JSON says it cost is the build's: the dev's says
 	// nothing, as it prints a summary.
-	if got := wait(build(`"main"`, "haiku")); !strings.HasPrefix(got, `(ok {:branch "whiff/1" :cost 0.02`) || !strings.Contains(got, ":status :ready") || !strings.Contains(got, `Fine.\nVERDICT: approve`) {
+	if got := wait(build(`"main"`, "haiku")); !strings.HasPrefix(got, `(ok {:branch "whiff/1" :cost 0.02`) || !strings.Contains(got, ":status :ready") || !strings.Contains(got, `Fine.\nSUBJECT: Add the file\nVERDICT: approve`) {
 		t.Fatalf("the first build = %s", got)
+	}
+	// Its commit's subject is the reviewer's SUBJECT; its body the task.
+	if out, _ := exec.Command("git", "-C", repo, "log", "-1", "--format=%s|%b", "whiff/1").Output(); string(out) != "Add the file|do it\n\n" {
+		t.Errorf("whiff/1's commit = %q, want the reviewer's subject and the task", out)
 	}
 	two, three := build(`"whiff/1"`, ""), build(`"whiff/1"`, "")
 	for _, id := range []string{two, three} {
@@ -2249,6 +2253,11 @@ func TestAgentChildCost(t *testing.T) {
 	ask("one", "(ok {:status :ready :cost 0.25})")
 	// boss's turn, the result's 0.25, and the turn on the result.
 	eventually(t, "what boss spent", spent, "[0.27 2]")
+	// The result turn's report says so, whatever its answer does.
+	eventually(t, "the report on the result", func() string {
+		text, _ := c.Inbox("me")
+		return fmt.Sprint(strings.Contains(text, `boss has spent $0.27 in the last 24 hours, its turns and its tasks, of its $0.50 a day.`))
+	}, "true")
 	// 0.25 more is past its day's 0.5: the turn on the result isn't taken.
 	ask("two", "(ok {:status :ready :cost 0.25})")
 	eventually(t, "what boss spent", spent, "[0.53 3]")
