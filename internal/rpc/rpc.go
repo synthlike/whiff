@@ -15,6 +15,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/synthlike/whiff/internal/puff"
 )
 
 // Version is the protocol version. Bump it when a message changes, or a
@@ -429,6 +431,19 @@ func (c *Client) Eval(src, dir string) (Response, error) {
 	var resp Response
 	err := c.roundTrip(Request{Op: "eval", Src: src, Dir: dir}, &resp)
 	return resp, err
+}
+
+// EvalValue evaluates src like Eval and returns its value, read, for code
+// that prints nothing: an error the evaluation ends in is its error.
+func (c *Client) EvalValue(src, dir string) (puff.Value, error) {
+	resp, err := c.Eval(src, dir)
+	if err == nil && resp.Error != "" {
+		err = errors.New(resp.Error)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return puff.ReadValue(resp.Value)
 }
 
 // Repl evaluates src like Eval, but in this connection's own env, which

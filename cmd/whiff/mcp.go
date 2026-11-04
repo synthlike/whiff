@@ -168,9 +168,6 @@ func (a *agent) client() (*rpc.Client, string, error) {
 	}
 	var addr string
 	var can map[string]bool
-	if err == nil && resp.Error != "" {
-		err = errors.New(resp.Error)
-	}
 	if err == nil {
 		v, _ := puff.ReadValue(resp.Value)
 		switch v := okValue(v).(type) {
@@ -219,14 +216,7 @@ func (a *agent) eval(src string) (puff.Value, error) {
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.Eval(src, a.wd)
-	if err == nil && resp.Error != "" {
-		err = errors.New(resp.Error)
-	}
-	if err != nil {
-		return nil, err
-	}
-	return puff.ReadValue(resp.Value)
+	return c.EvalValue(src, a.wd)
 }
 
 // fnTool is a service function as a tool.
@@ -520,9 +510,6 @@ func (a *agent) addFixed() {
 				return failed("%v", err), nil
 			}
 			resp, err := c.Message("cancel-task", "", fmt.Sprintf("[%d]", in.ID), a.wd)
-			if err == nil && resp.Error != "" {
-				err = errors.New(resp.Error)
-			}
 			if err != nil {
 				return failed("%v", err), nil
 			}

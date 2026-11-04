@@ -26,18 +26,14 @@ func listServices(dir string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	defer c.Close()
-	resp, err := c.Eval("(service/list)", "")
-	if err == nil && resp.Error != "" {
-		err = fmt.Errorf("%s", resp.Error)
-	}
+	v, err := c.EvalValue("(service/list)", "")
 	if err != nil {
 		fmt.Fprintf(stderr, "whiff: %v\n", err)
 		return 1
 	}
-	v, _ := puff.ReadValue(resp.Value)
 	all, ok := okValue(v).(puff.Vector)
 	if !ok {
-		fmt.Fprintf(stderr, "whiff: want the services, got %s\n", resp.Value)
+		fmt.Fprintf(stderr, "whiff: want the services, got %s\n", puff.Print(v))
 		return 1
 	}
 	type line struct{ name, state, note string }
@@ -88,22 +84,18 @@ func showService(dir, name string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	defer c.Close()
-	resp, err := c.Eval("(service/status "+puff.Print(puff.Keyword(strings.TrimPrefix(name, ":")))+")", "")
-	if err == nil && resp.Error != "" {
-		err = fmt.Errorf("%s", resp.Error)
-	}
+	v, err := c.EvalValue("(service/status "+puff.Print(puff.Keyword(strings.TrimPrefix(name, ":")))+")", "")
 	if err != nil {
 		fmt.Fprintf(stderr, "whiff: %v\n", err)
 		return 1
 	}
-	v, _ := puff.ReadValue(resp.Value)
 	if t, ok := v.(puff.Tag); ok && t.Name() == "err" {
 		fmt.Fprintf(stderr, "whiff: %s", errText(t.At(0)))
 		return 1
 	}
 	m, ok := okValue(v).(puff.Map)
 	if !ok {
-		fmt.Fprintf(stderr, "whiff: want a service, got %s\n", resp.Value)
+		fmt.Fprintf(stderr, "whiff: want a service, got %s\n", puff.Print(v))
 		return 1
 	}
 	now := time.Now()

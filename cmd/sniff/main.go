@@ -457,7 +457,7 @@ func (s *server) addresses(w http.ResponseWriter, r *http.Request) {
 
 // describeAll is every address with its functions, as addresses answers.
 func describeAll(c *rpc.Client) ([]any, error) {
-	addrs, err := evalOk(c, "(address/list)")
+	addrs, err := c.EvalOk("(address/list)")
 	if err != nil {
 		return nil, err
 	}
@@ -466,7 +466,7 @@ func describeAll(c *rpc.Client) ([]any, error) {
 	for i := range vec.Len() {
 		a, _ := plain(vec.At(i)).(map[string]any)
 		name, _ := a["address"].(string)
-		fns, err := evalOk(c, "(address/describe "+puff.Print(puff.Keyword(name))+")")
+		fns, err := c.EvalOk("(address/describe " + puff.Print(puff.Keyword(name)) + ")")
 		if err != nil {
 			continue // gone since
 		}
@@ -490,15 +490,12 @@ func (s *server) state(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer c.Close()
-	resp, err := c.Eval("(service/state "+puff.Print(puff.Keyword(name))+")", "")
-	if err == nil && resp.Error != "" {
-		err = errors.New(resp.Error)
-	}
+	v, err := c.EvalValue("(service/state "+puff.Print(puff.Keyword(name))+")", "")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	writeJSON(w, treeOf(resp.Value))
+	writeJSON(w, treeOf(puff.Print(v)))
 }
 
 // services answers whiff services, service/list, as plain JSON: each
@@ -511,7 +508,7 @@ func (s *server) services(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer c.Close()
-	v, err := evalOk(c, "(service/list)")
+	v, err := c.EvalOk("(service/list)")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -533,7 +530,7 @@ func (s *server) service(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer c.Close()
-	v, err := evalOk(c, "(service/status "+puff.Print(puff.Keyword(name))+")")
+	v, err := c.EvalOk("(service/status " + puff.Print(puff.Keyword(name)) + ")")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -635,9 +632,6 @@ func (s *server) fetch(target, args string) (string, map[string]string, int, err
 		return "", nil, http.StatusForbidden, fmt.Errorf(":%s is :%s: a page fetches only :read functions", target, mark)
 	}
 	resp, err := c.Message("call", target, args, s.wd)
-	if err == nil && resp.Error != "" {
-		err = errors.New(resp.Error)
-	}
 	if err != nil {
 		return "", nil, http.StatusBadGateway, err
 	}
@@ -738,11 +732,7 @@ func (s *server) watch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer c.Close()
-	resp, err := c.Sub(topics...)
-	if err == nil && resp.Error != "" {
-		err = errors.New(resp.Error)
-	}
-	if err != nil {
+	if _, err := c.Sub(topics...); err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -960,26 +950,6 @@ func keyword(s string) (string, bool) {
 	s = strings.TrimPrefix(s, ":")
 	k, err := puff.ReadValue(":" + s)
 	return s, err == nil && s != "" && puff.Equal(k, puff.Keyword(s))
-}
-
-// evalOk evaluates src, read-only code of sniff's own, and returns v of
-// its (ok v).
-func evalOk(c *rpc.Client, src string) (puff.Value, error) {
-	resp, err := c.Eval(src, "")
-	if err == nil && resp.Error != "" {
-		err = errors.New(resp.Error)
-	}
-	if err != nil {
-		return nil, err
-	}
-	v, err := puff.ReadValue(resp.Value)
-	if err != nil {
-		return nil, err
-	}
-	if t, ok := v.(puff.Tag); ok && t.Name() == "ok" && t.Len() == 1 {
-		return t.At(0), nil
-	}
-	return nil, fmt.Errorf("%s: %s", src, resp.Value)
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

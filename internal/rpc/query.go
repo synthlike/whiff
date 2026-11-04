@@ -1,7 +1,6 @@
 package rpc
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -177,7 +176,7 @@ func replyKind(reply string) string {
 // address/fn, as address/describe says: what a Query's mark: matches, and
 // whether an action to it is a link or a form.
 func (c *Client) Marks() (map[string]string, error) {
-	addrs, err := c.evalOk("(address/list)")
+	addrs, err := c.EvalOk("(address/list)")
 	if err != nil {
 		return nil, err
 	}
@@ -191,7 +190,7 @@ func (c *Client) Marks() (map[string]string, error) {
 	vec, _ := addrs.(puff.Vector)
 	for i := range vec.Len() {
 		addr := key(vec.At(i), "address")
-		fns, err := c.evalOk("(address/describe " + puff.Print(puff.Keyword(addr)) + ")")
+		fns, err := c.EvalOk("(address/describe " + puff.Print(puff.Keyword(addr)) + ")")
 		if err != nil {
 			continue // gone since
 		}
@@ -203,22 +202,15 @@ func (c *Client) Marks() (map[string]string, error) {
 	return ms, nil
 }
 
-// evalOk evaluates src, read-only code of a client's own, and returns v of
-// its (ok v).
-func (c *Client) evalOk(src string) (puff.Value, error) {
-	resp, err := c.Eval(src, "")
-	if err == nil && resp.Error != "" {
-		err = errors.New(resp.Error)
-	}
-	if err != nil {
-		return nil, err
-	}
-	v, err := puff.ReadValue(resp.Value)
+// EvalOk evaluates src, read-only code of a client's own, and returns v
+// of its (ok v); anything else is an error.
+func (c *Client) EvalOk(src string) (puff.Value, error) {
+	v, err := c.EvalValue(src, "")
 	if err != nil {
 		return nil, err
 	}
 	if t, ok := v.(puff.Tag); ok && t.Name() == "ok" && t.Len() == 1 {
 		return t.At(0), nil
 	}
-	return nil, fmt.Errorf("%s: %s", src, resp.Value)
+	return nil, fmt.Errorf("%s: %s", src, puff.Print(v))
 }
