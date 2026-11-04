@@ -11,11 +11,13 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/synthlike/whiff/internal/daemon"
+	"github.com/synthlike/whiff/internal/puff"
 	"github.com/synthlike/whiff/internal/rpc"
 )
 
@@ -576,5 +578,88 @@ func TestViews(t *testing.T) {
 	}
 	if _, b := do("POST", "/render", "text/plain", `[1 "two"]`); !strings.Contains(b, `<span class="str">&#34;two&#34;</span>`) {
 		t.Errorf("a value drawn: %s", b)
+	}
+}
+
+// TestReview reviews an agent's held writes from sniff's page: Accept and
+// Trust reach whiff over sniff's own connection, as you, so :review's
+// functions, which are yours, answer them; and only from sniff's page.
+func TestReview(t *testing.T) {
+	s, base, c := sniffing(t, map[string]string{
+		"notes": `(service notes :state 0 (on (add state text) :write :update "Counts adds." (ok [(+ state 1) (+ state 1)])))`,
+	})
+	// sniff's page follows :review/pending; here a client does.
+	if _, err := c.Sub("review/pending"); err != nil {
+		t.Fatal(err)
+	}
+	agent, err := rpc.Dial(s.dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer agent.Close()
+	agent.Agent = true
+	if resp, err := agent.Claim("agent", `(ask (tell text) "Asks the agent.")`); err != nil || resp.Value != "(ok :agent/1)" {
+		t.Fatalf("claim = %+v %v", resp, err)
+	}
+	held := func() string {
+		t.Helper()
+		resp, err := agent.Message("call", "notes/add", `["a"]`, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		v, _ := puff.ReadValue(resp.Value)
+		id, _ := puff.Field(puff.ErrValue(v), "id").(puff.Int)
+		if id == 0 {
+			t.Fatalf("the agent's add = %s", resp.Value)
+		}
+		return puff.Print(id)
+	}
+
+	noRedirect := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	cookie := &http.Cookie{Name: fmt.Sprintf("sniff-%d", s.port), Value: s.token}
+	post := func(action, site string) (int, string) {
+		t.Helper()
+		form := url.Values{"action": {action}, "back": {"/view/review/pending"}}
+		req, _ := http.NewRequest("POST", base+"/act", strings.NewReader(form.Encode()))
+		req.AddCookie(cookie)
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Sec-Fetch-Site", site)
+		resp, err := noRedirect.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		n, _ := strconv.Atoi(strings.TrimPrefix(resp.Header.Get("Location"), "/view/review/pending?said="))
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return resp.StatusCode, s.said[n].Reply
+	}
+	count := func() string {
+		t.Helper()
+		resp, err := c.Message("call", "notes/add", `["mine"]`, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.Value
+	}
+
+	// Another site's form can't accept it.
+	n := held()
+	if code, _ := post("[:review/accept "+n+"]", "cross-site"); code != http.StatusForbidden {
+		t.Errorf("another site's accept: %d", code)
+	}
+	// sniff's page can: as you, it goes through, and the add is made.
+	if code, reply := post("[:review/accept "+n+"]", "same-origin"); code != http.StatusSeeOther || reply != "(ok 1)" {
+		t.Errorf("accept from sniff: %d %s", code, reply)
+	}
+	// Trust accepts the next, and lets the session's later adds through.
+	if code, reply := post("[:review/trust "+held()+"]", "same-origin"); code != http.StatusSeeOther || reply != "(ok 2)" {
+		t.Errorf("trust from sniff: %d %s", code, reply)
+	}
+	if resp, err := agent.Message("call", "notes/add", `["a"]`, ""); err != nil || resp.Value != "(ok 3)" {
+		t.Errorf("the trusted agent's add = %+v %v", resp, err)
+	}
+	if got := count(); got != "(ok 4)" {
+		t.Errorf("your add after = %s", got)
 	}
 }
