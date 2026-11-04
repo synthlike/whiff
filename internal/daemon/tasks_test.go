@@ -126,6 +126,11 @@ func TestTasks(t *testing.T) {
 	if w := tasks()[job]["what"]; w != `"sleep 10"` {
 		t.Errorf("the ended job's what = %s", w)
 	}
+	// Failed shows only the one that failed: not those waiting, nor the job
+	// you cancelled.
+	if v := call("tasks/failed", "[]"); !strings.Contains(v, `:label "failed  :box/q 2"`) || strings.Count(v, ":detail") != 1 {
+		t.Errorf("tasks/failed = %s", v)
+	}
 
 	// Each task that began or ended was published on :tasks/changed.
 	seen := map[string]bool{}

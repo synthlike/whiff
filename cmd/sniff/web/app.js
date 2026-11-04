@@ -1152,7 +1152,9 @@ follow();
 const waiting = {};
 
 // followQueue keeps how many items target's view has beside the sidebar's
-// link of class name, and in the browser tab's title, fetching it, and
+// link of class name, and, unless the link is data-quiet, as Failed is,
+// whose tasks stay a day whatever you do, marks it and counts them in the
+// browser tab's title; fetching it, and
 // calling then if given, each time one of topics fires. Following :review/pending so, while sniff is
 // open, it reviews: agents' writes wait for you rather than failing with
 // :no-reviewer. A watch that sniff refuses, while whiff isn't running, is
@@ -1172,6 +1174,7 @@ function followQueue(name, target, topics, then) {
     }
     link.replaceChildren(el("span", "name", label));
     if (n) link.append(el("span", "count", String(n)));
+    if ("quiet" in link.dataset) return;
     link.classList.toggle("waiting", n > 0);
     waiting[name] = n;
     const all = Object.values(waiting).reduce((a, b) => a + b, 0);
@@ -1190,6 +1193,7 @@ function followQueue(name, target, topics, then) {
 }
 followQueue("review", "review/pending", ["review/pending", "review/done"], () => loadBanner());
 followQueue("inbox", "me/inbox", ["me/changed"]);
+followQueue("failed", "tasks/failed", ["tasks/changed"]);
 
 // Tabs: Activity, then a view per tab, each its /view page's href, drawn
 // in this page as that page draws it. Only the tab shown follows its
@@ -1615,7 +1619,7 @@ function drawPicks() {
         [`${a.fns.length} function${a.fns.length === 1 ? "" : "s"}`, a.state && "state", a.client && "client", fault && "fault"].filter(Boolean).join(" · ")));
       return pick([what], "", () => go(() => { activate(null); showAddress(a.address); }), true);
     })]);
-    const views = [...new Set(["/view/review/pending", "/view/me/inbox", "/view/tasks/view", ...pins, ...tabs.map((t) => t.href)])];
+    const views = [...new Set(["/view/review/pending", "/view/me/inbox", "/view/tasks/view", "/view/tasks/failed", ...pins, ...tabs.map((t) => t.href)])];
     groups.push(["Views", [
       ...(hits("activity") ? [pick([el("span", "", "Activity")], "", () => go(() => activate(null)), true)] : []),
       ...first(views, titleOf).map((href) => pick([el("code", "", titleOf(href))], "opens a tab", () => go(() => openTab(href)), true)),

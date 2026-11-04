@@ -95,7 +95,8 @@ with its owner, where it is or who answered it, and how it ended;
 `:tasks/view` gives them as items, with what can be done with each: Accept
 or Reject one held, Cancel one that hasn't ended, see one's whole result,
 and the actions that result offers, `{:actions [...]}` in its `(ok m)` or
-`(err m)`, as a pipeline build's Retry. whiff decides none of those: an
+`(err m)`, as a pipeline build's Retry; `:tasks/failed` only those that
+failed, not those you cancelled or rejected. whiff decides none of those: an
 action is a message to the service that offered it. `:tasks/cancel` is
 yours, as `:review`'s functions are; an agent cancels its session's own
 tasks with `whiff cancel`.

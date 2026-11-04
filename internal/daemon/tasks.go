@@ -37,35 +37,34 @@ type task struct {
 	live     bool   // held: its sender is still here, so its session can be trusted
 }
 
-// tasks is every task keep takes, by its owner: those that haven't ended,
-// oldest first, then those that ended in the last workKept, newest first,
-// at most limit of them.
-func (d *daemon) tasks(keep func(from string) bool, limit int, now time.Time) []task {
+// tasks is every task keep takes: those that haven't ended, oldest first,
+// then those that ended in the last workKept, newest first, at most limit
+// of them.
+func (d *daemon) tasks(keep func(task) bool, limit int, now time.Time) []task {
 	var open []task
 	d.do(func(st *state) {
 		for _, a := range st.asked {
-			if !keep(a.from) {
-				continue
-			}
 			t := task{id: a.id, from: a.from, to: a.addr, what: a.label(), status: "waiting", at: a.at, reviewed: a.reviewed}
 			if a.addr == "review" {
 				t.to, t.status, t.held, t.live = a.to, "held", a, st.addrs[a.from] != nil
 			}
-			open = append(open, t)
+			if keep(t) {
+				open = append(open, t)
+			}
 		}
 		for _, j := range st.jobs {
-			if !keep(j.from) {
-				continue
-			}
 			at := now
 			if len(j.attempts) > 0 {
 				at = j.attempts[0].started
 			}
-			open = append(open, task{id: j.id, from: j.from, to: "jobs", what: cmdText(j.cmd),
-				status: "running", at: at, reviewed: j.reviewed})
+			t := task{id: j.id, from: j.from, to: "jobs", what: cmdText(j.cmd), status: "running", at: at, reviewed: j.reviewed}
+			if keep(t) {
+				open = append(open, t)
+			}
 		}
 	})
 	slices.SortFunc(open, func(a, b task) int { return int(a.id - b.id) })
+	// One that ends while this reads is found in both: the open one wins.
 	isOpen := map[int64]bool{}
 	for _, t := range open {
 		isOpen[t.id] = true
@@ -83,7 +82,7 @@ func (d *daemon) tasks(keep func(from string) bool, limit int, now time.Time) []
 			}
 			from, _ := get("from").(puff.Keyword)
 			at, ok := get("ended").(puff.Time)
-			if !ok || now.Sub(at.Go()) > workKept || !keep(string(from)) {
+			if !ok || now.Sub(at.Go()) > workKept {
 				return nil
 			}
 			by, _ := get("by").(puff.Keyword)
@@ -96,7 +95,9 @@ func (d *daemon) tasks(keep func(from string) bool, limit int, now time.Time) []
 			} else if by != "" {
 				t.what = ":" + string(by)
 			}
-			ended = append(ended, t)
+			if keep(t) {
+				ended = append(ended, t)
+			}
 			return nil
 		})
 	})
@@ -160,6 +161,16 @@ func (t task) state() string {
 		return string(k)
 	}
 	return "failed"
+}
+
+// failed says whether t ended without doing what it was for, and not
+// because you cancelled or rejected it.
+func (t task) failed() bool {
+	switch t.state() {
+	case "failed", "interrupted", "gave-up":
+		return true
+	}
+	return false
 }
 
 // value is t as :tasks/list gives it.
@@ -266,7 +277,19 @@ func (st *state) taskChanged(id int64, user bool) {
 // tasksService is :tasks: the tasks as data and as a view, a task's whole
 // result, and cancel, which is yours, as :review's functions are.
 func (d *daemon) tasksService() *service {
-	all := func(string) bool { return true }
+	all := func(task) bool { return true }
+	// view is the tasks keep takes as a view.
+	view := func(keep func(task) bool) func(message, []puff.Value) (puff.Value, error) {
+		return func(message, []puff.Value) (puff.Value, error) {
+			now := time.Now()
+			var items []puff.Value
+			for _, t := range d.tasks(keep, tasksShown, now) {
+				items = append(items, t.item(now))
+			}
+			opts, _ := puff.NewMap(puff.Key("changed", puff.Keyword("tasks/changed")))
+			return puff.Ok(puff.NewTag("items", puff.NewVector(items...), opts)), nil
+		}
+	}
 	return &service{name: "tasks", d: d, cur: caller{addr: "tasks"},
 		fns: map[string]handler{
 			"list": {mark: puff.MarkRead, marked: true,
@@ -279,16 +302,11 @@ func (d *daemon) tasksService() *service {
 					return puff.Ok(puff.NewVector(vs...)), nil
 				}},
 			"view": {mark: puff.MarkRead, marked: true,
-				doc: "(ok view): the tasks as list gives them, as items: one held has :review's actions, one waiting or running Cancel, a job Output too, and one that ended Result, and the actions its result offers, as {:actions [...]} in its (ok m) or (err m).",
-				native: func(message, []puff.Value) (puff.Value, error) {
-					now := time.Now()
-					var items []puff.Value
-					for _, t := range d.tasks(all, tasksShown, now) {
-						items = append(items, t.item(now))
-					}
-					opts, _ := puff.NewMap(puff.Key("changed", puff.Keyword("tasks/changed")))
-					return puff.Ok(puff.NewTag("items", puff.NewVector(items...), opts)), nil
-				}},
+				doc:    "(ok view): the tasks as list gives them, as items: one held has :review's actions, one waiting or running Cancel, a job Output too, and one that ended Result, and the actions its result offers, as {:actions [...]} in its (ok m) or (err m).",
+				native: view(all)},
+			"failed": {mark: puff.MarkRead, marked: true,
+				doc:    "(ok view): the tasks that failed in the last day, newest first, as view gives them: :failed, :interrupted, or a result's :status :failed or :gave-up; not those you cancelled or rejected.",
+				native: view(task.failed)},
 			"result": {params: []string{"id"}, mark: puff.MarkRead, marked: true, native: d.taskResult,
 				doc: "(ok r), the result task id ended with, whole, while it is kept; (err {:kind :no-id}) if it hasn't ended, or isn't kept."},
 			"cancel": {params: []string{"id"}, mark: puff.MarkWrite, marked: true, yours: true,
