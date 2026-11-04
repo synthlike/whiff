@@ -132,6 +132,16 @@ func TestTasks(t *testing.T) {
 		t.Errorf("tasks/failed = %s", v)
 	}
 
+	// A job with :retry says how many times it ran, of how many it may.
+	timed := id(call("jobs/run", `[["sleep" "10"] {:timeout 100ms :retry 1 :idempotent #t}]`))
+	eventually(t, "the timed-out job's attempts", func() string {
+		fs := tasks()[timed]
+		return fs["state"] + " " + fs["attempts"] + " of " + fs["tries"]
+	}, ":failed 2 of 2")
+	if v := call("tasks/failed", "[]"); !strings.Contains(v, `task `+timed+` for you · by :jobs · just now · 2 attempts · (err {:kind :timeout`) {
+		t.Errorf("tasks/failed with the timed-out job = %s", v)
+	}
+
 	// Each task that began or ended was published on :tasks/changed.
 	seen := map[string]bool{}
 	for deadline := time.After(2 * time.Second); !seen[waiting] || !seen[failing] || !seen[held] || !seen[job]; {

@@ -150,6 +150,7 @@ nothing else, so it can't start children of its own.
 | `:outcome` on every failure | Yes |
 | Cancelling any task | Yes, `whiff cancel` and the agent's `cancel` tool, and a task ends once; not a message you accepted while it is delivered, which ends within a call's 5s |
 | Attempts and retries | Yes, for jobs: `:retry n` on `:jobs/run`, and `:idempotent #t` for a write that is safe to run twice. A job whose process group may still run after a crash isn't run again |
+| Seeing every task | Yes: `:tasks/list` and `:tasks/view` give each task held, waiting or running and each that ended in the last day, with its owner, attempts, result, and whether its process may still run; `:tasks/failed` only those that failed. Its actions are Cancel, Accept and Reject, and those its result offers, as a build's Retry. sniff links to both |
 
 `whiff try` is unchanged: a trial's state, inbox and timers aren't stored. A
 task a trial starts is, as it was, so `whiff wait` finds its result.

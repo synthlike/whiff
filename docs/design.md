@@ -92,7 +92,8 @@ pipeline cancels the run it started for a `build`.
 `:tasks` shows them all, whoever began them: `(call :tasks/list)` gives
 each one held, waiting or running, and each that ended in the last day,
 with its owner, where it is or who answered it, and how it ended;
-`:tasks/view` gives them as items, with what can be done with each: Accept
+`:tasks/view` gives them as items, with a job's attempts and, after a
+crash, whether its process may still run, and what can be done with each: Accept
 or Reject one held, Cancel one that hasn't ended, see one's whole result,
 and the actions that result offers, `{:actions [...]}` in its `(ok m)` or
 `(err m)`, as a pipeline build's Retry; `:tasks/failed` only those that

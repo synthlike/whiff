@@ -35,6 +35,11 @@ type task struct {
 	result   puff.Value
 	held     *asked // one the review gate holds
 	live     bool   // held: its sender is still here, so its session can be trusted
+	// attempts is how many times a job ran, of tries, as :retry allows.
+	attempts, tries int
+	// stray is the process group a job that ended :unknown may still run
+	// in, as when whiff died while it ran; 0 if none is there.
+	stray int
 }
 
 // tasks is every task keep takes: those that haven't ended, oldest first,
@@ -57,7 +62,8 @@ func (d *daemon) tasks(keep func(task) bool, limit int, now time.Time) []task {
 			if len(j.attempts) > 0 {
 				at = j.attempts[0].started
 			}
-			t := task{id: j.id, from: j.from, to: "jobs", what: cmdText(j.cmd), status: "running", at: at, reviewed: j.reviewed}
+			t := task{id: j.id, from: j.from, to: "jobs", what: cmdText(j.cmd), status: "running", at: at, reviewed: j.reviewed,
+				attempts: len(j.attempts), tries: j.opts.retry + 1}
 			if keep(t) {
 				open = append(open, t)
 			}
@@ -94,6 +100,13 @@ func (d *daemon) tasks(keep func(task) bool, limit int, now time.Time) []task {
 				t.what = cmdText(cmd)
 			} else if by != "" {
 				t.what = ":" + string(by)
+			}
+			if as, ok := get("attempts").(puff.Vector); ok {
+				retry, _ := get("retry").(puff.Int)
+				t.attempts, t.tries = as.Len(), int(retry)+1
+			}
+			if pid, _ := puff.Field(puff.ErrValue(t.result), "pid").(puff.Int); groupThere(int(pid)) {
+				t.stray = int(pid)
 			}
 			if keep(t) {
 				ended = append(ended, t)
@@ -191,6 +204,12 @@ func (t task) value() puff.Value {
 	if t.reviewed {
 		es = append(es, puff.Key("reviewed", puff.Bool(true)))
 	}
+	if t.tries > 1 || t.attempts > 1 {
+		es = append(es, puff.Key("attempts", puff.Int(t.attempts)), puff.Key("tries", puff.Int(t.tries)))
+	}
+	if t.stray != 0 {
+		es = append(es, puff.Key("stray", puff.Int(t.stray)))
+	}
 	if t.result != nil {
 		es = append(es, puff.Key("result", brief(t.result)))
 	}
@@ -199,7 +218,8 @@ func (t task) value() puff.Value {
 }
 
 // item is t as an item of :tasks/view: its state and what it does, then
-// its id, owner, who answered, when and its result; and what can be done
+// its id, owner, who answered, when, its attempts, whether it may still
+// run, and its result; and what can be done
 // with it. One held has :review's actions; one waiting or running can be
 // cancelled, and a job's output read; one that ended shows its result
 // whole, and has the actions its result offers, as {:actions [...]} in its
@@ -214,6 +234,15 @@ func (t task) item(now time.Time) puff.Value {
 		parts = append(parts, "by :"+t.to)
 	}
 	parts = append(parts, ago(now.Sub(t.at)))
+	switch {
+	case t.status == "running" && t.tries > 1:
+		parts = append(parts, fmt.Sprintf("attempt %d of %d", t.attempts, t.tries))
+	case t.attempts > 1:
+		parts = append(parts, fmt.Sprintf("%d attempts", t.attempts))
+	}
+	if t.stray != 0 {
+		parts = append(parts, fmt.Sprintf("may still run: kill -- -%d stops it", t.stray))
+	}
 	// Once it ended, :reviewed may say only that you answered it.
 	if t.reviewed && t.status != "ended" {
 		parts = append(parts, "accepted")
@@ -293,7 +322,7 @@ func (d *daemon) tasksService() *service {
 	return &service{name: "tasks", d: d, cur: caller{addr: "tasks"},
 		fns: map[string]handler{
 			"list": {mark: puff.MarkRead, marked: true,
-				doc: fmt.Sprintf("(ok tasks): the tasks that haven't ended, oldest first, then the last %d that ended in the last day: each {:id :status :state :what :at :from :to :result}. :status is :held, :waiting, :running or :ended; :state says how it ended too: :done, :failed, :cancelled, :rejected, :interrupted, or its result's :status, as :gave-up. :from is its owner, who gets its result (none for you); :to, where it waits or who answered it; :reviewed #t, its chain passed the review gate.", tasksShown),
+				doc: fmt.Sprintf("(ok tasks): the tasks that haven't ended, oldest first, then the last %d that ended in the last day: each {:id :status :state :what :at :from :to :result}. :status is :held, :waiting, :running or :ended; :state says how it ended too: :done, :failed, :cancelled, :rejected, :interrupted, or its result's :status, as :gave-up. :from is its owner, who gets its result (none for you); :to, where it waits or who answered it; :reviewed #t, its chain passed the review gate; :attempts and :tries, how many times a job with :retry ran, of how many it may; :stray, the process group of a job that ended :unknown, while one is there: it may still be running.", tasksShown),
 				native: func(message, []puff.Value) (puff.Value, error) {
 					var vs []puff.Value
 					for _, t := range d.tasks(all, tasksShown, time.Now()) {

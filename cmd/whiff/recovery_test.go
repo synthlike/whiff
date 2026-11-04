@@ -231,12 +231,20 @@ func TestRecoveryStray(t *testing.T) {
 	if got := h.call(c, "pipeline/retry", `[1 ""]`); !regexp.MustCompile(`^\(err \{:kind :still-running .*:pid ` + group + `\}\)$`).MatchString(got) {
 		t.Fatalf("retry while the dev runs = %s", got)
 	}
+	// :tasks says so of the dev's job, among those that failed, while it
+	// may still run.
+	if failed := h.call(c, "tasks/failed", "[]"); !strings.Contains(failed, "may still run: kill -- -"+group+" stops it") {
+		t.Fatalf("tasks/failed = %s", failed)
+	}
 	// You stop it, and Retry finishes the run.
 	syscall.Kill(-pid, syscall.SIGKILL)
 	for deadline := time.Now().Add(5 * time.Second); !errors.Is(syscall.Kill(-pid, 0), syscall.ESRCH); time.Sleep(10 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatalf("process group %d is still there", pid)
 		}
+	}
+	if failed := h.call(c, "tasks/failed", "[]"); strings.Contains(failed, "may still run") {
+		t.Errorf("tasks/failed once it stopped = %s", failed)
 	}
 	if got := h.call(c, "pipeline/retry", `[1 ""]`); !strings.HasPrefix(got, "(ok") {
 		t.Fatalf("retry once it stopped = %s", got)
