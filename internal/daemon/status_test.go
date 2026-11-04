@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/synthlike/whiff/internal/puff"
 )
@@ -98,4 +99,51 @@ func TestServiceList(t *testing.T) {
 	os.Remove(filepath.Join(dir, "services", "broken.puff"))
 	os.WriteFile(filepath.Join(dir, ".whiff", "agents", "thinker", "go"), nil, 0o600)
 	eventually(t, "after broken.puff goes", func() string { return strings.SplitN(list(), "\n", 2)[0] }, `:crashy #f :faulting "restarted once today"`)
+}
+
+// TestAgentWaits checks what an agent's line says it waits on: your
+// answer or review, which need you; a child's task, or a turn running
+// again, which don't; and a report, which waits for nothing.
+func TestAgentWaits(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	now := time.Now()
+	ask := func(id int64, from, addr, fn string, held bool) *asked {
+		a := &asked{ticket: ticket{id: id, from: from}, addr: addr, fn: fn, at: now.Add(-4 * time.Minute)}
+		if held {
+			a.held, a.to = &message{}, "todo"
+		}
+		return a
+	}
+	turn := &job{ticket: ticket{from: "lead"}, opts: jobOpts{retry: 2},
+		attempts: []attempt{{started: now.Add(-time.Minute)}, {started: now.Add(-3 * time.Second)}}}
+	cases := []struct {
+		name  string
+		asked []*asked
+		jobs  []*job
+		want  string
+	}{
+		{"nothing", nil, nil, `idle ""`},
+		{"a report", []*asked{ask(1, "lead", "me", "tell", false)}, nil, `idle "1 report in your inbox"`},
+		{"a question", []*asked{ask(1, "agent/lead", "me", "ask", false), ask(2, "lead", "me", "tell", false)}, nil,
+			`waiting "for your answer to 1 question"`},
+		{"a review", []*asked{ask(1, "agent/lead", "review", "", true), ask(2, "agent/lead", "me", "ask", false)}, nil,
+			`waiting "for your answer to 1 question and for your review of 1 write"`},
+		{"children", []*asked{ask(178, "agent/lead", "pipeline", "run", false), ask(180, "agent/lead", "pipeline", "run", false),
+			ask(3, "lead", "me", "tell", false)}, nil,
+			`busy "waiting on :pipeline (task 178) for 4m0s, and 1 more; 1 report in your inbox"`},
+		{"a retried turn", []*asked{ask(178, "agent/lead", "pipeline", "run", false)}, []*job{turn}, `thinking "3s, attempt 2 of 3"`},
+		// Another's task isn't lead's to wait on.
+		{"another's", []*asked{ask(1, "agent/digest", "pipeline", "run", false), ask(2, "digest", "me", "ask", false)}, nil, `idle ""`},
+	}
+	for _, c := range cases {
+		st := &state{addrs: map[string]*service{"lead": {name: "lead", agent: true}}, asked: c.asked,
+			jobs: map[int64]*job{}, health: map[string]*health{}}
+		for i, j := range c.jobs {
+			st.jobs[int64(i)] = j
+		}
+		r := st.statusOf("lead", now)
+		if got := fmt.Sprintf("%s %q", r.state, r.note); got != c.want {
+			t.Errorf("%s: lead is %s, want %s", c.name, got, c.want)
+		}
+	}
 }

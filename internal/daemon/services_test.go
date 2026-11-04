@@ -1586,7 +1586,8 @@ func TestAgentPause(t *testing.T) {
 		one, two := strings.Index(text, "new in napper: one"), strings.Index(text, "resume in napper: two")
 		return fmt.Sprint(one >= 0 && two > one)
 	}, "true")
-	eventually(t, "napper, its answers waiting for you", line, `{:agent #t :note "2 answers in your inbox" :service :napper :status :waiting}`)
+	// Its answers are reports: it waits for nothing.
+	eventually(t, "napper, idle with its answers in your inbox", line, `{:agent #t :note "2 reports in your inbox" :service :napper :status :idle}`)
 }
 
 // TestAgentLater has an agent's turn set it turns of its own with later,

@@ -170,8 +170,11 @@ the agent has spent its day's in the last 24 hours its turns fail
   says how each file is, a word and at most one note, what needs you
   first: `failed` to load and why, `faulting` (restarted in the last
   hour), an agent `over budget`, `waiting` on you (its messages in your
-  inbox, its writes held for review), `thinking` or `busy` with jobs,
-  then `idle` agents and `ok` services. `whiff services name`
+  inbox, its writes held for review; for an agent, its questions, as its
+  reports wait for nothing), `thinking` (with the attempt, if its turn
+  runs again) or `busy` with jobs, an agent `busy` waiting on the tasks
+  it handed out (`waiting on :pipeline (task 178) for 4m0s`), then
+  `idle` agents and `ok` services. `whiff services name`
   (`service/status`) is one in full: its file, its load error, its
   faults today and the last one's message, the last message it handled,
   its inbox and timers, and for an agent its turns and dollars of the

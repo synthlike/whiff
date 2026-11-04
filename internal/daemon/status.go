@@ -154,15 +154,32 @@ func (st *state) statusOf(name string, now time.Time) status {
 			recent++
 		}
 	}
-	answers, reviews := 0, 0
+	// What waits for you: an agent's questions, and its reports, which
+	// wait for nothing but your reading them; a service's messages, either.
+	// An agent asks as itself or from its session, agent/name.
+	ours := func(from string) bool { return from == name || from == "agent/"+name }
+	answers, questions, reports, reviews := 0, 0, 0, 0
 	for _, a := range st.inbox("me") {
-		if a.from == name {
+		if ours(a.from) {
 			answers++
+			if a.fn == "tell" {
+				reports++
+			} else {
+				questions++
+			}
 		}
 	}
 	for _, a := range st.inbox("review") {
-		if a.from == name || a.from == "agent/"+name {
+		if ours(a.from) {
 			reviews++
+		}
+	}
+	// children are the tasks an agent's session handed out that haven't
+	// come back, the oldest first, as st.asked is.
+	var children []*asked
+	for _, a := range st.asked {
+		if r.agent && a.from == "agent/"+name && a.held == nil && a.addr != "me" && a.addr != "review" {
+			children = append(children, a)
 		}
 	}
 	var running []*job
@@ -186,36 +203,66 @@ func (st *state) statusOf(name string, now time.Time) status {
 		if q := len(st.inbox(name)); q > 0 {
 			r.note = fmt.Sprintf("%d queued", q)
 		}
-	case answers > 0 || reviews > 0:
+	case !r.agent && (answers > 0 || reviews > 0):
 		r.state = "waiting"
 		var parts []string
 		if answers > 0 {
-			one, many := "message", "messages"
-			if r.agent {
-				one, many = "answer", "answers"
-			}
-			parts = append(parts, plural(answers, one, many)+" in your inbox")
+			parts = append(parts, plural(answers, "message", "messages")+" in your inbox")
 		}
 		if reviews > 0 {
 			parts = append(parts, plural(reviews, "write waits", "writes wait")+" for review")
 		}
 		r.note = strings.Join(parts, ", ")
+	case r.agent && (questions > 0 || reviews > 0):
+		r.state = "waiting"
+		var parts []string
+		if questions > 0 {
+			parts = append(parts, "for your answer to "+plural(questions, "question", "questions"))
+		}
+		if reviews > 0 {
+			parts = append(parts, "for your review of "+plural(reviews, "write", "writes"))
+		}
+		r.note = strings.Join(parts, " and ")
 	case len(running) > 0 && r.agent:
 		r.state = "thinking"
 		if a := running[0].attempts; len(a) > 0 {
 			r.note = now.Sub(a[len(a)-1].started).Round(time.Second).String()
+			// A turn that failed and runs again says so.
+			if len(a) > 1 {
+				r.note += fmt.Sprintf(", attempt %d of %d", len(a), running[0].opts.retry+1)
+			}
 		}
 		if q := len(st.inbox(name)) - 1; q > 0 {
 			r.note += fmt.Sprintf(", %d queued", q)
 		}
 	case len(running) > 0:
 		r.state, r.note = "busy", plural(len(running), "job", "jobs")
+	case len(children) > 0:
+		// Its turns have ended, but what they handed out hasn't come back.
+		r.state, r.note = "busy", "waiting on "+waitedOn(children, now)
 	case r.agent:
 		r.state = "idle"
 	default:
 		r.state = "ok"
 	}
+	// A report waits for nothing, so it is said by the way, after
+	// whatever an agent is doing; not after what is wrong with it.
+	if r.agent && reports > 0 && (r.state == "idle" || r.state == "busy" || r.state == "thinking") {
+		r.note = strings.TrimPrefix(r.note+"; "+plural(reports, "report", "reports")+" in your inbox", "; ")
+	}
 	return r
+}
+
+// waitedOn says what an agent's open tasks wait on, oldest first: the
+// oldest's address, task id and how long, and how many more,
+// ":pipeline (task 178) for 4m, and 1 more".
+func waitedOn(children []*asked, now time.Time) string {
+	a := children[0]
+	s := fmt.Sprintf(":%s (task %d) for %s", a.addr, a.id, now.Sub(a.at).Round(time.Second))
+	if n := len(children) - 1; n > 0 {
+		s += fmt.Sprintf(", and %d more", n)
+	}
+	return s
 }
 
 // agentPaused is whether agent name is paused, by the file its turn loop

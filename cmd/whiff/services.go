@@ -15,7 +15,8 @@ import (
 //
 //	procs      failed    procs.puff:12:4: unknown function str/join
 //
-//	assistant  waiting   2 answers in your inbox
+//	assistant  waiting   for your answer to 2 questions
+//	lead       busy      waiting on :pipeline (task 178) for 4m0s
 //	gh         ok
 //
 // with a blank line under those that are failed, faulting or over budget.
