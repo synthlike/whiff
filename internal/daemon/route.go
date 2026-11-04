@@ -142,6 +142,9 @@ type state struct {
 type grant struct {
 	session string
 	can     map[string]bool // address/fn
+	// claimed are the new sessions, agent/<n>, claimed with it, for a job
+	// of a service that isn't an agent: they end with the job.
+	claimed []string
 }
 
 // watcher is a client subscribed to topics, every topic if topics is nil.

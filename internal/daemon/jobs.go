@@ -247,12 +247,28 @@ func (d *daemon) grantSession(j *job, m message) puff.Value {
 
 // revoke drops j's session token, if it has one: its whiff mcp can't
 // claim the session again. One holding it keeps it until it hangs up,
-// which it does as j's process ends.
+// which it does as j's process ends. A new session claimed with it, as a
+// pipeline dev's, ends with j: what it started that hasn't ended has
+// nobody to hear how it does, so it is cancelled, as whiff cancel does,
+// and the services it waits in hear so. An agent's own session, agent/
+// <name>, lasts its turns: its tasks come back to it as results.
 func (d *daemon) revoke(j *job) {
 	if j.opts.token == "" {
 		return
 	}
-	d.do(func(st *state) { delete(st.grants, j.opts.token) })
+	var orphans []int64
+	d.do(func(st *state) {
+		g := st.grants[j.opts.token]
+		delete(st.grants, j.opts.token)
+		for _, a := range st.asked {
+			if slices.Contains(g.claimed, a.from) {
+				orphans = append(orphans, a.id)
+			}
+		}
+	})
+	for _, id := range orphans {
+		d.cancel("", id)
+	}
 }
 
 // argv is j's command as strings.

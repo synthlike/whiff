@@ -91,6 +91,12 @@ func (d *daemon) claim(l *link, req rpc.Request) (*service, rpc.Response) {
 		name, can = g.session, g.can
 		if name == "" {
 			name = fmt.Sprintf("agent/%d", d.newAgent())
+			d.do(func(st *state) {
+				if g, ok := st.grants[req.Token]; ok {
+					g.claimed = append(g.claimed, name)
+					st.grants[req.Token] = g
+				}
+			})
 		}
 		fns := slices.Sorted(maps.Keys(can))
 		vals := make([]puff.Value, len(fns))

@@ -31,6 +31,7 @@ type service struct {
 	// the jobs it runs, pass the review gate, as what they do is gated.
 	agent   bool
 	dayUSD  float64       // an agent's :limits :day
+	tasks   int           // an agent's :limits :tasks
 	every   time.Duration // an agent's :every; 0 without
 	env     *puff.Env
 	fns     map[string]handler
@@ -259,6 +260,15 @@ func (d *daemon) loadSource(file, dir, src, addr string, start bool) (*service, 
 		}
 	}
 	if s.agent {
+		if v, ok := s.env.Lookup("limits"); ok {
+			if m, ok := v.(puff.Map); ok {
+				if n, ok := m.Get(puff.Keyword("tasks")); ok {
+					if n, ok := n.(puff.Int); ok {
+						s.tasks = int(n)
+					}
+				}
+			}
+		}
 		if v, ok := s.env.Lookup("day-usd"); ok {
 			if f, ok := v.(puff.Float); ok {
 				s.dayUSD = float64(f)

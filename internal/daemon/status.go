@@ -276,8 +276,9 @@ func agentPaused(name string) bool {
 	return strings.TrimSpace(string(b)) == "paused"
 }
 
-// spending is what an agent's turns of the last 24 hours cost: dollars,
-// how many turns, and when the last ended.
+// spending is what an agent spent in the last 24 hours, its turns and
+// the tasks they started whose results said what they cost: dollars, how
+// many turns, and when the last ended.
 type spending struct {
 	usd   float64
 	turns int
@@ -293,15 +294,20 @@ func agentSpent(name string, now time.Time) spending {
 		return sp
 	}
 	b, _ := os.ReadFile(filepath.Join(home, ".whiff", "agents", name, "costs"))
+	// Each line is "time usd" for a turn, "time usd task" for a task.
 	for _, line := range strings.Split(string(b), "\n") {
-		at, usd, ok := strings.Cut(line, " ")
-		if !ok {
+		f := strings.Fields(line)
+		if len(f) < 2 {
 			continue
 		}
-		t, err := time.Parse(time.RFC3339Nano, at)
-		f, ferr := strconv.ParseFloat(usd, 64)
-		if err == nil && ferr == nil && now.Sub(t) < 24*time.Hour {
-			sp.usd, sp.turns, sp.last = sp.usd+f, sp.turns+1, t
+		t, err := time.Parse(time.RFC3339Nano, f[0])
+		usd, ferr := strconv.ParseFloat(f[1], 64)
+		if err != nil || ferr != nil || now.Sub(t) >= 24*time.Hour {
+			continue
+		}
+		sp.usd += usd
+		if len(f) == 2 {
+			sp.turns, sp.last = sp.turns+1, t
 		}
 	}
 	return sp

@@ -1,6 +1,6 @@
 ; whiff's turn loop, which an (agent name :prompt "..." ...) file runs as
 ; the service name. whiff adds prompt, model (or ""), can (or []), dir (or
-; "", an absolute path), limits ({:turn usd :day usd :time d}) and every
+; "", an absolute path), limits ({:turn usd :day usd :time d :tasks n}) and every
 ; (or 0s) as defs before these forms, and leaves out wake when there's no
 ; :every. A turn's tools are the :can whiff functions and the agent's own
 ; later, through whiff mcp acting as the agent's session, :agent/<name>.
@@ -92,27 +92,36 @@
 ; dollars is usd for people: $0.42.
 (def (dollars usd) (str "$" (float/to-string (float/div (float/round (* usd 100.0)) 100.0))))
 
-; spending are [time usd] for the turns of the last 24 hours.
+; spending are [time usd task] for the last 24 hours: each turn's, task
+; "", and each task's its result said it cost, task its id.
 (def (spending)
-  (let [since (- (time/now) 1d)]
+  (let [since (- (time/now) 1d)
+        parse (fn (t c task)
+                (match [(time/from-string t) (float/from-string c)]
+                  [[(ok at) (ok usd)] [at usd task]]
+                  [_ [since 0.0 task]]))]
     (vector/filter
       (vector/map (read-lines costs)
         (fn (line)
           (match (string/split line " ")
-            [[t c] (match [(time/from-string t) (float/from-string c)]
-                     [[(ok at) (ok usd)] [at usd]]
-                     [_ [since 0.0]])]
-            [_ [since 0.0]])))
-      (fn ([at _]) (> at since)))))
+            [[t c] (parse t c "")]
+            [[t c task] (parse t c task)]
+            [_ [since 0.0 ""]])))
+      (fn ([at _ _]) (> at since)))))
 
-; spent is the dollars of the last 24 hours' turns.
-(def (spent) (vector/reduce (spending) 0.0 (fn (sum [_ usd]) (+ sum usd))))
+; spent is the dollars of the last 24 hours, its turns' and its tasks'.
+(def (spent) (vector/reduce (spending) 0.0 (fn (sum [_ usd _]) (+ sum usd))))
 
-; spend keeps a turn's cost, and tells you once the day's budget is spent.
-(def (spend usd)
+; turns-today is how many turns it took in the last 24 hours.
+(def (turns-today) (vector/length (vector/filter (spending) (fn ([_ _ task]) (= task "")))))
+
+; spend keeps what a turn cost, or task, if it isn't "", and tells you
+; once the day's budget is spent.
+(def (spend usd task)
   (let [before (spent)
-        kept (vector/map (spending) (fn ([at c]) (str (time/to-string at) " " (float/to-string c) "\n")))
-        _ (try (file/write costs (string/concat (vector/reduce kept "" string/concat) (time/to-string (time/now)) " " (float/to-string usd) "\n")))
+        line (fn (at c tk) (str (time/to-string at) " " (float/to-string c) (if (= tk "") "" (str " " tk)) "\n"))
+        kept (vector/map (spending) (fn ([at c tk]) (line at c tk)))
+        _ (try (file/write costs (string/concat (vector/reduce kept "" string/concat) (line (time/now) usd task))))
         after (+ before usd)]
     (if (and (< before day-usd) (>= after day-usd))
       (call :me/tell (str name " has spent " (dollars after) " in the last 24 hours, its " (dollars day-usd)
@@ -150,7 +159,7 @@
      (match (json/parse out)
        [(ok res) when (= (map/get res :type) (some "result"))
         (let [usd (number (map/get-or res :total_cost_usd 0))
-              _ (spend usd)
+              _ (spend usd "")
               why (string/join (map/get-or res :errors []) "; ")]
           (cond
             [(not (map/get-or res :is_error #f)) (ok (map/get-or res :result ""))]
@@ -265,6 +274,17 @@
     (vector/filter waiting
       (fn (m) (match m [{:fn :whiff/result :args [o _]} (= (turn-of o) by)] [_ #f])))))
 
+; child-cost spends what result r, of task, which a turn started, says it
+; cost: (ok {:cost usd ...}), as a pipeline build's, or another agent's
+; ask's that says so; anything else cost the agent nothing it knows of.
+(def (child-cost task r)
+  (match r
+    [(ok m) when (= (value/type m) :map)
+     (match (map/get m :cost)
+       [(some usd) when (and (vector/contains? [:int :float] (value/type usd)) (> (number usd) 0.0)) (spend (number usd) (int/to-string task))]
+       [_ (ok :done)])]
+    [_ (ok :done)]))
+
 ; result-text is a turn's text for results, inbox items of the tasks an
 ; earlier turn of the agent's started, for root. For an ask that waits,
 ; the answer is the ask's, once nothing else started for it runs.
@@ -316,6 +336,9 @@
                     [[:remind [_ note]] (later-text note)]
                     [[_ [t]] t]
                     [_ wake-text])]
+         ; What the results' tasks spent is the agent's, spent before
+         ; the turn they start, which the day's budget may then refuse.
+         (vector/each batch (fn (m) (match m [{:fn :whiff/result :args [t r]} (let [_ (child-cost t r)] (ok :done))] [_ (ok :done)])))
          (match (start text)
            [(ok t) (do (try (file/write-atomic current-file (value/to-string {:turn t :text text})))
                      (vector/each batch
@@ -437,7 +460,7 @@
 
 (on (usage) :read
   "What the agent spent: {:spent usd :turns n :day usd}, the dollars and turns of the last 24 hours, and its :day limit."
-  (ok {:spent (spent) :turns (vector/length (spending)) :day day-usd}))
+  (ok {:spent (spent) :turns (turns-today) :day day-usd}))
 
 (on (stop)
   "Stops the turn running now: its job is cancelled, and whoever it answers hears (err {:kind :cancelled}). (ok :idle) if none runs."

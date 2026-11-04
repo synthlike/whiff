@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -93,5 +94,46 @@ func TestCancel(t *testing.T) {
 	}
 	if r := cancel(you, "999"); !strings.Contains(r, ":kind :no-id") {
 		t.Errorf("cancel 999 = %s", r)
+	}
+}
+
+// TestSessionEndsWithJob has a service's job hold a new session, as a
+// pipeline dev does, which asks another service something: once the job
+// ends, its ask, which nobody would hear the answer to, is cancelled, and
+// its sender hears so.
+func TestSessionEndsWithJob(t *testing.T) {
+	dir := tempDir(t)
+	writeServices(t, dir, map[string]string{
+		"boss":   `(service boss (on (hire) "Runs a worker." (call :jobs/run ["sh" "-c" "echo $WHIFF_SESSION > token; while [ ! -e done ]; do sleep 0.02; done"] {:session [:helper/ask]})))`,
+		"helper": `(service helper (ask (ask q) "Asks the helper."))`,
+	})
+	start(t, dir)
+	c := dial(t, dir)
+	if r, _ := c.Eval(`(call :boss/hire)`, dir); !strings.HasPrefix(r.Value, "(err {:id ") {
+		t.Fatalf("hire = %+v", r)
+	}
+	var tok string
+	eventually(t, "the worker's token", func() string {
+		b, _ := os.ReadFile(filepath.Join(dir, "token"))
+		tok = strings.TrimSpace(string(b))
+		return fmt.Sprint(len(tok))
+	}, "32")
+	worker := dial(t, dir)
+	worker.Agent = true
+	if r, err := worker.ClaimSession(tok, ""); err != nil || !strings.HasPrefix(r.Value, "(ok [:agent/") {
+		t.Fatalf("the worker's claim = %+v %v", r, err)
+	}
+	r, _ := worker.Message("call", "helper/ask", `["which port?"]`, "")
+	q := strings.Fields(strings.TrimPrefix(r.Value, "(err {:id "))[0]
+	if text, _ := c.Inbox("helper"); !strings.Contains(text, "which port?") {
+		t.Fatalf("helper's inbox = %q", text)
+	}
+	os.WriteFile(filepath.Join(dir, "done"), nil, 0o600)
+	eventually(t, "helper's inbox, once the worker's job ends", func() string { text, _ := c.Inbox("helper"); return text }, "")
+	if t.Failed() {
+		return // the wait below would wait for ever
+	}
+	if r, err := c.Message("wait", "", "["+q+"]", ""); err != nil || !strings.Contains(r.Value, ":kind :cancelled") {
+		t.Errorf("the worker's ask = %+v %v, want it cancelled", r, err)
 	}
 }

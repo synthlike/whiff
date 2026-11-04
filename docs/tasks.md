@@ -117,6 +117,28 @@ The first transaction to end a task wins. A job that exits as you cancel it
 keeps its real result, and a task can't end twice: an answer that comes after
 the end is dropped, and history says so.
 
+## Parents and children
+
+An agent's turn that calls an ask, as lead's `pipeline/build`, or a `:write`
+held for review, starts a task: the agent is its parent, and the service
+that answers it may start children of its own, as pipeline's dev and
+reviewer jobs, the dev with a session of its own, `agent/<n>`.
+
+| Question | Rule |
+| --- | --- |
+| Who owns a result | The session that started the task. An agent's, `agent/<name>`, lasts its turns: a result comes back to it as `whiff/result`, a turn of its own, stored as any task's, so a restart or reload loses none. |
+| Parent's turn fails | Its children run on, and their results still come. Restarting the turn tells it what it had started and how each stands, so it doesn't start them again. |
+| Parent paused | Its children run on; their results wait in its inbox until it is resumed. |
+| Parent cancelled | Its turn stops and each task it has open is cancelled: one waiting in a service's inbox leaves it, and the service hears `whiff/cancelled id`, so it can stop what it began, as pipeline cancels the run and kills its dev. Cancelling stops descendants; nothing detaches them. |
+| Child session ends | A new session, `agent/<n>`, ends with the job it was given to: what it has open is cancelled, as nobody would hear how it ends. |
+| Parent unloaded | Its results wait for it, as any service's, and come when it loads. |
+| Budget | A result's `:cost`, as a pipeline build's, is the parent's spending, counted with its turns' against its `:day`, before the turn the result starts, which the budget may then refuse. |
+| Fan-out | A session may have `:tasks` open at once, 10 unless its agent's `:limits` say; one more is `(err {:kind :too-many})`, at once. |
+| Capabilities | A child's session reaches only the functions its job was given (`:session [...]`), gated as any agent's: being started by a trusted parent gives it neither your origin nor a way past the review gate. A parent's trust mode isn't its children's. |
+
+Depth is bounded by what each session may call: a dev may ask its lead, and
+nothing else, so it can't start children of its own.
+
 ## Today
 
 | Spec | Today |

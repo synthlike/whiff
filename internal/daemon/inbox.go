@@ -98,6 +98,8 @@ func (d *daemon) ask(st *state, s *service, m message) puff.Value {
 		return puff.Errorf("bad-call", ":%s takes %s arguments, got %d", m.to(s.name), want, args.Len())
 	case len(st.inbox(s.name)) >= inboxSize:
 		return puff.Errorf("full", ":%s's inbox is full", s.name)
+	case st.tooMany(m.from) != nil:
+		return st.tooMany(m.from)
 	}
 	if h.check != nil {
 		if err := h.check(args); err != nil {
@@ -557,4 +559,30 @@ func (d *daemon) clientReply(from string, req rpc.Request) rpc.Response {
 		return rpc.Response{Error: err.Error()}
 	}
 	return rpc.Response{Value: puff.Print(r)}
+}
+
+// tooMany is (err {:kind :too-many}) if from, an agent session, has as
+// many tasks open as it may, waiting in an inbox or for review: its
+// agent's :limits :tasks, or defaultTasks for a new session's, as a
+// pipeline dev's; nil for anyone else, or one under its limit. So an
+// agent hands out work in bounded amounts, however its turns loop.
+func (st *state) tooMany(from string) puff.Value {
+	name, ok := strings.CutPrefix(from, "agent/")
+	if !ok {
+		return nil
+	}
+	limit := defaultTasks
+	if s := st.addrs[name]; s != nil && s.agent && s.tasks > 0 {
+		limit = s.tasks
+	}
+	open := 0
+	for _, a := range st.asked {
+		if a.from == from {
+			open++
+		}
+	}
+	if open < limit {
+		return nil
+	}
+	return puff.Errorf("too-many", ":%s has %d tasks open, as many as it may: wait for one to end (whiff wait), or cancel one", from, open)
 }

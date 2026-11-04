@@ -150,7 +150,7 @@ A service is a file, `(service name forms...)`: `(on (fn params...) "doc"
 body...)` handlers, `(ask ...)` functions, `(on :topic (v) ...)`
 subscribers and private `def`s. An agent is a file too, `(agent name
 :prompt "..." [:model "..."] [:can [:addr/fn ...]] [:dir path] [:limits
-{:turn usd :day usd :time d}] [:every d])`, which whiff runs as a service
+{:turn usd :day usd :time d :tasks n}] [:every d])`, which whiff runs as a service
 of its own turn loop (`internal/daemon/agent.puff`): `tell`, whose answer
 lands in `:me`'s inbox, `ask`, whose answer goes back to whoever asked,
 `forget`, `usage`, `stop`, `cancel`, `restart`, `pause` and `resume`, a `wake` with
@@ -173,8 +173,11 @@ wakes and laters, and the results of what its turns started, are all asks of the
 runs and take turns oldest first; your reply to an answer is a tell. Its turns are held
 to `:limits`, $1 and 10 minutes a turn and $5 a day unless it says
 otherwise: claude stops a turn at its dollars, whiff at its time, and once
-the agent has spent its day's in the last 24 hours its turns fail
-`:over-budget` until it has spent less, which you hear of once.
+the agent has spent its day's in the last 24 hours, its turns' and what
+its tasks' results say they cost, its turns fail `:over-budget` until it
+has spent less, which you hear of once. Its session may have 10 tasks
+open at once, or `:tasks`. Parents and children are in
+[tasks.md](tasks.md#parents-and-children).
 
 - **Supervised.** The daemon looks at `~/.whiff/services/` twice a second:
   a saved file reloads, a deleted one unloads, a fault restarts the service

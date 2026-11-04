@@ -32,7 +32,7 @@ func agentService(f *puff.Form, file string) (*puff.Form, error) {
 		"every":  ":every wants a duration, as 1d",
 		"can":    ":can wants the functions the agent may use, as [:gh/prs :todo/add]",
 		"dir":    ":dir wants a string, the directory its tools act in",
-		"limits": ":limits wants {:turn usd :day usd :time d}, any of them: dollars a turn and a day, and how long a turn may run",
+		"limits": ":limits wants {:turn usd :day usd :time d :tasks n}, any of them: dollars a turn and a day, how long a turn may run, and how many tasks it may have open",
 	}
 	rest := f.Items[2:]
 	for len(rest) > 0 {
@@ -105,31 +105,37 @@ func agentService(f *puff.Form, file string) (*puff.Form, error) {
 	return &puff.Form{Kind: puff.FormList, Pos: f.Pos, Items: items}, nil
 }
 
-// Agents' limits without :limits: dollars a turn, dollars a day, and how
-// long a turn may run.
+// Agents' limits without :limits: dollars a turn, dollars a day, how
+// long a turn may run, and how many tasks its session may have open: a
+// new session's, as a pipeline dev's, has defaultTasks too.
 const (
 	defaultTurnUSD  = 1.0
 	defaultDayUSD   = 5.0
 	defaultTurnTime = 10 * time.Minute
+	defaultTasks    = 10
 )
 
-// agentLimits is :limits f, {:turn usd :day usd :time d}, with the
-// defaults for those it leaves out, and dollars as floats.
+// agentLimits is :limits f, {:turn usd :day usd :time d :tasks n}, with
+// the defaults for those it leaves out, and dollars as floats.
 func agentLimits(f *puff.Form, lit func(puff.Value) *puff.Form) *puff.Form {
-	vals := map[string]puff.Value{"turn": puff.Float(defaultTurnUSD), "day": puff.Float(defaultDayUSD), "time": puff.Duration(defaultTurnTime)}
+	vals := map[string]puff.Value{"turn": puff.Float(defaultTurnUSD), "day": puff.Float(defaultDayUSD), "time": puff.Duration(defaultTurnTime), "tasks": puff.Int(defaultTasks)}
 	if f != nil {
 		for i := 0; i+1 < len(f.Items); i += 2 {
 			k := string(f.Items[i].Val.(puff.Keyword))
 			switch v := f.Items[i+1].Val.(type) {
 			case puff.Int:
-				vals[k] = puff.Float(v)
+				if k == "tasks" {
+					vals[k] = v
+				} else {
+					vals[k] = puff.Float(v)
+				}
 			default:
 				vals[k] = v
 			}
 		}
 	}
 	m := &puff.Form{Kind: puff.FormMap}
-	for _, k := range []string{"turn", "day", "time"} {
+	for _, k := range []string{"turn", "day", "time", "tasks"} {
 		m.Items = append(m.Items, lit(puff.Keyword(k)), lit(vals[k]))
 	}
 	return m
@@ -177,7 +183,7 @@ func agentOptOK(k puff.Keyword, v *puff.Form) bool {
 			}
 			switch x := val.Val.(type) {
 			case puff.Int:
-				if k != "turn" && k != "day" || x <= 0 {
+				if k != "turn" && k != "day" && k != "tasks" || x <= 0 {
 					return false
 				}
 			case puff.Float:

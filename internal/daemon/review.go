@@ -119,6 +119,9 @@ func (st *state) queue(a *asked, what string) puff.Value {
 	if len(st.inbox("review")) >= inboxSize {
 		return puff.Errorf("full", ":review's inbox is full")
 	}
+	if e := st.tooMany(a.from); e != nil {
+		return e
+	}
 	a.id, a.addr, a.at = st.newID(), "review", time.Now()
 	if err := st.keep(a); err != nil {
 		return puff.Errorf("store", "%s wasn't stored: %v", what, err)

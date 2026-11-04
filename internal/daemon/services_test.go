@@ -2199,3 +2199,104 @@ func TestAgentRestart(t *testing.T) {
 		t.Errorf("a second restart = %s, want :no-turn", got)
 	}
 }
+
+// TestAgentChildCost has a result tell an agent what its task cost, as a
+// pipeline build's :cost does: the agent spends it with the turn's own,
+// and once that is its day's budget, takes no more turns.
+func TestAgentChildCost(t *testing.T) {
+	dir := tempDir(t)
+	fakeClaude(t, dir)
+	writeServices(t, dir, map[string]string{
+		"boss":   `(agent boss :prompt "Boss." :can [:helper/ask] :limits {:day 0.5})`,
+		"helper": `(service helper (ask (ask q) "Asks the helper."))`,
+	})
+	start(t, dir)
+	c := dial(t, dir)
+	eval := func(src string) string {
+		r, _ := c.Eval(src, "")
+		return r.Value + r.Error
+	}
+	spent := func() string { return eval(`(match (call :boss/usage) [(ok {:spent s :turns n}) [s n]] [e e])`) }
+	home := filepath.Join(dir, ".whiff", "agents", "boss")
+	// ask has boss's next turn ask the helper q, and the helper answer r.
+	ask := func(q, r string) {
+		t.Helper()
+		os.Remove(filepath.Join(home, "token"))
+		eval(`(call :boss/tell "go")`)
+		var tok string
+		eventually(t, "boss's turn", func() string {
+			b, _ := os.ReadFile(filepath.Join(home, "token"))
+			tok = strings.TrimSpace(string(b))
+			return fmt.Sprint(len(tok))
+		}, "32")
+		turn := dial(t, dir)
+		turn.Agent = true
+		if r, err := turn.ClaimSession(tok, ""); err != nil {
+			t.Fatalf("claim = %+v %v", r, err)
+		}
+		res, _ := turn.Message("call", "helper/ask", fmt.Sprintf("[%q]", q), "")
+		turn.Close()
+		if !strings.HasPrefix(res.Value, "(err {:id ") {
+			t.Fatalf("ask = %+v", res)
+		}
+		id := strings.Fields(strings.TrimPrefix(res.Value, "(err {:id "))[0]
+		if _, err := c.Message("reply", "", "["+id+" "+r+"]", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ask("one", "(ok {:status :ready :cost 0.25})")
+	// boss's turn, the result's 0.25, and the turn on the result.
+	eventually(t, "what boss spent", spent, "[0.27 2]")
+	// 0.25 more is past its day's 0.5: the turn on the result isn't taken.
+	ask("two", "(ok {:status :ready :cost 0.25})")
+	eventually(t, "what boss spent", spent, "[0.53 3]")
+	eventually(t, "boss", func() string {
+		return eval(`(match (service/status :boss) [(ok s) (map/get s :status)] [e e])`)
+	}, "(some :over-budget)")
+}
+
+// TestAgentTaskLimit has an agent's turn hand out more tasks than its
+// :limits :tasks: the one past it is refused at once, and once one ends
+// there is room for another.
+func TestAgentTaskLimit(t *testing.T) {
+	dir := tempDir(t)
+	fakeClaude(t, dir)
+	writeServices(t, dir, map[string]string{
+		"boss":   `(agent boss :prompt "Boss." :can [:helper/ask] :limits {:tasks 2})`,
+		"helper": `(service helper (ask (ask q) "Asks the helper."))`,
+	})
+	start(t, dir)
+	c := dial(t, dir)
+	c.Eval(`(call :boss/tell "hold")`, "")
+	home := filepath.Join(dir, ".whiff", "agents", "boss")
+	var tok string
+	eventually(t, "boss's turn", func() string {
+		b, _ := os.ReadFile(filepath.Join(home, "token"))
+		tok = strings.TrimSpace(string(b))
+		return fmt.Sprint(len(tok))
+	}, "32")
+	turn := dial(t, dir)
+	turn.Agent = true
+	if r, err := turn.ClaimSession(tok, ""); err != nil {
+		t.Fatalf("claim = %+v %v", r, err)
+	}
+	ask := func(q string) string {
+		r, _ := turn.Message("call", "helper/ask", fmt.Sprintf("[%q]", q), "")
+		return r.Value + r.Error
+	}
+	one, two := ask("one"), ask("two")
+	if !strings.HasPrefix(one, "(err {:id ") || !strings.HasPrefix(two, "(err {:id ") {
+		t.Fatalf("the first two = %s, %s", one, two)
+	}
+	if got := ask("three"); !strings.HasPrefix(got, "(err {:kind :too-many") {
+		t.Errorf("the third = %s, want :too-many", got)
+	}
+	id := strings.Fields(strings.TrimPrefix(one, "(err {:id "))[0]
+	if _, err := c.Message("reply", "", "["+id+" (ok 1)]", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := ask("four"); !strings.HasPrefix(got, "(err {:id ") {
+		t.Errorf("one after another ended = %s, want it to wait", got)
+	}
+	os.WriteFile(filepath.Join(home, "go"), nil, 0o600)
+}
