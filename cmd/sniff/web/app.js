@@ -650,9 +650,15 @@ async function loadServices() {
 let servicesTimer = 0;
 function servicesSoon() {
   clearTimeout(servicesTimer);
-  servicesTimer = setTimeout(loadServices, 1000);
+  servicesTimer = setTimeout(() => { loadServices(); refreshWork(); }, 1000);
 }
-setInterval(loadServices, 15000);
+setInterval(() => { loadServices(); refreshWork(); }, 15000);
+
+// refreshWork fills again each open Status that shows work, so its steps
+// follow a run as it moves, and a running step's time goes on.
+function refreshWork() {
+  document.querySelectorAll(".svc-status.has-work").forEach((box) => fillStatus(box, box.dataset.address));
+}
 
 // statusClass is the dot a service's status draws: broken, wanting you,
 // working, or none for idle and ok.
@@ -802,13 +808,18 @@ function workList(work) {
 // the details needn't wait.
 function statusBox(name) {
   const box = el("div", "svc-status", "…");
+  box.dataset.address = name;
   fillStatus(box, name);
   return box;
 }
 
 async function fillStatus(box, name) {
+  // Fills can overlap, as refreshWork's do: only the last one draws.
+  const seq = (box.seq = (box.seq || 0) + 1);
   try {
     const st = await getJSON("api/service?address=" + encodeURIComponent(name));
+    if (box.seq !== seq) return;
+    box.classList.toggle("has-work", !!st.work?.length);
     const head = el("p", "svc-head " + statusClass(st.status));
     head.append(el("span", "dot"), el("strong", "", st.status.replace("-", " ")));
     if (st.note) head.append(" ", el("span", "", st.note));
@@ -836,7 +847,7 @@ async function fillStatus(box, name) {
       head.append(b);
     }
   } catch (err) {
-    box.replaceChildren(el("p", "hint", err.message));
+    if (box.seq === seq) box.replaceChildren(el("p", "hint", err.message));
   }
 }
 
