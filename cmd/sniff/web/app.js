@@ -688,7 +688,8 @@ function serviceLines(st) {
   if (st.last) add("last", `${st.last.fn} ${ago(st.last.at)}`);
   if (st.turns !== undefined) {
     const usd = (x) => "$" + parseFloat(x).toFixed(2);
-    add("turns", `${st.turns} in 24h, ${usd(st.spent)} of ${usd(st.day)} a day` + (st["last-turn"] ? `; the last ${ago(st["last-turn"])}` : ""));
+    const tasks = parseFloat(st["tasks-spent"]) > 0 ? ` (${usd(st["tasks-spent"])} of it its tasks')` : "";
+    add("turns", `${st.turns} in 24h, ${usd(st.spent)} of ${usd(st.day)} a day${tasks}` + (st["last-turn"] ? `; the last ${ago(st["last-turn"])}` : ""));
   }
   if (st.mode) add("mode", [st.mode.mode, ...(st.mode.services || []).map((x) => ":" + x)].join(" ") + (st.mode.until ? ", until " + time(st.mode.until) : ""));
   add("every", st.every);
@@ -700,7 +701,7 @@ function serviceLines(st) {
 // workText is a task an agent handed out, as its Status lists it: who has
 // it, and where it is or how it came back, as "ready whiff/7, $0.31".
 function workText(w) {
-  if (w.status !== "ended") return [`:${w.to}/${w.fn}`, w.status === "held" ? "held for your review" : "waiting"];
+  if (w.status !== "ended") return [`:${w.to}/${w.fn}`, w.why || (w.status === "held" ? "held for your review" : "waiting")];
   const r = w.result, v = r?.value;
   let how = typeof v === "string" ? v : "";
   if (r && !r.ok) how = "failed: " + (v?.message ?? JSON.stringify(v));

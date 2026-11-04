@@ -132,7 +132,7 @@ reviewer jobs, the dev with a session of its own, `agent/<n>`.
 | Parent cancelled | Its turn stops and each task it has open is cancelled: one waiting in a service's inbox leaves it, and the service hears `whiff/cancelled id`, so it can stop what it began, as pipeline cancels the run and kills its dev. Cancelling stops descendants; nothing detaches them. |
 | Child session ends | A new session, `agent/<n>`, ends with the job it was given to: what it has open is cancelled, as nobody would hear how it ends. |
 | Parent unloaded | Its results wait for it, as any service's, and come when it loads. |
-| Budget | A result's `:cost`, as a pipeline build's, is the parent's spending, counted with its turns' against its `:day`, before the turn the result starts, which the budget may then refuse. |
+| Budget | A result's `:cost`, as a pipeline build's, is the parent's spending, counted with its turns' against its `:day`, before the turn the result starts, which the budget may then refuse. `service/status` says what of the day's spending its tasks cost, `:tasks-spent`. |
 | Fan-out | A session may have `:tasks` open at once, 10 unless its agent's `:limits` say; one more is `(err {:kind :too-many})`, at once. |
 | Capabilities | A child's session reaches only the functions its job was given (`:session [...]`), gated as any agent's: being started by a trusted parent gives it neither your origin nor a way past the review gate. A parent's trust mode isn't its children's. |
 
@@ -151,7 +151,7 @@ nothing else, so it can't start children of its own.
 | Cancelling any task | Yes, `whiff cancel` and the agent's `cancel` tool, and a task ends once; not a message you accepted while it is delivered, which ends within a call's 5s |
 | Attempts and retries | Yes, for jobs: `:retry n` on `:jobs/run`, and `:idempotent #t` for a write that is safe to run twice. A job whose process group may still run after a crash isn't run again |
 | Parents | Yes: a task begun in another's work, by the service its `whiff/asked` reaches or by the session of the job it runs, as an agent's turn, keeps that task as its `:parent`, stored with it; `:tasks/tree id` gives a task with what its work began, nested, and an agent's Status in sniff draws a build's jobs from it |
-| Seeing every task | Yes: `:tasks/list` and `:tasks/view` give each task held, waiting or running and each that ended in the last day, with its owner, attempts, result, and whether its process may still run; `:tasks/failed` only those that failed. Its actions are Cancel, Accept and Reject, and those its result offers, as a build's Retry. sniff links to both |
+| Seeing every task | Yes: `:tasks/list` and `:tasks/view` give each task held, waiting or running and each that ended in the last day, with its owner, attempts, result, whether its process may still run, and what one that hasn't ended waits on (your review, its agent's queue or pause, its own work); `:tasks/failed` only those that failed. Its actions are Cancel, Accept and Reject, and those its result offers, as a build's Retry. sniff links to both |
 
 `whiff try` is unchanged: a trial's state, inbox and timers aren't stored. A
 task a trial starts is, as it was, so `whiff wait` finds its result.

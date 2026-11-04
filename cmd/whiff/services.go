@@ -143,6 +143,9 @@ func showService(dir, name string, stdout, stderr io.Writer) int {
 	}
 	if turns, ok := get(m, "turns").(puff.Int); ok {
 		s := fmt.Sprintf("%d in 24h, $%.2f of $%.2f a day", turns, float64(get(m, "spent").(puff.Float)), float64(get(m, "day").(puff.Float)))
+		if tasks, ok := get(m, "tasks-spent").(puff.Float); ok && tasks > 0 {
+			s += fmt.Sprintf(" ($%.2f of it its tasks')", float64(tasks))
+		}
 		if t := ago(get(m, "last-turn")); t != "" {
 			s += "; the last " + t
 		}
@@ -221,6 +224,9 @@ func workLine(it puff.Map, width int, now time.Time) string {
 		what := "waiting"
 		if status == ":held" {
 			what = "held for your review"
+		}
+		if why, ok := get(it, "why").(puff.String); ok && why != "" {
+			what = string(why)
 		}
 		return fmt.Sprintf("%-*s  %s/%s  %s%s", width, puff.Print(get(it, "id")), to, strings.TrimPrefix(puff.Print(get(it, "fn")), ":"), what, when)
 	}

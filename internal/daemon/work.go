@@ -19,7 +19,7 @@ const workShown = 20
 // agentWork is the tasks the agent name's session started in the last
 // workKept, oldest first, at most workShown, for service/status: each
 // {:id :to :status :at :children :actions}, :status :waiting or :held for
-// one that hasn't ended, with its :fn, or :ended, with its :result, cut
+// one that hasn't ended, with its :fn and :why, what it waits on, or :ended, with its :result, cut
 // down; :children, what its work began, as :tasks/tree gives them; and
 // :actions, what can be done with it, as :tasks/view has them. So you see
 // what a lead handed out, the jobs each led to, how each came back, and
@@ -50,7 +50,7 @@ func (d *daemon) agentWork(name string, now time.Time) puff.Value {
 		if t.status == "ended" {
 			es = append(es, puff.Key("result", brief(t.result)))
 		} else {
-			es = append(es, puff.Key("fn", puff.Keyword(t.fn)))
+			es = append(es, puff.Key("fn", puff.Keyword(t.fn)), puff.Key("why", puff.String(t.why)))
 		}
 		vs[i], _ = puff.NewMap(es...)
 	}

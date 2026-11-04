@@ -48,6 +48,7 @@ type task struct {
 	began  time.Time  // when it began, if known: an ended ask's isn't kept
 	cmd    puff.Value // a job's command, whole
 	fn     string     // one held or waiting: the function it is for
+	why    string     // one held or waiting: what it waits on, in a few words
 }
 
 // tasks is every task keep takes: those that haven't ended, oldest first,
@@ -64,6 +65,7 @@ func (d *daemon) tasks(keep func(task) bool, limit int, now time.Time) []task {
 					t.fn = a.held.fn
 				}
 			}
+			t.why = st.waitsOn(a, now)
 			if keep(t) {
 				open = append(open, t)
 			}
@@ -81,6 +83,17 @@ func (d *daemon) tasks(keep func(task) bool, limit int, now time.Time) []task {
 		}
 	})
 	slices.SortFunc(open, func(a, b task) int { return int(a.id - b.id) })
+	// One whose work has begun waits on that, whatever else holds its
+	// service.
+	working := map[int64]int{}
+	for _, t := range open {
+		working[t.parent]++
+	}
+	for i, t := range open {
+		if n := working[t.id]; n > 0 && t.status == "waiting" {
+			open[i].why = "its work runs: " + plural(n, "task", "tasks") + " open"
+		}
+	}
 	// One that ends while this reads is found in both: the open one wins.
 	isOpen := map[int64]bool{}
 	for _, t := range open {
@@ -139,6 +152,39 @@ func (d *daemon) tasks(keep func(task) bool, limit int, now time.Time) []task {
 		all[i].what = short(all[i].what)
 	}
 	return all
+}
+
+// waitsOn is what a, held or waiting in an inbox, waits on, in a few
+// words: your review, your answer, its agent being paused or over its
+// day's budget, the messages ahead of it in its agent's queue, its service
+// loading, or its service's reply. One whose work has begun waits on
+// that: see tasks.
+func (st *state) waitsOn(a *asked, now time.Time) string {
+	switch {
+	case a.addr == "review":
+		return "waits for your review"
+	case a.addr == "me" && a.fn == "ask":
+		return "waits for your answer"
+	case a.addr == "me":
+		return "waits for you to read it"
+	}
+	s := st.addrs[a.addr]
+	if s == nil {
+		return fmt.Sprintf("waits for :%s, which isn't loaded", a.addr)
+	}
+	if s.agent {
+		switch st.statusOf(a.addr, now).state {
+		case "paused":
+			return fmt.Sprintf("waits: :%s is paused", a.addr)
+		case "over-budget":
+			return fmt.Sprintf("waits: :%s has spent its day's budget", a.addr)
+		}
+		if ahead := slices.IndexFunc(st.inbox(a.addr), func(b *asked) bool { return b.id == a.id }); ahead > 0 {
+			return fmt.Sprintf("waits behind %d in :%s's queue", ahead, a.addr)
+		}
+		return fmt.Sprintf("next in :%s's queue", a.addr)
+	}
+	return fmt.Sprintf("waits for :%s to reply", a.addr)
 }
 
 // argsText is args as a message's line shows them: " 12 \"x\"", or "".
@@ -220,6 +266,9 @@ func (t task) value() puff.Value {
 	if t.parent != 0 {
 		es = append(es, puff.Key("parent", puff.Int(t.parent)))
 	}
+	if t.why != "" {
+		es = append(es, puff.Key("why", puff.String(t.why)))
+	}
 	if t.reviewed {
 		es = append(es, puff.Key("reviewed", puff.Bool(true)))
 	}
@@ -253,6 +302,9 @@ func (t task) item(now time.Time) puff.Value {
 		parts = append(parts, "by :"+t.to)
 	}
 	parts = append(parts, ago(now.Sub(t.at)))
+	if t.why != "" {
+		parts = append(parts, t.why)
+	}
 	switch {
 	case t.status == "running" && t.tries > 1:
 		parts = append(parts, fmt.Sprintf("attempt %d of %d", t.attempts, t.tries))
@@ -436,7 +488,7 @@ func (d *daemon) tasksService() *service {
 	return &service{name: "tasks", d: d, cur: caller{addr: "tasks"},
 		fns: map[string]handler{
 			"list": {mark: puff.MarkRead, marked: true,
-				doc: fmt.Sprintf("(ok tasks): the tasks that haven't ended, oldest first, then the last %d that ended in the last day: each {:id :status :state :what :at :from :to :result}. :status is :held, :waiting, :running or :ended; :state says how it ended too: :done, :failed, :cancelled, :rejected, :interrupted, or its result's :status, as :gave-up. :from is its owner, who gets its result (none for you); :to, where it waits or who answered it; :parent, the task whose work began it, as tree shows; :reviewed #t, its chain passed the review gate; :attempts and :tries, how many times a job with :retry ran, of how many it may; :stray, the process group of a job that ended :unknown, while one is there: it may still be running.", tasksShown),
+				doc: fmt.Sprintf("(ok tasks): the tasks that haven't ended, oldest first, then the last %d that ended in the last day: each {:id :status :state :what :at :from :to :result}. :status is :held, :waiting, :running or :ended; :state says how it ended too: :done, :failed, :cancelled, :rejected, :interrupted, or its result's :status, as :gave-up. :from is its owner, who gets its result (none for you); :to, where it waits or who answered it; :parent, the task whose work began it, as tree shows; :why, what one held or waiting waits on; :reviewed #t, its chain passed the review gate; :attempts and :tries, how many times a job with :retry ran, of how many it may; :stray, the process group of a job that ended :unknown, while one is there: it may still be running.", tasksShown),
 				native: func(message, []puff.Value) (puff.Value, error) {
 					var vs []puff.Value
 					for _, t := range d.tasks(all, tasksShown, time.Now()) {

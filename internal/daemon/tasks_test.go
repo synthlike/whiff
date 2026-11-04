@@ -96,6 +96,11 @@ func TestTasks(t *testing.T) {
 			t.Errorf("task %s = %v, want %s %s %s %s", tt.id, fs, tt.status, tt.state, tt.what, tt.to)
 		}
 	}
+	for id, want := range map[string]string{waiting: `"waits for :box to reply"`, held: `"waits for your review"`} {
+		if got[id]["why"] != want {
+			t.Errorf("task %s's why = %s, want %s", id, got[id]["why"], want)
+		}
+	}
 	if r := got[failing]["result"]; r != "(err {:kind :boom})" {
 		t.Errorf("the failed task's result, cut short = %s", r)
 	}
@@ -104,11 +109,11 @@ func TestTasks(t *testing.T) {
 	view := call("tasks/view", "[]")
 	// One in your inbox is answered or dismissed, as Inbox has it, not
 	// cancelled.
-	if !strings.Contains(view, `{:actions [{:action [:me/answer `+told+`] :label "Dismiss"}]`) || strings.Contains(view, "[:tasks/cancel "+told+"]") {
+	if !strings.Contains(view, `{:actions [{:action [:me/answer `+told+`] :label "Dismiss"}] :detail "task `+told+` for you · just now · waits for you to read it"`) || strings.Contains(view, "[:tasks/cancel "+told+"]") {
 		t.Errorf("tasks/view's report in your inbox:\n%s", view)
 	}
 	for _, want := range []string{
-		`{:actions [{:action [:tasks/cancel ` + waiting + `] :label "Cancel"}] :detail "task ` + waiting + ` for you · just now" :label "waiting  :box/q 1"}`,
+		`{:actions [{:action [:tasks/cancel ` + waiting + `] :label "Cancel"}] :detail "task ` + waiting + ` for you · just now · waits for :box to reply" :label "waiting  :box/q 1"}`,
 		`{:action [:review/accept ` + held + `] :label "Accept"}`,
 		`{:actions [{:action [:jobs/output ` + job + `] :label "Output"} {:action [:tasks/cancel ` + job + `] :label "Cancel"}]`,
 		`{:actions [{:action [:tasks/result ` + failing + `] :label "Result"} {:action [:box/q 2] :label "Again"}] :detail "task ` + failing + ` for you · just now · (err {:kind :boom})" :label "failed  :box/q 2"}`,
@@ -209,10 +214,14 @@ func TestTaskTree(t *testing.T) {
 	resp, _ := c.Message("call", "tasks/tree", "["+build+"]", dir)
 	tree := resp.Value
 	// build > the worker's job > its ask of helper.
-	re := regexp.MustCompile(`^\(ok \{:at \S+ :began \S+ :children \[\{:at \S+ :began \S+ :children \[\{:at \S+ :began \S+ :children \[\] :from :agent/\d+ :id ` + fmt.Sprint(q) + ` :parent (\d+) .*:what ":helper/ask \\"which port\?\\""\}\] :cmd \["sh" .*:from :boss :id (\d+) :parent ` + build + ` .*:status :running .*\}\] :id ` + build + ` .*:what ":boss/build \\"x\\""\}\)$`)
+	re := regexp.MustCompile(`^\(ok \{:at \S+ :began \S+ :children \[\{:at \S+ :began \S+ :children \[\{:at \S+ :began \S+ :children \[\] :from :agent/\d+ :id ` + fmt.Sprint(q) + ` :parent (\d+) .*:what ":helper/ask \\"which port\?\\"" :why "[^"]*"\}\] :cmd \["sh" .*:from :boss :id (\d+) :parent ` + build + ` .*:status :running .*\}\] :id ` + build + ` .*:what ":boss/build \\"x\\"" :why "[^"]*"\}\)$`)
 	m := re.FindStringSubmatch(tree)
 	if m == nil || m[1] != m[2] {
 		t.Fatalf("tasks/tree %s = %s", build, tree)
+	}
+	// The build waits on its work, not on boss to reply.
+	if !strings.HasSuffix(tree, `:what ":boss/build \"x\"" :why "its work runs: 1 task open"})`) {
+		t.Errorf("the build's why: %s", tree)
 	}
 	// Once the worker's job ends, the tree keeps it, ended.
 	os.WriteFile(filepath.Join(dir, "done"), nil, 0o600)

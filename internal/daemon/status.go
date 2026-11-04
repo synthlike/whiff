@@ -281,6 +281,7 @@ func agentPaused(name string) bool {
 // many turns, and when the last ended.
 type spending struct {
 	usd   float64
+	tasks float64 // of usd, what its tasks cost, as a pipeline build's dev
 	turns int
 	last  time.Time
 }
@@ -308,6 +309,8 @@ func agentSpent(name string, now time.Time) spending {
 		sp.usd += usd
 		if len(f) == 2 {
 			sp.turns, sp.last = sp.turns+1, t
+		} else {
+			sp.tasks += usd
 		}
 	}
 	return sp
@@ -382,6 +385,7 @@ func (d *daemon) serviceStatus(name string) puff.Value {
 	if agent {
 		sp := agentSpent(name, now)
 		add("spent", puff.Float(sp.usd))
+		add("tasks-spent", puff.Float(sp.tasks))
 		add("turns", puff.Int(sp.turns))
 		add("day", puff.Float(day))
 		if !sp.last.IsZero() {

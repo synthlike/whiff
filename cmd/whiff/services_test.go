@@ -18,6 +18,7 @@ func TestWorkLine(t *testing.T) {
 			"13   :pipeline  failed: git exited 1, 1m ago"},
 		{`{:id 140 :to :pipeline :fn :build :status :waiting :at 2026-11-03T11:59:30Z}`, "140  :pipeline/build  waiting, 30s ago"},
 		{`{:id 141 :to :notes :fn :add :status :held :at 2026-11-03T11:59:30Z}`, "141  :notes/add  held for your review, 30s ago"},
+		{`{:id 142 :to :pipeline :fn :build :status :waiting :why "its work runs: 2 tasks open" :at 2026-11-03T11:59:30Z}`, "142  :pipeline/build  its work runs: 2 tasks open, 30s ago"},
 	} {
 		v, err := puff.ReadValue(tt.in)
 		if err != nil {

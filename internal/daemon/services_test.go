@@ -1580,6 +1580,10 @@ func TestAgentPause(t *testing.T) {
 		return got[strings.Index(got, "{") : strings.LastIndex(got, "}")+1]
 	}
 	eventually(t, "napper, paused", line, `{:agent #t :note "2 queued" :service :napper :status :paused}`)
+	// :tasks says what each waits on.
+	if got := eval(`(call :tasks/list)`); strings.Count(got, `:why "waits: :napper is paused"`) != 2 {
+		t.Errorf("tasks/list of a paused agent's tells = %s", got)
+	}
 	home := filepath.Join(dir, ".whiff", "agents", "napper")
 	if b, _ := os.ReadFile(filepath.Join(home, "turns")); len(b) > 0 {
 		t.Errorf("a paused agent took turns: %s", b)
@@ -2270,6 +2274,10 @@ func TestAgentChildCost(t *testing.T) {
 	ask("one", "(ok {:status :ready :cost 0.25})")
 	// boss's turn, the result's 0.25, and the turn on the result.
 	eventually(t, "what boss spent", spent, "[0.27 2]")
+	// Its status says what of that its tasks cost.
+	if got := eval(`(match (service/status :boss) [(ok s) (map/get s :tasks-spent)] [e e])`); got != "(some 0.25)" {
+		t.Errorf("boss's :tasks-spent = %s", got)
+	}
 	// The result turn's report says so, whatever its answer does.
 	eventually(t, "the report on the result", func() string {
 		text, _ := c.Inbox("me")
