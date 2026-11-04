@@ -873,8 +873,7 @@ func answered(form url.Values) string {
 // offers next, going back to back; nil for any other reply.
 func (s *server) errActions(reply, back string) []act {
 	v, err := puff.ReadValue(reply)
-	t, ok := v.(puff.Tag)
-	if err != nil || !ok || t.Name() != "err" || t.Len() != 1 || get(t.At(0), "actions") == nil {
+	if err != nil || puff.Field(puff.ErrValue(v), "actions") == nil {
 		return nil // no need to ask the daemon for marks
 	}
 	return nextOf(v, s.currentMarks(), back)

@@ -31,7 +31,7 @@ func listServices(dir string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "whiff: %v\n", err)
 		return 1
 	}
-	all, ok := okValue(v).(puff.Vector)
+	all, ok := puff.OkValue(v).(puff.Vector)
 	if !ok {
 		fmt.Fprintf(stderr, "whiff: want the services, got %s\n", puff.Print(v))
 		return 1
@@ -42,7 +42,7 @@ func listServices(dir string, stdout, stderr io.Writer) int {
 	for i := range all.Len() {
 		m, _ := all.At(i).(puff.Map)
 		get := func(k string) string {
-			v, _ := m.Get(puff.Keyword(k))
+			v := puff.Field(m, k)
 			switch v := v.(type) {
 			case puff.Keyword:
 				return string(v)
@@ -93,13 +93,13 @@ func showService(dir, name string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "whiff: %s", errText(t.At(0)))
 		return 1
 	}
-	m, ok := okValue(v).(puff.Map)
+	m, ok := puff.OkValue(v).(puff.Map)
 	if !ok {
 		fmt.Fprintf(stderr, "whiff: want a service, got %s\n", puff.Print(v))
 		return 1
 	}
 	now := time.Now()
-	get := func(m puff.Map, k string) puff.Value { v, _ := m.Get(puff.Keyword(k)); return v }
+	get := func(m puff.Map, k string) puff.Value { return puff.Field(m, k) }
 	text := func(m puff.Map, k string) string {
 		switch v := get(m, k).(type) {
 		case puff.Keyword:
@@ -210,7 +210,7 @@ func roughly(d time.Duration) string {
 // has it, and where it is or how it ended, its id padded to width, as
 // "7  :pipeline  ready whiff/7, $0.31, 3m ago".
 func workLine(it puff.Map, width int, now time.Time) string {
-	get := func(m puff.Map, k string) puff.Value { v, _ := m.Get(puff.Keyword(k)); return v }
+	get := func(m puff.Map, k string) puff.Value { return puff.Field(m, k) }
 	when := ""
 	if t, ok := get(it, "at").(puff.Time); ok {
 		when = ", " + roughly(now.Sub(t.Go())) + " ago"

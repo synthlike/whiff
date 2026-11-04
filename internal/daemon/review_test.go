@@ -41,7 +41,7 @@ func TestReviewGate(t *testing.T) {
 	kind := func(r string) string {
 		v, _ := puff.ReadValue(r)
 		e, _ := v.(puff.Tag).At(0).(puff.Map)
-		k, _ := e.Get(puff.Keyword("kind"))
+		k := puff.Field(e, "kind")
 		return puff.Print(k)
 	}
 	id := func(r string) string {

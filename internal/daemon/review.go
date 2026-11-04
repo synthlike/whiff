@@ -218,14 +218,14 @@ func (d *daemon) reject(id int64, reason string) puff.Value {
 		return puff.Errorf("no-id", "no message %d waits for review", id)
 	}
 	msg := "you rejected " + a.what()
-	es := []puff.Entry{{Key: puff.Keyword("kind"), Val: puff.Keyword("rejected")}}
+	es := []puff.Entry{puff.Key("kind", puff.Keyword("rejected"))}
 	if reason != "" {
 		msg += ": " + reason
-		es = append(es, puff.Entry{Key: puff.Keyword("reason"), Val: puff.String(reason)})
+		es = append(es, puff.Key("reason", puff.String(reason)))
 	}
 	e, _ := puff.NewMap(append(es,
-		puff.Entry{Key: puff.Keyword("message"), Val: puff.String(msg)},
-		puff.Entry{Key: puff.Keyword("outcome"), Val: puff.Keyword("not-started")})...)
+		puff.Key("message", puff.String(msg)),
+		puff.Key("outcome", puff.Keyword("not-started")))...)
 	d.reviewed(a, puff.NewTag("err", e))
 	return puff.Done
 }
@@ -244,8 +244,8 @@ func (d *daemon) settleHeld(st *state, a *asked, result puff.Value) {
 		d.answer(st, a.ticket, a.to, result)
 	}
 	done, _ := puff.NewMap(
-		puff.Entry{Key: puff.Keyword("id"), Val: puff.Int(a.id)},
-		puff.Entry{Key: puff.Keyword("result"), Val: result},
+		puff.Key("id", puff.Int(a.id)),
+		puff.Key("result", result),
 	)
 	st.publish(message{cause: a.msg, from: "review", topic: "review/done", args: puff.Print(puff.NewVector(done)), lineage: lineage{user: a.user}})
 }
@@ -280,8 +280,7 @@ func (d *daemon) pendingView(message, []puff.Value) (puff.Value, error) {
 			items = append(items, a.reviewItem(st.addrs[a.from] != nil))
 		}
 	})
-	opts, _ := puff.NewMap(puff.Entry{Key: puff.Keyword("changed"),
-		Val: puff.NewVector(puff.Keyword("review/pending"), puff.Keyword("review/done"))})
+	opts, _ := puff.NewMap(puff.Key("changed", puff.NewVector(puff.Keyword("review/pending"), puff.Keyword("review/done"))))
 	return puff.Ok(puff.NewTag("items", puff.NewVector(items...), opts)), nil
 }
 
@@ -308,8 +307,8 @@ func (a *asked) reviewItem(live bool) puff.Value {
 	}
 	action := func(label, fn string) puff.Value {
 		m, _ := puff.NewMap(
-			puff.Entry{Key: puff.Keyword("label"), Val: puff.String(label)},
-			puff.Entry{Key: puff.Keyword("action"), Val: puff.NewVector(puff.Keyword("review/"+fn), puff.Int(a.id))},
+			puff.Key("label", puff.String(label)),
+			puff.Key("action", puff.NewVector(puff.Keyword("review/"+fn), puff.Int(a.id))),
 		)
 		return m
 	}
@@ -319,9 +318,9 @@ func (a *asked) reviewItem(live bool) puff.Value {
 		actions = append(actions, action(fmt.Sprintf("Trust :%s for :%s", a.from, a.to), "trust"))
 	}
 	m, _ := puff.NewMap(
-		puff.Entry{Key: puff.Keyword("label"), Val: puff.String(label)},
-		puff.Entry{Key: puff.Keyword("detail"), Val: puff.String(fmt.Sprintf("%d from %s in %s", a.id, from, a.dir))},
-		puff.Entry{Key: puff.Keyword("actions"), Val: puff.NewVector(actions...)},
+		puff.Key("label", puff.String(label)),
+		puff.Key("detail", puff.String(fmt.Sprintf("%d from %s in %s", a.id, from, a.dir))),
+		puff.Key("actions", puff.NewVector(actions...)),
 	)
 	return m
 }

@@ -90,7 +90,7 @@ func (d *daemon) meInbox(message, []puff.Value) (puff.Value, error) {
 			items = append(items, a.meItem())
 		}
 	})
-	opts, _ := puff.NewMap(puff.Entry{Key: puff.Keyword("changed"), Val: puff.Keyword("me/changed")})
+	opts, _ := puff.NewMap(puff.Key("changed", puff.Keyword("me/changed")))
 	return puff.Ok(puff.NewTag("items", puff.NewVector(items...), opts)), nil
 }
 
@@ -117,8 +117,8 @@ func (a *asked) meItem() puff.Value {
 	}
 	answer := func(label string, args ...puff.Value) []puff.Entry {
 		return []puff.Entry{
-			{Key: puff.Keyword("label"), Val: puff.String(label)},
-			{Key: puff.Keyword("action"), Val: puff.NewVector(append([]puff.Value{puff.Keyword("me/answer"), puff.Int(a.id)}, args...)...)},
+			puff.Key("label", puff.String(label)),
+			puff.Key("action", puff.NewVector(append([]puff.Value{puff.Keyword("me/answer"), puff.Int(a.id)}, args...)...)),
 		}
 	}
 	var actions []puff.Value
@@ -134,7 +134,7 @@ func (a *asked) meItem() puff.Value {
 		if opts.Len() > 0 {
 			other = "Other"
 		}
-		m, _ := puff.NewMap(append(answer(other), puff.Entry{Key: puff.Keyword("ask"), Val: puff.String("Your answer")})...)
+		m, _ := puff.NewMap(append(answer(other), puff.Key("ask", puff.String("Your answer")))...)
 		actions = append(actions, m)
 	} else {
 		// Clicking an action sends it as you, so one an agent's chain
@@ -143,7 +143,7 @@ func (a *asked) meItem() puff.Value {
 		for i := range opts.Len() {
 			act := opts.At(i).(puff.Map)
 			if !a.user {
-				msg, _ := act.Get(puff.Keyword("action"))
+				msg := puff.Field(act, "action")
 				act, _ = act.With(puff.Keyword("label"), puff.String(puff.Print(msg)))
 			}
 			actions = append(actions, act)
@@ -152,9 +152,9 @@ func (a *asked) meItem() puff.Value {
 		actions = append(actions, m)
 	}
 	m, _ := puff.NewMap(
-		puff.Entry{Key: puff.Keyword("label"), Val: puff.String(text)},
-		puff.Entry{Key: puff.Keyword("detail"), Val: puff.String(fmt.Sprintf("%d: %s %s", a.id, from, verb))},
-		puff.Entry{Key: puff.Keyword("actions"), Val: puff.NewVector(actions...)},
+		puff.Key("label", puff.String(text)),
+		puff.Key("detail", puff.String(fmt.Sprintf("%d: %s %s", a.id, from, verb))),
+		puff.Key("actions", puff.NewVector(actions...)),
 	)
 	return m
 }
@@ -204,11 +204,11 @@ func (a *asked) offers(msg puff.Vector) bool {
 		return false
 	}
 	opts, _ := a.args.At(1).(puff.Map)
-	v, _ := opts.Get(puff.Keyword("actions"))
+	v := puff.Field(opts, "actions")
 	acts, _ := v.(puff.Vector)
 	for i := range acts.Len() {
 		act, _ := acts.At(i).(puff.Map)
-		v, _ := act.Get(puff.Keyword("action"))
+		v := puff.Field(act, "action")
 		sends, _ := v.(puff.Vector)
 		n := sends.Len()
 		if _, asks := act.Get(puff.Keyword("ask")); asks {

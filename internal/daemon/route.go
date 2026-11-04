@@ -351,9 +351,9 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 					for _, name := range slices.Sorted(maps.Keys(st.addrs)) {
 						s := st.addrs[name]
 						m, _ := puff.NewMap(
-							puff.Entry{Key: puff.Keyword("address"), Val: puff.Keyword(name)},
-							puff.Entry{Key: puff.Keyword("client"), Val: puff.Bool(s.client)},
-							puff.Entry{Key: puff.Keyword("state"), Val: puff.Bool(s.stateful)},
+							puff.Key("address", puff.Keyword(name)),
+							puff.Key("client", puff.Bool(s.client)),
+							puff.Key("state", puff.Bool(s.stateful)),
 						)
 						addrs = append(addrs, m)
 					}

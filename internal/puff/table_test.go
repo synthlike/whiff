@@ -154,3 +154,24 @@ func TestWithMark(t *testing.T) {
 		t.Errorf("ReadOnly = %q %v", what, ok)
 	}
 }
+
+// Go code takes Results and keyword maps apart with OkValue, ErrValue and
+// Field, which give nil for anything else.
+func TestResultHelpers(t *testing.T) {
+	m, err := NewMap(Key("kind", Keyword("pending")), Key("id", Int(3)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := NewTag("err", m)
+	if got := Field(ErrValue(e), "id"); !Equal(got, Int(3)) {
+		t.Errorf("the id of %s = %v, want 3", Print(e), got)
+	}
+	for _, v := range []Value{OkValue(e), ErrValue(Ok(m)), Field(e, "id"), Field(m, "none"), Field(Int(1), "id"), ErrValue(NewTag("err"))} {
+		if v != nil {
+			t.Errorf("got %s, want nil", Print(v))
+		}
+	}
+	if got := OkValue(Done); !Equal(got, Keyword("done")) {
+		t.Errorf("OkValue(%s) = %v, want :done", Print(Done), got)
+	}
+}

@@ -96,23 +96,23 @@ func (st *state) modeValue(addr string) puff.Value {
 	if m := st.modeOf(addr); m != nil {
 		return puff.Ok(m.value())
 	}
-	v, _ := puff.NewMap(puff.Entry{Key: puff.Keyword("mode"), Val: puff.Keyword("gated")})
+	v, _ := puff.NewMap(puff.Key("mode", puff.Keyword("gated")))
 	return puff.Ok(v)
 }
 
 // value is m as (session/mode) gives it, and as it is stored: {:mode
 // :trusted :services [:todo ...] :until t}, or {:mode :free}.
 func (m *mode) value() puff.Value {
-	es := []puff.Entry{{Key: puff.Keyword("mode"), Val: puff.Keyword(m.name())}}
+	es := []puff.Entry{puff.Key("mode", puff.Keyword(m.name()))}
 	if !m.free {
 		var services []puff.Value
 		for _, name := range slices.Sorted(maps.Keys(m.trust)) {
 			services = append(services, puff.Keyword(name))
 		}
-		es = append(es, puff.Entry{Key: puff.Keyword("services"), Val: puff.NewVector(services...)})
+		es = append(es, puff.Key("services", puff.NewVector(services...)))
 	}
 	if !m.until.IsZero() {
-		es = append(es, puff.Entry{Key: puff.Keyword("until"), Val: puff.NewTime(m.until)})
+		es = append(es, puff.Key("until", puff.NewTime(m.until)))
 	}
 	v, _ := puff.NewMap(es...)
 	return v
@@ -184,10 +184,7 @@ func (d *daemon) clientMode(req rpc.Request) rpc.Response {
 	if err != nil || !ok {
 		return rpc.Response{Error: fmt.Sprintf("want {:mode ...}, got %s", req.Args)}
 	}
-	get := func(key string) puff.Value {
-		v, _ := args.Get(puff.Keyword(key))
-		return v
-	}
+	get := func(key string) puff.Value { return puff.Field(args, key) }
 	kind, _ := get("mode").(puff.Keyword)
 	services, _ := get("services").(puff.Vector)
 	var m *mode

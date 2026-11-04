@@ -319,7 +319,7 @@ func agentSpent(name string, now time.Time) spending {
 func (d *daemon) serviceStatus(name string) puff.Value {
 	now := time.Now()
 	var es []puff.Entry
-	add := func(k string, v puff.Value) { es = append(es, puff.Entry{Key: puff.Keyword(k), Val: v}) }
+	add := func(k string, v puff.Value) { es = append(es, puff.Key(k, v)) }
 	found := false
 	var agent bool
 	var day float64
@@ -400,7 +400,7 @@ func (d *daemon) serviceStatus(name string) puff.Value {
 func mapOf(kvs ...any) puff.Value {
 	var es []puff.Entry
 	for i := 0; i+1 < len(kvs); i += 2 {
-		es = append(es, puff.Entry{Key: puff.Keyword(kvs[i].(string)), Val: kvs[i+1].(puff.Value)})
+		es = append(es, puff.Key(kvs[i].(string), kvs[i+1].(puff.Value)))
 	}
 	m, _ := puff.NewMap(es...)
 	return m
@@ -408,10 +408,10 @@ func mapOf(kvs ...any) puff.Value {
 
 func (s status) value() puff.Value {
 	m, _ := puff.NewMap(
-		puff.Entry{Key: puff.Keyword("service"), Val: puff.Keyword(s.name)},
-		puff.Entry{Key: puff.Keyword("agent"), Val: puff.Bool(s.agent)},
-		puff.Entry{Key: puff.Keyword("status"), Val: puff.Keyword(s.state)},
-		puff.Entry{Key: puff.Keyword("note"), Val: puff.String(s.note)},
+		puff.Key("service", puff.Keyword(s.name)),
+		puff.Key("agent", puff.Bool(s.agent)),
+		puff.Key("status", puff.Keyword(s.state)),
+		puff.Key("note", puff.String(s.note)),
 	)
 	return m
 }

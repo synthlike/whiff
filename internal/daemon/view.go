@@ -51,9 +51,9 @@ func viewBuiltins() []*puff.Builtin {
 				cols := args[0].(puff.Vector)
 				for i := range cols.Len() {
 					col := cols.At(i).(puff.Map)
-					items, _ := col.Get(puff.Keyword("items"))
+					items := puff.Field(col, "items")
 					if _, err := view("items", items, itemFields, "label"); err != nil {
-						title, _ := col.Get(puff.Keyword("title"))
+						title := puff.Field(col, "title")
 						return nil, fmt.Errorf("column %s: %w", puff.Print(title), err)
 					}
 				}

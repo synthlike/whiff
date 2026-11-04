@@ -86,11 +86,11 @@ func show(printed string, marks map[string]string, back string) shown {
 // nextOf is what reply offers instead if it is an err with :actions, as
 // actions going back to back; nil for any other reply.
 func nextOf(reply puff.Value, marks map[string]string, back string) []act {
-	t, ok := reply.(puff.Tag)
-	if !ok || t.Name() != "err" || t.Len() != 1 {
+	e := puff.ErrValue(reply)
+	if e == nil {
 		return nil
 	}
-	acts, _ := get(t.At(0), "actions").(puff.Vector)
+	acts, _ := puff.Field(e, "actions").(puff.Vector)
 	return actsOf(acts, marks, back)
 }
 
@@ -128,7 +128,7 @@ func viewOf(reply puff.Value, marks map[string]string, back string) *view {
 		}
 		for i := range cols.Len() {
 			title, ok := strOf(cols.At(i), "title")
-			its, ok2 := itemsOf(get(cols.At(i), "items"), marks, back)
+			its, ok2 := itemsOf(puff.Field(cols.At(i), "items"), marks, back)
 			if !ok || !ok2 {
 				return nil
 			}
@@ -145,7 +145,7 @@ func viewOf(reply puff.Value, marks map[string]string, back string) *view {
 				return nil
 			}
 			for _, key := range []string{"line", "col"} {
-				if n, ok := get(ps.At(i), key).(puff.Int); ok {
+				if n, ok := puff.Field(ps.At(i), key).(puff.Int); ok {
 					at += ":" + puff.Print(n)
 				}
 			}
@@ -162,7 +162,7 @@ func viewOf(reply puff.Value, marks map[string]string, back string) *view {
 // vector of them.
 func topicsOf(opts puff.Value) []string {
 	var ts []string
-	switch t := get(opts, "changed").(type) {
+	switch t := puff.Field(opts, "changed").(type) {
 	case puff.Keyword:
 		ts = append(ts, string(t))
 	case puff.Vector:
@@ -197,12 +197,12 @@ func itemsOf(v puff.Value, marks map[string]string, back string) ([]item, bool) 
 		if u, _ := strOf(m, "url"); strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://") {
 			it.URL = u
 		}
-		if msg, ok := get(m, "action").(puff.Vector); ok {
+		if msg, ok := puff.Field(m, "action").(puff.Vector); ok {
 			if a, ok := actOf("", msg, "", marks, back); ok {
 				it.Actions = append(it.Actions, a)
 			}
 		}
-		acts, _ := get(m, "actions").(puff.Vector)
+		acts, _ := puff.Field(m, "actions").(puff.Vector)
 		it.Actions = append(it.Actions, actsOf(acts, marks, back)...)
 		its = append(its, it)
 	}
@@ -214,7 +214,7 @@ func itemsOf(v puff.Value, marks map[string]string, back string) ([]item, bool) 
 func actsOf(acts puff.Vector, marks map[string]string, back string) []act {
 	var out []act
 	for j := range acts.Len() {
-		msg, _ := get(acts.At(j), "action").(puff.Vector)
+		msg, _ := puff.Field(acts.At(j), "action").(puff.Vector)
 		label, _ := strOf(acts.At(j), "label")
 		ask, _ := strOf(acts.At(j), "ask")
 		if a, ok := actOf(label, msg, ask, marks, back); ok {
@@ -261,18 +261,9 @@ func pageOf(target string, args puff.Vector) string {
 	return p
 }
 
-// get is map m's value at the keyword key, or nil.
-func get(m puff.Value, key string) puff.Value {
-	if mm, ok := m.(puff.Map); ok {
-		v, _ := mm.Get(puff.Keyword(key))
-		return v
-	}
-	return nil
-}
-
 // strOf is map m's string at key, and whether it has one.
 func strOf(m puff.Value, key string) (string, bool) {
-	s, ok := get(m, key).(puff.String)
+	s, ok := puff.Field(m, key).(puff.String)
 	return string(s), ok
 }
 

@@ -67,9 +67,9 @@ func (d *daemon) test(ctx context.Context, req rpc.Request) rpc.Response {
 		msg := s.env.RunTest(tctx, t)
 		cancel()
 		m, _ := puff.NewMap(
-			puff.Entry{Key: puff.Keyword("test"), Val: puff.String(t.Name)},
-			puff.Entry{Key: puff.Keyword("at"), Val: puff.String(t.Pos.String())},
-			puff.Entry{Key: puff.Keyword("message"), Val: puff.String(msg)},
+			puff.Key("test", puff.String(t.Name)),
+			puff.Key("at", puff.String(t.Pos.String())),
+			puff.Key("message", puff.String(msg)),
 		)
 		results = append(results, m)
 	}

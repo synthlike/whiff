@@ -105,16 +105,16 @@ func (a *agent) sessionMode() (sessionMode, error) {
 	if err != nil {
 		return sessionMode{}, err
 	}
-	v = okValue(v)
-	kind, _ := field(v, "mode").(puff.Keyword)
+	v = puff.OkValue(v)
+	kind, _ := puff.Field(v, "mode").(puff.Keyword)
 	m := sessionMode{printed: puff.Print(v), free: kind == "free", trust: map[string]bool{}}
-	services, _ := field(v, "services").(puff.Vector)
+	services, _ := puff.Field(v, "services").(puff.Vector)
 	for i := range services.Len() {
 		if k, ok := services.At(i).(puff.Keyword); ok {
 			m.trust[string(k)] = true
 		}
 	}
-	if t := field(v, "until"); t != nil {
+	if t := puff.Field(v, "until"); t != nil {
 		m.until = puff.Print(t)
 	}
 	return m, nil
@@ -170,7 +170,7 @@ func (a *agent) client() (*rpc.Client, string, error) {
 	var can map[string]bool
 	if err == nil {
 		v, _ := puff.ReadValue(resp.Value)
-		switch v := okValue(v).(type) {
+		switch v := puff.OkValue(v).(type) {
 		case puff.Keyword:
 			addr = string(v)
 		case puff.Vector: // [:agent/<name> [fns...]], for a token
@@ -246,7 +246,7 @@ func (a *agent) functions(mode sessionMode) ([]fnTool, error) {
 			addr := fn[:strings.LastIndex(fn, "/")]
 			if !seen[addr] {
 				seen[addr] = true
-				m, _ := puff.NewMap(puff.Entry{Key: puff.Keyword("address"), Val: puff.Keyword(addr)})
+				m, _ := puff.NewMap(puff.Key("address", puff.Keyword(addr)))
 				vals = append(vals, m)
 			}
 		}
@@ -256,12 +256,12 @@ func (a *agent) functions(mode sessionMode) ([]fnTool, error) {
 		if err != nil {
 			return nil, err
 		}
-		addrs, _ = okValue(v).(puff.Vector)
+		addrs, _ = puff.OkValue(v).(puff.Vector)
 	}
 	var tools []fnTool
 	taken := map[string]bool{}
 	for i := range addrs.Len() {
-		addr, _ := field(addrs.At(i), "address").(puff.Keyword)
+		addr, _ := puff.Field(addrs.At(i), "address").(puff.Keyword)
 		if addr == "" || string(addr) == self {
 			continue
 		}
@@ -269,17 +269,17 @@ func (a *agent) functions(mode sessionMode) ([]fnTool, error) {
 		if err != nil {
 			return nil, err
 		}
-		fns, _ := okValue(v).(puff.Vector)
+		fns, _ := puff.OkValue(v).(puff.Vector)
 		for j := range fns.Len() {
 			f := fns.At(j)
-			if yours, _ := field(f, "yours").(puff.Bool); yours {
+			if yours, _ := puff.Field(f, "yours").(puff.Bool); yours {
 				continue
 			}
-			fn, _ := field(f, "fn").(puff.Keyword)
-			doc, _ := field(f, "doc").(puff.String)
-			mark, _ := field(f, "mark").(puff.Keyword)
-			form, _ := field(f, "form").(puff.Keyword)
-			ps, _ := field(f, "params").(puff.Vector)
+			fn, _ := puff.Field(f, "fn").(puff.Keyword)
+			doc, _ := puff.Field(f, "doc").(puff.String)
+			mark, _ := puff.Field(f, "mark").(puff.Keyword)
+			form, _ := puff.Field(f, "form").(puff.Keyword)
+			ps, _ := puff.Field(f, "params").(puff.Vector)
 			t := fnTool{target: string(addr) + "/" + string(fn)}
 			name := toolName(t.target)
 			if can != nil && !can[t.target] || taken[name] {
@@ -579,9 +579,9 @@ func resultOf(printed string) *mcp.CallToolResult {
 		}
 		return toolText(puff.Print(r.At(0)))
 	}
-	if puff.Equal(field(r.At(0), "kind"), puff.Keyword("pending")) {
-		msg, _ := field(r.At(0), "message").(puff.String)
-		return toolText(fmt.Sprintf("pending %s: %s; call wait with this id for the result", puff.Print(field(r.At(0), "id")), msg))
+	if puff.Equal(puff.Field(r.At(0), "kind"), puff.Keyword("pending")) {
+		msg, _ := puff.Field(r.At(0), "message").(puff.String)
+		return toolText(fmt.Sprintf("pending %s: %s; call wait with this id for the result", puff.Print(puff.Field(r.At(0), "id")), msg))
 	}
 	res := toolText(puff.Print(r.At(0)))
 	res.IsError = true
@@ -599,7 +599,7 @@ func (a *agent) answer(printed string) *mcp.CallToolResult {
 	v, _ := puff.ReadValue(printed)
 	var lines []string
 	a.mu.Lock()
-	for _, act := range actionsIn(okValue(v)) {
+	for _, act := range actionsIn(puff.OkValue(v)) {
 		if line, ok := a.toolCall(act); ok {
 			lines = append(lines, line)
 		}
@@ -618,7 +618,7 @@ func actionsIn(v puff.Value) []puff.Map {
 	walk = func(v puff.Value) {
 		switch v := v.(type) {
 		case puff.Map:
-			if _, ok := field(v, "action").(puff.Vector); ok {
+			if _, ok := puff.Field(v, "action").(puff.Vector); ok {
 				acts = append(acts, v)
 				return
 			}
@@ -644,14 +644,14 @@ func actionsIn(v puff.Value) []puff.Map {
 // wants; false if no tool sends it, as for a function only the user may
 // use.
 func (a *agent) toolCall(act puff.Map) (string, bool) {
-	label, _ := field(act, "label").(puff.String)
-	msg, _ := field(act, "action").(puff.Vector)
+	label, _ := puff.Field(act, "label").(puff.String)
+	msg, _ := puff.Field(act, "action").(puff.Vector)
 	if msg.Len() == 0 {
 		return "", false
 	}
 	target, _ := msg.At(0).(puff.Keyword)
 	f, ok := a.fns[string(target)]
-	ask, asks := field(act, "ask").(puff.String)
+	ask, asks := puff.Field(act, "ask").(puff.String)
 	n := msg.Len() - 1
 	if !ok || asks && n >= len(f.params) || n > len(f.params) {
 		return "", false
@@ -678,23 +678,6 @@ func failed(format string, args ...any) *mcp.CallToolResult {
 	r := toolText(fmt.Sprintf(format, args...))
 	r.IsError = true
 	return r
-}
-
-// okValue is v's value if it is (ok v), else nil.
-func okValue(v puff.Value) puff.Value {
-	if t, ok := v.(puff.Tag); ok && t.Name() == "ok" && t.Len() == 1 {
-		return t.At(0)
-	}
-	return nil
-}
-
-// field is m's value for the keyword key, if m is a map that has it.
-func field(m puff.Value, key string) puff.Value {
-	if mm, ok := m.(puff.Map); ok {
-		v, _ := mm.Get(puff.Keyword(key))
-		return v
-	}
-	return nil
 }
 
 // mcpRun is whiff mcp: mcpServe on stdin and stdout.

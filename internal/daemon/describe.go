@@ -326,14 +326,14 @@ func (mk *marker) describe(addr string) puff.Value {
 			form = "ask"
 		}
 		es := []puff.Entry{
-			{Key: puff.Keyword("fn"), Val: puff.Keyword(fn)},
-			{Key: puff.Keyword("params"), Val: puff.NewVector(params...)},
-			{Key: puff.Keyword("doc"), Val: puff.String(h.doc)},
-			{Key: puff.Keyword("mark"), Val: puff.Keyword(strings.TrimPrefix(mk.mark(s, fn).String(), ":"))},
-			{Key: puff.Keyword("form"), Val: puff.Keyword(form)},
+			puff.Key("fn", puff.Keyword(fn)),
+			puff.Key("params", puff.NewVector(params...)),
+			puff.Key("doc", puff.String(h.doc)),
+			puff.Key("mark", puff.Keyword(strings.TrimPrefix(mk.mark(s, fn).String(), ":"))),
+			puff.Key("form", puff.Keyword(form)),
 		}
 		if h.yours {
-			es = append(es, puff.Entry{Key: puff.Keyword("yours"), Val: puff.Bool(true)})
+			es = append(es, puff.Key("yours", puff.Bool(true)))
 		}
 		m, _ := puff.NewMap(es...)
 		fns = append(fns, m)

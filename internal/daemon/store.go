@@ -216,7 +216,7 @@ func markHandled(tx *bbolt.Tx, id int64, owner string) error {
 		return err
 	}
 	m, _ := v.(puff.Map)
-	from, _ := m.Get(puff.Keyword("from"))
+	from := puff.Field(m, "from")
 	if f, _ := from.(puff.Keyword); string(f) != owner {
 		return nil
 	}
@@ -307,8 +307,8 @@ func (st *state) acceptHeld(id int64) (*asked, error) {
 	}
 	a := st.asked[i]
 	m, err := puff.NewMap(append(ticketEntries(a.ticket),
-		puff.Entry{Key: puff.Keyword("status"), Val: puff.Keyword("accepted")},
-		puff.Entry{Key: puff.Keyword("what"), Val: puff.String(a.what())})...)
+		puff.Key("status", puff.Keyword("accepted")),
+		puff.Key("what", puff.String(a.what())))...)
 	if err != nil {
 		return nil, err
 	}
@@ -565,15 +565,15 @@ func endTask(db *bbolt.DB, t ticket, by string, r puff.Value, handled bool) erro
 		}
 		es = append(es, ticketEntries(t)...)
 		es = append(es,
-			puff.Entry{Key: puff.Keyword("status"), Val: puff.Keyword("ended")},
-			puff.Entry{Key: puff.Keyword("ended"), Val: puff.NewTime(time.Now())},
+			puff.Key("status", puff.Keyword("ended")),
+			puff.Key("ended", puff.NewTime(time.Now())),
 		)
 		if by != "" {
-			es = append(es, puff.Entry{Key: puff.Keyword("by"), Val: puff.Keyword(by)})
+			es = append(es, puff.Key("by", puff.Keyword(by)))
 		}
 		es = append(es,
-			puff.Entry{Key: puff.Keyword("result"), Val: r},
-			puff.Entry{Key: puff.Keyword("handled"), Val: puff.Bool(handled)},
+			puff.Key("result", r),
+			puff.Key("handled", puff.Bool(handled)),
 		)
 		m, err := puff.NewMap(es...)
 		if err != nil {
@@ -609,19 +609,19 @@ func storedResult(db *bbolt.DB, id int64) (t ticket, by string, r puff.Value, er
 // :reviewed}, without :from for a client, :session outside one nor
 // :reviewed unless you gave the answer.
 func ticketEntries(t ticket) []puff.Entry {
-	es := []puff.Entry{{Key: puff.Keyword("id"), Val: puff.Int(t.id)}}
+	es := []puff.Entry{puff.Key("id", puff.Int(t.id))}
 	if t.from != "" {
-		es = append(es, puff.Entry{Key: puff.Keyword("from"), Val: puff.Keyword(t.from)})
+		es = append(es, puff.Key("from", puff.Keyword(t.from)))
 	}
 	es = append(es,
-		puff.Entry{Key: puff.Keyword("origin"), Val: origin(t.user)},
-		puff.Entry{Key: puff.Keyword("cwd"), Val: puff.String(t.dir)},
+		puff.Key("origin", origin(t.user)),
+		puff.Key("cwd", puff.String(t.dir)),
 	)
 	if t.session != "" {
-		es = append(es, puff.Entry{Key: puff.Keyword("session"), Val: puff.Keyword(t.session)})
+		es = append(es, puff.Key("session", puff.Keyword(t.session)))
 	}
 	if t.reviewed {
-		es = append(es, puff.Entry{Key: puff.Keyword("reviewed"), Val: puff.Bool(true)})
+		es = append(es, puff.Key("reviewed", puff.Bool(true)))
 	}
 	return es
 }
@@ -648,10 +648,7 @@ func fields(p string) (func(string) puff.Value, error) {
 	if !ok {
 		return nil, fmt.Errorf("want a map, got %s", p)
 	}
-	return func(k string) puff.Value {
-		v, _ := m.Get(puff.Keyword(k))
-		return v
-	}, nil
+	return func(k string) puff.Value { return puff.Field(m, k) }, nil
 }
 
 // stored is j as it is stored while it runs: as :jobs/list shows it, with
@@ -674,13 +671,13 @@ func (j *job) stored() puff.Value {
 	var as []puff.Value
 	for _, a := range j.attempts {
 		es := []puff.Entry{
-			{Key: puff.Keyword("started"), Val: puff.NewTime(a.started)},
-			{Key: puff.Keyword("pid"), Val: puff.Int(a.pid)},
+			puff.Key("started", puff.NewTime(a.started)),
+			puff.Key("pid", puff.Int(a.pid)),
 		}
 		if !a.ended.IsZero() {
 			es = append(es,
-				puff.Entry{Key: puff.Keyword("ended"), Val: puff.NewTime(a.ended)},
-				puff.Entry{Key: puff.Keyword("outcome"), Val: puff.Keyword(a.outcome)})
+				puff.Key("ended", puff.NewTime(a.ended)),
+				puff.Key("outcome", puff.Keyword(a.outcome)))
 		}
 		m, _ := puff.NewMap(es...)
 		as = append(as, m)
@@ -737,10 +734,7 @@ func storedJob(id int64, p string) (*job, error) {
 	as, _ := get("attempts").(puff.Vector)
 	for i := range as.Len() {
 		m, _ := as.At(i).(puff.Map)
-		at := func(k string) puff.Value {
-			v, _ := m.Get(puff.Keyword(k))
-			return v
-		}
+		at := func(k string) puff.Value { return puff.Field(m, k) }
 		started, _ := at("started").(puff.Time)
 		ended, isEnded := at("ended").(puff.Time)
 		outcome, _ := at("outcome").(puff.Keyword)
@@ -829,19 +823,19 @@ func (d *daemon) arm(t *timer, stop, placed <-chan struct{}) {
 func (t *timer) stored() puff.Value {
 	args, _ := puff.ReadValue(t.m.args)
 	es := []puff.Entry{
-		{Key: puff.Keyword("due"), Val: puff.NewTime(t.due)},
-		{Key: puff.Keyword("to"), Val: puff.Keyword(t.addr)},
-		{Key: puff.Keyword("fn"), Val: puff.Keyword(t.m.fn)},
-		{Key: puff.Keyword("args"), Val: args},
-		{Key: puff.Keyword("origin"), Val: origin(t.m.user)},
-		{Key: puff.Keyword("reviewed"), Val: puff.Bool(t.m.reviewed)},
-		{Key: puff.Keyword("cwd"), Val: puff.String(t.m.dir)},
+		puff.Key("due", puff.NewTime(t.due)),
+		puff.Key("to", puff.Keyword(t.addr)),
+		puff.Key("fn", puff.Keyword(t.m.fn)),
+		puff.Key("args", args),
+		puff.Key("origin", origin(t.m.user)),
+		puff.Key("reviewed", puff.Bool(t.m.reviewed)),
+		puff.Key("cwd", puff.String(t.m.dir)),
 	}
 	if t.m.from != "" {
-		es = append(es, puff.Entry{Key: puff.Keyword("from"), Val: puff.Keyword(t.m.from)})
+		es = append(es, puff.Key("from", puff.Keyword(t.m.from)))
 	}
 	if t.m.session != "" {
-		es = append(es, puff.Entry{Key: puff.Keyword("session"), Val: puff.Keyword(t.m.session)})
+		es = append(es, puff.Key("session", puff.Keyword(t.m.session)))
 	}
 	m, _ := puff.NewMap(es...)
 	return m
@@ -859,10 +853,7 @@ func storedTimer(key []byte, p string) (*timer, error) {
 	if !ok {
 		return nil, fmt.Errorf("want a map, got %s", p)
 	}
-	get := func(k string) puff.Value {
-		v, _ := m.Get(puff.Keyword(k))
-		return v
-	}
+	get := func(k string) puff.Value { return puff.Field(m, k) }
 	name := func(k string) string {
 		s, _ := get(k).(puff.Keyword)
 		return string(s)
@@ -923,7 +914,7 @@ func storedAsked(id int64, p string) (*asked, error) {
 		return nil, fmt.Errorf("want a map, got %s", p)
 	}
 	key := func(k string) string {
-		v, _ := m.Get(puff.Keyword(k))
+		v := puff.Field(m, k)
 		s, _ := v.(puff.Keyword)
 		return string(s)
 	}
@@ -931,10 +922,7 @@ func storedAsked(id int64, p string) (*asked, error) {
 	if addr == "" || fn == "" {
 		return nil, fmt.Errorf("want :addr and :fn, got %s", p)
 	}
-	get := func(k string) puff.Value {
-		v, _ := m.Get(puff.Keyword(k))
-		return v
-	}
+	get := func(k string) puff.Value { return puff.Field(m, k) }
 	args, ok := get("args").(puff.Vector)
 	if !ok {
 		return nil, fmt.Errorf("want :args as a vector, got %s", p)

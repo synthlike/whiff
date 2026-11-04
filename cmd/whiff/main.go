@@ -295,7 +295,7 @@ func test(dir string, files []string, stdout, stderr io.Writer) int {
 		for i := range results.Len() {
 			r, _ := results.At(i).(puff.Map)
 			field := func(k string) string {
-				v, _ := r.Get(puff.Keyword(k))
+				v := puff.Field(r, k)
 				s, _ := v.(puff.String)
 				return string(s)
 			}
@@ -325,8 +325,8 @@ func result(op string, resp rpc.Response, stdout, stderr io.Writer) int {
 		return 1
 	}
 	e, _ := r.At(0).(puff.Map)
-	kind, _ := e.Get(puff.Keyword("kind"))
-	id, _ := e.Get(puff.Keyword("id"))
+	kind := puff.Field(e, "kind")
+	id := puff.Field(e, "id")
 	switch {
 	case r.Name() == "err" && op == "call" && puff.Equal(kind, puff.Keyword("pending")) && id != nil:
 		fmt.Fprintf(stdout, "pending %s (whiff wait %[1]s)\n", puff.Print(id))

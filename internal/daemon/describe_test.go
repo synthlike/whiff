@@ -57,8 +57,8 @@ func TestDescribe(t *testing.T) {
 		var lines []string
 		for i := range fns.Len() {
 			m := fns.At(i).(puff.Map)
-			fn, _ := m.Get(puff.Keyword("fn"))
-			mark, _ := m.Get(puff.Keyword("mark"))
+			fn := puff.Field(m, "fn")
+			mark := puff.Field(m, "mark")
 			lines = append(lines, puff.Print(fn)+" "+puff.Print(mark))
 		}
 		return strings.Join(lines, "\n")

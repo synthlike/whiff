@@ -86,6 +86,33 @@ func Errorf(kind, format string, args ...any) Value {
 	return NewTag("err", m)
 }
 
+// Key is the map entry :k v: how Go code builds a map with keyword keys.
+func Key(k string, v Value) Entry { return Entry{Keyword(k), v} }
+
+// Field is v's value for the keyword key, if v is a map that has it; else
+// nil.
+func Field(v Value, key string) Value {
+	m, ok := v.(Map)
+	if !ok {
+		return nil
+	}
+	f, _ := m.Get(Keyword(key))
+	return f
+}
+
+// OkValue is v of r, an (ok v); nil for anything else.
+func OkValue(r Value) Value { return tagged(r, "ok") }
+
+// ErrValue is e of r, an (err e); nil for anything else.
+func ErrValue(r Value) Value { return tagged(r, "err") }
+
+func tagged(r Value, name string) Value {
+	if t, ok := r.(Tag); ok && t.Name() == name && t.Len() == 1 {
+		return t.At(0)
+	}
+	return nil
+}
+
 // Mark says whether a function only reads, or changes something that is
 // yours: a file, a remote, a service's state.
 type Mark int

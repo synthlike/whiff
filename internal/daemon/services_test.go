@@ -1049,8 +1049,8 @@ func TestServiceFileTests(t *testing.T) {
 		for i := range results.Len() {
 			r := results.At(i).(puff.Map)
 			if msg, _ := r.Get(puff.Keyword("message")); msg != puff.String("") {
-				at, _ := r.Get(puff.Keyword("at"))
-				name, _ := r.Get(puff.Keyword("test"))
+				at := puff.Field(r, "at")
+				name := puff.Field(r, "test")
 				t.Errorf("%s %s: %s", at, name, msg)
 			}
 		}

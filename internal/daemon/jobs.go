@@ -361,9 +361,9 @@ func (d *daemon) result(j *job, p *proc) puff.Value {
 		return puff.NewTag("err", e)
 	}
 	out, _ := puff.NewMap(
-		puff.Entry{Key: puff.Keyword("exit"), Val: puff.Int(code)},
-		puff.Entry{Key: puff.Keyword("stdout"), Val: puff.String(p.stdout.String())},
-		puff.Entry{Key: puff.Keyword("stderr"), Val: puff.String(p.stderr.String())},
+		puff.Key("exit", puff.Int(code)),
+		puff.Key("stdout", puff.String(p.stdout.String())),
+		puff.Key("stderr", puff.String(p.stderr.String())),
 	)
 	return puff.Ok(out)
 }
@@ -407,19 +407,8 @@ func (j *job) again(r puff.Value) bool {
 
 // errKind is the :kind of r, an (err e); "" for anything else.
 func errKind(r puff.Value) string {
-	k, _ := errField(r, "kind").(puff.Keyword)
+	k, _ := puff.Field(puff.ErrValue(r), "kind").(puff.Keyword)
 	return string(k)
-}
-
-// errField is e's field key, for r an (err e); nil for anything else.
-func errField(r puff.Value, key string) puff.Value {
-	t, ok := r.(puff.Tag)
-	if !ok || t.Name() != "err" || t.Len() != 1 {
-		return nil
-	}
-	e, _ := t.At(0).(puff.Map)
-	v, _ := e.Get(puff.Keyword(key))
-	return v
 }
 
 // await waits for j's attempt p, and each one after it, then answers j's
@@ -468,9 +457,7 @@ func (d *daemon) await(j *job, p *proc) {
 
 // errMessage is the :message of r, an (err e).
 func errMessage(r puff.Value) string {
-	e, _ := r.(puff.Tag).At(0).(puff.Map)
-	m, _ := e.Get(puff.Keyword("message"))
-	s, _ := m.(puff.String)
+	s, _ := puff.Field(puff.ErrValue(r), "message").(puff.String)
 	return string(s)
 }
 
@@ -572,7 +559,7 @@ func (d *daemon) jobProcess(_ message, args []puff.Value) (puff.Value, error) {
 		} else {
 			_, _, r, err = storedResult(st.db, int64(id))
 		}
-		n, _ := errField(r, "pid").(puff.Int)
+		n, _ := puff.Field(puff.ErrValue(r), "pid").(puff.Int)
 		pid = int(n)
 	})
 	switch {
@@ -599,8 +586,8 @@ func (d *daemon) jobOutput(_ message, args []puff.Value) (puff.Value, error) {
 		return puff.Errorf("no-id", "no job %d is running: once it ends, whiff wait %d has its result", id, id), nil
 	}
 	out, _ := puff.NewMap(
-		puff.Entry{Key: puff.Keyword("stdout"), Val: puff.String(p.stdout.String())},
-		puff.Entry{Key: puff.Keyword("stderr"), Val: puff.String(p.stderr.String())},
+		puff.Key("stdout", puff.String(p.stdout.String())),
+		puff.Key("stderr", puff.String(p.stderr.String())),
 	)
 	return puff.Ok(out), nil
 }
@@ -633,12 +620,12 @@ func (d *daemon) cancelJob(_ message, args []puff.Value) (puff.Value, error) {
 // :from :gh}, without :from for a client.
 func (j *job) value() puff.Value {
 	es := []puff.Entry{
-		{Key: puff.Keyword("id"), Val: puff.Int(j.id)},
-		{Key: puff.Keyword("cmd"), Val: j.cmd},
-		{Key: puff.Keyword("cwd"), Val: puff.String(j.dir)},
+		puff.Key("id", puff.Int(j.id)),
+		puff.Key("cmd", j.cmd),
+		puff.Key("cwd", puff.String(j.dir)),
 	}
 	if j.from != "" {
-		es = append(es, puff.Entry{Key: puff.Keyword("from"), Val: puff.Keyword(j.from)})
+		es = append(es, puff.Key("from", puff.Keyword(j.from)))
 	}
 	m, _ := puff.NewMap(es...)
 	return m

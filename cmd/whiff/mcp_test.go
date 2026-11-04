@@ -136,7 +136,7 @@ func TestMCP(t *testing.T) {
 	}
 	// Its answer goes straight through, without a review.
 	v, _ := puff.ReadValue(told.Value)
-	n := puff.Print(field(v.(puff.Tag).At(0), "id"))
+	n := puff.Print(puff.Field(v.(puff.Tag).At(0), "id"))
 	if got, isError := call("eval", map[string]any{"code": "(reply " + n + ` (ok "hello"))`}); got != ":done" || isError {
 		t.Errorf("reply = %q, error %v", got, isError)
 	}

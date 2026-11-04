@@ -676,10 +676,10 @@ func TestJobsInterrupted(t *testing.T) {
 	}
 	// 950 ended long ago: its result goes at start.
 	old, _ := puff.NewMap(
-		puff.Entry{Key: puff.Keyword("status"), Val: puff.Keyword("ended")},
-		puff.Entry{Key: puff.Keyword("ended"), Val: puff.NewTime(time.Now().Add(-resultKept - time.Hour))},
-		puff.Entry{Key: puff.Keyword("result"), Val: puff.Ok(puff.Int(1))},
-		puff.Entry{Key: puff.Keyword("handled"), Val: puff.Bool(true)},
+		puff.Key("status", puff.Keyword("ended")),
+		puff.Key("ended", puff.NewTime(time.Now().Add(-resultKept-time.Hour))),
+		puff.Key("result", puff.Ok(puff.Int(1))),
+		puff.Key("handled", puff.Bool(true)),
 	)
 	withDB(t, dir, func(db *bbolt.DB) {
 		err := db.Update(func(tx *bbolt.Tx) error {

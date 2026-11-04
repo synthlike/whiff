@@ -381,18 +381,9 @@ func sameSession(a, b string) string {
 
 // pendingID is the id of r if it is (err {:kind :pending :id n}).
 func pendingID(r puff.Value) (int64, bool) {
-	t, ok := r.(puff.Tag)
-	if !ok || t.Name() != "err" || t.Len() != 1 {
-		return 0, false
-	}
-	e, ok := t.At(0).(puff.Map)
-	if !ok {
-		return 0, false
-	}
-	kind, _ := e.Get(puff.Keyword("kind"))
-	id, _ := e.Get(puff.Keyword("id"))
-	n, ok := id.(puff.Int)
-	return int64(n), ok && puff.Equal(kind, puff.Keyword("pending"))
+	e := puff.ErrValue(r)
+	n, ok := puff.Field(e, "id").(puff.Int)
+	return int64(n), ok && puff.Equal(puff.Field(e, "kind"), puff.Keyword("pending"))
 }
 
 // reply answers the message id with result for by, a service that can
@@ -438,18 +429,18 @@ func (d *daemon) reply(by string, user bool, idv, result puff.Value) (puff.Value
 // message the review gate holds.
 func (a *asked) value() puff.Value {
 	es := []puff.Entry{
-		{Key: puff.Keyword("id"), Val: puff.Int(a.id)},
-		{Key: puff.Keyword("fn"), Val: puff.Keyword(a.fn)},
-		{Key: puff.Keyword("args"), Val: a.args},
-		{Key: puff.Keyword("origin"), Val: origin(a.user)},
-		{Key: puff.Keyword("cwd"), Val: puff.String(a.dir)},
-		{Key: puff.Keyword("at"), Val: puff.NewTime(a.at)},
+		puff.Key("id", puff.Int(a.id)),
+		puff.Key("fn", puff.Keyword(a.fn)),
+		puff.Key("args", a.args),
+		puff.Key("origin", origin(a.user)),
+		puff.Key("cwd", puff.String(a.dir)),
+		puff.Key("at", puff.NewTime(a.at)),
 	}
 	if a.from != "" {
-		es = append(es, puff.Entry{Key: puff.Keyword("from"), Val: puff.Keyword(a.from)})
+		es = append(es, puff.Key("from", puff.Keyword(a.from)))
 	}
 	if a.held != nil {
-		es = append(es, puff.Entry{Key: puff.Keyword("to"), Val: puff.Keyword(a.to)})
+		es = append(es, puff.Key("to", puff.Keyword(a.to)))
 	}
 	m, _ := puff.NewMap(es...)
 	return m

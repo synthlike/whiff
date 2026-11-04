@@ -64,8 +64,8 @@ func (e entry) rpc() rpc.Entry {
 // stored is e as whiff.db holds it: a map of the fields it has. Args and
 // reply stay the text they were printed as.
 func (e entry) stored() puff.Value {
-	es := []puff.Entry{{Key: puff.Keyword("at"), Val: puff.NewTime(e.at)}}
-	add := func(k string, v puff.Value) { es = append(es, puff.Entry{Key: puff.Keyword(k), Val: v}) }
+	es := []puff.Entry{puff.Key("at", puff.NewTime(e.at))}
+	add := func(k string, v puff.Value) { es = append(es, puff.Key(k, v)) }
 	if e.note != "" {
 		add("note", puff.String(e.note))
 	} else {

@@ -183,7 +183,7 @@ func (c *Client) Marks() (map[string]string, error) {
 	ms := map[string]string{}
 	key := func(v puff.Value, k string) string {
 		m, _ := v.(puff.Map)
-		got, _ := m.Get(puff.Keyword(k))
+		got := puff.Field(m, k)
 		s, _ := got.(puff.Keyword)
 		return string(s)
 	}
@@ -209,8 +209,8 @@ func (c *Client) EvalOk(src string) (puff.Value, error) {
 	if err != nil {
 		return nil, err
 	}
-	if t, ok := v.(puff.Tag); ok && t.Name() == "ok" && t.Len() == 1 {
-		return t.At(0), nil
+	if ok := puff.OkValue(v); ok != nil {
+		return ok, nil
 	}
 	return nil, fmt.Errorf("%s: %s", src, puff.Print(v))
 }

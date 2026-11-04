@@ -14,8 +14,8 @@ import (
 // that asks for an answer gets "", no answer, as a client adds it: edit
 // the line to give one.
 func actionMsg(a puff.Value) puff.Value {
-	msg := field(a, "action")
-	if vec, ok := msg.(puff.Vector); ok && field(a, "ask") != nil {
+	msg := puff.Field(a, "action")
+	if vec, ok := msg.(puff.Vector); ok && puff.Field(a, "ask") != nil {
 		args := make([]puff.Value, vec.Len(), vec.Len()+1)
 		for k := range vec.Len() {
 			args[k] = vec.At(k)
@@ -30,7 +30,7 @@ func actionMsg(a puff.Value) puff.Value {
 // whiff act takes them.
 func errText(e puff.Value) string {
 	m, ok := e.(puff.Map)
-	acts, isVec := field(e, "actions").(puff.Vector)
+	acts, isVec := puff.Field(e, "actions").(puff.Vector)
 	if !ok || !isVec {
 		return puff.Print(e) + "\n"
 	}
@@ -45,7 +45,7 @@ func errText(e puff.Value) string {
 	b.WriteString(puff.Print(m) + "\n")
 	for i := range acts.Len() {
 		a := acts.At(i)
-		label, _ := field(a, "label").(puff.String)
+		label, _ := puff.Field(a, "label").(puff.String)
 		b.WriteString("  " + oneLine(string(label)) + "\t" + puff.Print(actionMsg(a)) + "\n")
 	}
 	return b.String()
@@ -66,7 +66,7 @@ func viewText(v puff.Value) (string, bool) {
 		return "", false
 	}
 	str := func(m puff.Value, key string) string {
-		s, _ := field(m, key).(puff.String)
+		s, _ := puff.Field(m, key).(puff.String)
 		return oneLine(string(s))
 	}
 	var b strings.Builder
@@ -74,8 +74,8 @@ func viewText(v puff.Value) (string, bool) {
 		for i := range vs.Len() {
 			it := vs.At(i)
 			line := str(it, "label")
-			action := field(it, "action")
-			actions, _ := field(it, "actions").(puff.Vector)
+			action := puff.Field(it, "action")
+			actions, _ := puff.Field(it, "actions").(puff.Vector)
 			d := str(it, "detail")
 			if u := str(it, "url"); u != "" {
 				d = strings.TrimSpace(d + "  " + u)
@@ -114,7 +114,7 @@ func viewText(v puff.Value) (string, bool) {
 				b.WriteByte('\n')
 			}
 			b.WriteString("# " + str(vs.At(i), "title") + "\n")
-			col, _ := field(vs.At(i), "items").(puff.Vector)
+			col, _ := puff.Field(vs.At(i), "items").(puff.Vector)
 			items(col)
 		}
 	case t.Name() == "locations":
@@ -122,7 +122,7 @@ func viewText(v puff.Value) (string, bool) {
 			l := vs.At(i)
 			line := str(l, "file")
 			for _, key := range []string{"line", "col"} {
-				if n, ok := field(l, key).(puff.Int); ok {
+				if n, ok := puff.Field(l, key).(puff.Int); ok {
 					line += ":" + puff.Print(n)
 				}
 			}
