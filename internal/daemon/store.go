@@ -635,7 +635,7 @@ func storedTicket(id int64, get func(string) puff.Value) ticket {
 	session, _ := get("session").(puff.Keyword)
 	dir, _ := get("cwd").(puff.String)
 	reviewed, _ := get("reviewed").(puff.Bool)
-	return ticket{id: id, from: string(from), dir: string(dir), user: org == origin(true), session: string(session), reviewed: bool(reviewed)}
+	return ticket{id: id, from: string(from), dir: string(dir), lineage: lineage{user: org == origin(true), session: string(session), reviewed: bool(reviewed)}}
 }
 
 // fields is the printed map p as a lookup: nil for a key it hasn't.
@@ -876,7 +876,7 @@ func storedTimer(key []byte, p string) (*timer, error) {
 	dir, _ := get("cwd").(puff.String)
 	reviewed, _ := get("reviewed").(puff.Bool)
 	return &timer{key: key, due: due.Go(), addr: to, m: message{from: name("from"), fn: fn, args: puff.Print(args), dir: string(dir),
-		user: name("origin") == string(origin(true)), reviewed: bool(reviewed), session: name("session")}}, nil
+		lineage: lineage{user: name("origin") == string(origin(true)), reviewed: bool(reviewed), session: name("session")}}}, nil
 }
 
 // stored is a as it is stored: as (inbox) shows it, with what a restart
@@ -943,7 +943,7 @@ func storedAsked(id int64, p string) (*asked, error) {
 	at, _ := get("at").(puff.Time)
 	expires, _ := get("expires").(puff.Duration)
 	msg, _ := get("msg").(puff.Int)
-	a := &asked{ticket: ticket{id: id, msg: int64(msg), from: key("from"), dir: string(dir), user: key("origin") == string(origin(true)), session: key("session")},
+	a := &asked{ticket: ticket{id: id, msg: int64(msg), from: key("from"), dir: string(dir), lineage: lineage{user: key("origin") == string(origin(true)), session: key("session")}},
 		addr: addr, fn: fn, args: args, at: at.Go(), expires: time.Duration(expires)}
 	switch addr {
 	case "me":
@@ -989,7 +989,7 @@ func (a *asked) readHeld(kind, to string) error {
 	if to == "" {
 		return fmt.Errorf("want :to for a held %s", kind)
 	}
-	held := message{from: a.from, args: puff.Print(a.args), dir: a.dir, user: a.user, session: a.session}
+	held := message{from: a.from, args: puff.Print(a.args), dir: a.dir, lineage: a.unreviewed()}
 	switch kind {
 	case "publish":
 		held.topic = to

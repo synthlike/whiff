@@ -92,7 +92,7 @@ func (d *daemon) hold(st *state, addr string, m message) puff.Value {
 	}
 	held := m
 	held.ctx, held.reply, held.chain = nil, nil, nil
-	a := &asked{ticket: ticket{msg: m.id, from: m.from, dir: m.dir, user: m.user, session: m.session}, fn: m.fn, args: v.(puff.Vector), held: &held, to: addr}
+	a := &asked{ticket: ticket{msg: m.id, from: m.from, dir: m.dir, lineage: m.unreviewed()}, fn: m.fn, args: v.(puff.Vector), held: &held, to: addr}
 	if m.topic != "" {
 		a.fn, a.to = "publish", m.topic
 	}
@@ -102,7 +102,7 @@ func (d *daemon) hold(st *state, addr string, m message) puff.Value {
 // holdEval puts an agent's code, req.Src, evaluated for from, in :review's
 // inbox as {:fn :eval :args [src]}: see queue. Accepting runs it.
 func (d *daemon) holdEval(st *state, from string, req rpc.Request) puff.Value {
-	a := &asked{ticket: ticket{msg: st.msgID(), from: from, dir: req.Dir, session: from}, fn: "eval", args: puff.NewVector(puff.String(req.Src)), src: req.Src}
+	a := &asked{ticket: ticket{msg: st.msgID(), from: from, dir: req.Dir, lineage: lineage{session: from}}, fn: "eval", args: puff.NewVector(puff.String(req.Src)), src: req.Src}
 	r := st.queue(a, "the agent's eval")
 	st.record(entry{at: time.Now(), kind: "eval", id: a.msg, from: from, args: puff.Print(a.args), reply: puff.Print(r), gate: heldGate(r)})
 	return r
@@ -127,7 +127,7 @@ func (st *state) queue(a *asked, what string) puff.Value {
 		return puff.Errorf("store", "%s wasn't stored: %v", what, err)
 	}
 	st.asked = append(st.asked, a)
-	st.publish(message{cause: a.msg, from: "review", topic: "review/pending", args: puff.Print(puff.NewVector(a.value())), user: a.user})
+	st.publish(message{cause: a.msg, from: "review", topic: "review/pending", args: puff.Print(puff.NewVector(a.value())), lineage: lineage{user: a.user}})
 	return pending(a.id, "%s waits for your review", what)
 }
 
@@ -192,7 +192,7 @@ func (d *daemon) accept(ctx context.Context, chain []string, id int64) (puff.Val
 // What it prints is dropped. chain is accept's; id is the eval's in
 // history.
 func (d *daemon) runHeld(ctx context.Context, chain []string, a *asked, id int64) puff.Value {
-	env := d.newEnv(io.Discard, &caller{addr: a.from, id: id, chain: chain, reviewed: true, session: a.session})
+	env := d.newEnv(io.Discard, &caller{addr: a.from, id: id, chain: chain, lineage: lineage{reviewed: true, session: a.session}})
 	env.Dir = a.dir
 	ctx, cancel := context.WithTimeout(ctx, d.callTimeout)
 	defer cancel()
@@ -247,7 +247,7 @@ func (d *daemon) settleHeld(st *state, a *asked, result puff.Value) {
 		puff.Entry{Key: puff.Keyword("id"), Val: puff.Int(a.id)},
 		puff.Entry{Key: puff.Keyword("result"), Val: result},
 	)
-	st.publish(message{cause: a.msg, from: "review", topic: "review/done", args: puff.Print(puff.NewVector(done)), user: a.user})
+	st.publish(message{cause: a.msg, from: "review", topic: "review/done", args: puff.Print(puff.NewVector(done)), lineage: lineage{user: a.user}})
 }
 
 // reviewService is :review, whose inbox holds what the review gate holds:

@@ -25,11 +25,9 @@ type ticket struct {
 	msg  int64  // the id of the message, or eval, it answers: the cause of the answer
 	from string // the sender's address; "" for a client
 	dir  string // the sender's working directory, for the answer
-	user bool   // whether the message's chain began with the user
-	// reviewed is whether you gave the answer, so what it leads to passes
-	// the review gate, as for a message you accepted.
-	reviewed bool
-	session  string // the agent session that began the message's chain, if one did
+	// lineage is the message's chain's; reviewed, if you gave the answer,
+	// so what it leads to passes the review gate.
+	lineage
 }
 
 // asked is a message to an ask function, waiting in its service's inbox
@@ -108,7 +106,7 @@ func (d *daemon) ask(st *state, s *service, m message) puff.Value {
 	}
 	// It keeps whether its chain was reviewed, for what whiff/asked leads
 	// to: your reply that a service sends on as a tell is still yours.
-	a := &asked{ticket: ticket{id: st.newID(), msg: m.id, from: m.from, dir: m.dir, user: m.user, reviewed: m.reviewed, session: m.session}, addr: s.name, fn: m.fn, args: args, at: time.Now(), expires: h.expires}
+	a := &asked{ticket: ticket{id: st.newID(), msg: m.id, from: m.from, dir: m.dir, lineage: m.lineage}, addr: s.name, fn: m.fn, args: args, at: time.Now(), expires: h.expires}
 	// An inbox survives a restart, so its sender hears only once this will.
 	if err := st.keep(a); err != nil {
 		return puff.Errorf("store", ":%s wasn't stored: %v", m.to(s.name), err)
@@ -150,7 +148,7 @@ func (d *daemon) notify(st *state, s *service, a *asked, fn string) {
 		return
 	}
 	m := message{id: st.msgID(), cause: a.msg, from: a.from, fn: fn, args: puff.Print(puff.NewVector(puff.Int(a.id))),
-		dir: a.dir, user: a.user, reviewed: a.reviewed, session: a.session}
+		dir: a.dir, lineage: a.lineage}
 	d.put(st, s.name, m)
 }
 
@@ -275,7 +273,7 @@ const agentResult = "whiff/result"
 // a line in history. One for a service that isn't loaded waits until it
 // is. One for an agent's session, :agent/<name>, goes to the agent. It says whether the result is still owed: in a mailbox, or waiting.
 func (d *daemon) tell(st *state, t ticket, by string, result puff.Value) bool {
-	m := message{id: st.msgID(), cause: t.msg, from: by, fn: "whiff/done", args: puff.Print(puff.NewVector(puff.Int(t.id), result)), dir: t.dir, user: t.user, reviewed: t.reviewed, session: t.session}
+	m := message{id: st.msgID(), cause: t.msg, from: by, fn: "whiff/done", args: puff.Print(puff.NewVector(puff.Int(t.id), result)), dir: t.dir, lineage: t.lineage}
 	// What an agent's turn started ends after the turn: the agent hears
 	// of it as a message of its own, which waits its turn.
 	if a := st.addrs[strings.TrimPrefix(t.from, "agent/")]; agentSession(t.from) && a != nil && a.agent && a.fns[agentResult].ask {
@@ -362,7 +360,7 @@ func (d *daemon) handOn(by string, id int64, m message) error {
 		}
 		if r != nil && was.from == by {
 			found = true
-			d.settle(st, ticket{id: id, msg: m.id, from: m.from, dir: m.dir, user: was.user && m.user, session: sameSession(was.session, m.session)}, answeredBy, r)
+			d.settle(st, ticket{id: id, msg: m.id, from: m.from, dir: m.dir, lineage: lineage{user: was.user && m.user, session: sameSession(was.session, m.session)}}, answeredBy, r)
 		}
 	})
 	if !found {

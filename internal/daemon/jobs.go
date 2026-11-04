@@ -128,14 +128,15 @@ func (d *daemon) runJob(m message, args []puff.Value) (puff.Value, error) {
 		}
 		// A job in a chain you accepted goes on in it, unless a model writes
 		// its output: what its sender does with that is the agent's.
-		j.ticket = ticket{id: id, msg: m.id, from: m.from, dir: m.dir, user: user, session: m.session, reviewed: m.reviewed && !opts.agent}
+		j.ticket = ticket{id: id, msg: m.id, from: m.from, dir: m.dir,
+			lineage: lineage{user: user, session: m.session, reviewed: m.reviewed && !opts.agent}}
 		j.began(p)
 		st.jobs[j.id] = j
 		if err := d.keepJob(j); err != nil {
 			st.note(fmt.Sprintf("job %d isn't stored, so a crash won't tell its sender: %v", j.id, err))
 		}
 	})
-	d.publish(message{cause: m.id, from: "jobs", topic: "jobs/started", args: puff.Print(puff.NewVector(j.value())), dir: m.dir, user: m.user})
+	d.publish(message{cause: m.id, from: "jobs", topic: "jobs/started", args: puff.Print(puff.NewVector(j.value())), dir: m.dir, lineage: lineage{user: m.user}})
 	d.wg.Go(func() { d.await(j, p) })
 	return pending(j.id, "job %d runs %s", j.id, j.argv()[0]), nil
 }
@@ -523,7 +524,7 @@ func (d *daemon) rerun(j *job, r puff.Value) {
 // jobDone is the :jobs/done for j, answered r.
 func jobDone(j *job, r puff.Value) message {
 	done, _ := j.value().(puff.Map).With(puff.Keyword("result"), r)
-	return message{cause: j.msg, from: "jobs", topic: "jobs/done", args: puff.Print(puff.NewVector(done)), dir: j.dir, user: j.user}
+	return message{cause: j.msg, from: "jobs", topic: "jobs/done", args: puff.Print(puff.NewVector(done)), dir: j.dir, lineage: lineage{user: j.user}}
 }
 
 // lost is what the sender of j, found stored at start with no answer, is

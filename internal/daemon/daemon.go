@@ -270,7 +270,7 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 			if req.Op == "eval" {
 				resp = d.eval(ectx, from, free, req)
 			} else {
-				cur.addr, cur.user, cur.reviewed, cur.session = from, !req.Agent, free, session(from, req)
+				cur.addr, cur.lineage = from, clientLineage(from, req, free)
 				if repl == nil {
 					repl = d.newEnv(&replOut, cur)
 				}
@@ -393,14 +393,14 @@ func (d *daemon) message(ctx context.Context, from string, req rpc.Request) rpc.
 		if topic == "" || vec.Len() != 1 {
 			return rpc.Response{Error: "pub wants a topic and one value"}
 		}
-		r := d.publishGated(message{from: from, topic: topic, args: puff.Print(vec), dir: req.Dir, user: !req.Agent, session: session(from, req)})
+		r := d.publishGated(message{from: from, topic: topic, args: puff.Print(vec), dir: req.Dir, lineage: clientLineage(from, req, false)})
 		return rpc.Response{Value: puff.Print(r)}
 	}
 	vals := []puff.Value{puff.Keyword(strings.TrimPrefix(req.Target, ":"))}
 	for i := range vec.Len() {
 		vals = append(vals, vec.At(i))
 	}
-	cur := &caller{addr: from, user: !req.Agent, session: session(from, req)}
+	cur := &caller{addr: from, lineage: clientLineage(from, req, false)}
 	m, addr, err := cur.message(req.Dir, vals)
 	if err != nil {
 		return rpc.Response{Error: err.Error()}
@@ -422,17 +422,18 @@ func (d *daemon) message(ctx context.Context, from string, req rpc.Request) rpc.
 // acting for its address (from, "" for none); as accepted if free.
 func (d *daemon) eval(ctx context.Context, from string, free bool, req rpc.Request) rpc.Response {
 	var out strings.Builder
-	cur := &caller{addr: from, user: !req.Agent, reviewed: free, session: session(from, req)}
+	cur := &caller{addr: from, lineage: clientLineage(from, req, free)}
 	return d.evalIn(ctx, d.newEnv(&out, cur), cur, &out, "eval", req)
 }
 
-// session is the agent session a client's request begins chains in: its
-// address, from, if it is an agent's; "" for anyone else.
-func session(from string, req rpc.Request) string {
+// clientLineage is the chain a client's request begins: the user's, or
+// for an agent's, in its session, its address from; as accepted if free,
+// a free session's.
+func clientLineage(from string, req rpc.Request, free bool) lineage {
 	if !req.Agent {
-		return ""
+		return lineage{user: true, reviewed: free}
 	}
-	return from
+	return lineage{session: from, reviewed: free}
 }
 
 // evalIn evaluates req.Src, named file in errors, in env, which prints to

@@ -34,15 +34,7 @@ type message struct {
 	// chain is the addresses waiting on calls that led to this one, so a
 	// call back into one of them fails at once instead of timing out.
 	chain []string
-	// user is whether the chain m belongs to began with the user; one
-	// without a clear origin is the agent's.
-	user bool
-	// reviewed is whether you accepted m, or a message earlier in its
-	// chain, at the review gate, which lets it through.
-	reviewed bool
-	// session is the agent session, agent/<n>, whose message began m's
-	// chain; "" for a chain that began elsewhere.
-	session string
+	lineage
 	// gate is how the review gate let an agent's write through, for
 	// history: trusted, free, accepted <id>, or for <session> further
 	// down a chain it let through; "" for anything else.
@@ -60,6 +52,30 @@ type message struct {
 	// held is the id m waited under in :review's inbox, for a message you
 	// accepted: a job it starts keeps it, so its sender has one id.
 	held int64
+}
+
+// lineage is how the chain a message belongs to began, and whether the
+// review gate let it through: what the gate decides on. Messages carry
+// it, callers act in it, and tickets answer into it, so it is copied
+// whole; a copy that drops reviewed says so with unreviewed.
+type lineage struct {
+	// user is whether the chain began with the user; one without a clear
+	// origin is the agent's.
+	user bool
+	// reviewed is whether you accepted a message of the chain at the
+	// review gate, or gave the answer it goes on with, which lets it
+	// through.
+	reviewed bool
+	// session is the agent session, agent/<n>, whose message began the
+	// chain; "" for a chain that began elsewhere.
+	session string
+}
+
+// unreviewed is l without your acceptance: for a message the review gate
+// holds, which waits for it.
+func (l lineage) unreviewed() lineage {
+	l.reviewed = false
+	return l
 }
 
 // origin is :user or :agent, the origin of the chain a message belongs to.
@@ -94,14 +110,10 @@ func (m message) to(addr string) string {
 // caller is who whiff's builtins act for: a service handling a message, or
 // a client, which has no address.
 type caller struct {
-	addr  string
-	id    int64    // the message being handled, or the eval running, that the messages sent are caused by; 0 for none
-	chain []string // addresses waiting in the current chain, addr last
-	user  bool     // whether the current chain began with the user
-	// reviewed is whether you accepted a message of the current chain at
-	// the review gate.
-	reviewed bool
-	session  string // the agent session that began the current chain, if one did
+	addr    string
+	id      int64    // the message being handled, or the eval running, that the messages sent are caused by; 0 for none
+	chain   []string // addresses waiting in the current chain, addr last
+	lineage          // the current chain's
 	// stop is closed when the service version acting stops; nil for a
 	// client. placed is closed once that version has its address.
 	stop, placed <-chan struct{}
@@ -502,7 +514,7 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 				if err != nil {
 					return nil, err
 				}
-				m := message{cause: cur.id, from: cur.addr, topic: string(topic), args: msg, dir: c.Env.Dir, user: cur.user, reviewed: cur.reviewed, session: cur.session}
+				m := message{cause: cur.id, from: cur.addr, topic: string(topic), args: msg, dir: c.Env.Dir, lineage: cur.lineage}
 				return d.publishGated(m), nil
 			}},
 		{Name: "call", Args: "target [arg] ...", Mark: puff.MarkWrite, MarkByArgs: true,
@@ -623,7 +635,7 @@ func (cur *caller) message(dir string, args []puff.Value) (message, string, erro
 	if err != nil {
 		return message{}, "", err
 	}
-	return message{cause: cur.id, from: cur.addr, fn: fn, args: msg, dir: dir, user: cur.user, reviewed: cur.reviewed, session: cur.session}, addr, nil
+	return message{cause: cur.id, from: cur.addr, fn: fn, args: msg, dir: dir, lineage: cur.lineage}, addr, nil
 }
 
 // readOnly is an error if ctx runs under a :read mark and m, a message to

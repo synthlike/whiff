@@ -683,7 +683,7 @@ func (s *service) handle(ctx context.Context, m message) (reply string, faulted,
 	// counts on a :read claim, an override, is :write here.
 	m.ctx = puff.WithMark(m.ctx, what, s.d.marker().reaches(s, m.fn, m.topic))
 	s.cur.chain = slices.Concat(m.chain, []string{s.name})
-	s.cur.id, s.cur.user, s.cur.reviewed, s.cur.session = m.id, m.user, m.reviewed, m.session
+	s.cur.id, s.cur.lineage = m.id, m.lineage
 	s.cur.handOn = func(id int64) error {
 		if m.reply == nil {
 			return errors.New("only a call's handler can hand on: nobody waits for this message's answer")

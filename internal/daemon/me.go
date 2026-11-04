@@ -77,7 +77,7 @@ func isChoices(v puff.Value) string {
 // time it changes, for a client showing it; user is the origin of the
 // chain that changed it, and cause the message that did.
 func (st *state) meChanged(user bool, cause int64) {
-	st.publish(message{cause: cause, from: "me", topic: "me/changed", args: puff.Print(puff.NewVector(puff.Int(len(st.inbox("me"))))), user: user})
+	st.publish(message{cause: cause, from: "me", topic: "me/changed", args: puff.Print(puff.NewVector(puff.Int(len(st.inbox("me"))))), lineage: lineage{user: user}})
 }
 
 // meInbox is :me's inbox as (items [...]): a question with its choices and
