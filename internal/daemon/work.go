@@ -1,12 +1,9 @@
 package daemon
 
 import (
-	"encoding/binary"
+	"math"
 	"slices"
-	"strings"
 	"time"
-
-	"go.etcd.io/bbolt"
 
 	"github.com/synthlike/whiff/internal/puff"
 )
@@ -21,60 +18,38 @@ const workShown = 20
 
 // agentWork is the tasks the agent name's session started in the last
 // workKept, oldest first, at most workShown, for service/status: each
-// {:id :to :status :at}, :status :waiting or :held for one that hasn't
-// ended, with its :fn, or :ended, with its :result, cut down. So you see
-// what a lead handed out and how each came back.
+// {:id :to :status :at :children}, :status :waiting or :held for one that
+// hasn't ended, with its :fn, or :ended, with its :result, cut down; and
+// :children, what its work began, as :tasks/tree gives them. So you see
+// what a lead handed out, the jobs each led to, and how each came back.
 func (d *daemon) agentWork(name string, now time.Time) puff.Value {
 	from := "agent/" + name
-	type item struct {
-		id int64
-		v  puff.Value
-	}
-	var items []item
-	open := map[int64]bool{}
-	d.do(func(st *state) {
-		for _, a := range st.asked {
-			if a.from != from {
-				continue
-			}
-			to, fn, status := a.addr, a.fn, "waiting"
-			if a.held != nil {
-				to, fn, status = a.to, a.held.fn, "held"
-			}
-			open[a.id] = true
-			items = append(items, item{a.id, mapOf("id", puff.Int(a.id), "to", puff.Keyword(to), "fn", puff.Keyword(fn),
-				"status", puff.Keyword(status), "at", puff.NewTime(a.at))})
+	all := d.tasks(func(task) bool { return true }, math.MaxInt, now)
+	children := map[int64][]task{}
+	var mine []task
+	for _, t := range all {
+		if t.parent != 0 {
+			children[t.parent] = append(children[t.parent], t)
 		}
-	})
-	d.db.View(func(tx *bbolt.Tx) error {
-		return tx.Bucket(tasksBucket).ForEach(func(k, v []byte) error {
-			// Cheap before reading: most tasks are someone else's.
-			if !strings.Contains(string(v), ":from :"+from) {
-				return nil
-			}
-			id := int64(binary.BigEndian.Uint64(k))
-			get, err := fields(string(v))
-			if err != nil || open[id] {
-				return nil
-			}
-			f, _ := get("from").(puff.Keyword)
-			ended, ok := get("ended").(puff.Time)
-			if string(f) != from || !ok || now.Sub(ended.Go()) > workKept {
-				return nil
-			}
-			by, _ := get("by").(puff.Keyword)
-			items = append(items, item{id, mapOf("id", puff.Int(id), "to", by, "status", puff.Keyword("ended"),
-				"at", ended, "result", brief(get("result")))})
-			return nil
-		})
-	})
-	slices.SortFunc(items, func(a, b item) int { return int(a.id - b.id) })
-	if len(items) > workShown {
-		items = items[len(items)-workShown:]
+		if t.from == from {
+			mine = append(mine, t)
+		}
 	}
-	vs := make([]puff.Value, len(items))
-	for i, it := range items {
-		vs[i] = it.v
+	slices.SortFunc(mine, func(a, b task) int { return int(a.id - b.id) })
+	if len(mine) > workShown {
+		mine = mine[len(mine)-workShown:]
+	}
+	vs := make([]puff.Value, len(mine))
+	for i, t := range mine {
+		kids := puff.Field(t.node(children), "children")
+		es := []puff.Entry{puff.Key("id", puff.Int(t.id)), puff.Key("to", puff.Keyword(t.to)),
+			puff.Key("status", puff.Keyword(t.status)), puff.Key("at", puff.NewTime(t.at)), puff.Key("children", kids)}
+		if t.status == "ended" {
+			es = append(es, puff.Key("result", brief(t.result)))
+		} else {
+			es = append(es, puff.Key("fn", puff.Keyword(t.fn)))
+		}
+		vs[i], _ = puff.NewMap(es...)
 	}
 	return puff.NewVector(vs...)
 }

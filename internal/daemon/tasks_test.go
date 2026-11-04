@@ -1,6 +1,10 @@
 package daemon
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -153,5 +157,64 @@ func TestTasks(t *testing.T) {
 		case <-deadline:
 			t.Fatalf(":tasks/changed for %v, want %s %s %s %s", seen, waiting, failing, held, job)
 		}
+	}
+}
+
+// TestTaskTree follows a task's work down: an ask whose whiff/asked runs
+// a job, as pipeline's build its dev, whose session asks another service,
+// as a dev its lead. Each is the child of the one whose work began it, and
+// tasks/tree gives them nested.
+func TestTaskTree(t *testing.T) {
+	dir := tempDir(t)
+	writeServices(t, dir, map[string]string{
+		"boss": `(service boss
+  (ask (build x) "Builds x.")
+  (on (whiff/asked id) "Runs a worker for it." (call :jobs/run ["sh" "-c" "echo $WHIFF_SESSION > token; while [ ! -e done ]; do sleep 0.02; done"] {:session [:helper/ask]}))
+  (on (whiff/done id r) "Hears the worker ended." (ok :done)))`,
+		"helper": `(service helper (ask (ask q) "Asks the helper."))`,
+	})
+	start(t, dir)
+	c := dial(t, dir)
+	r, _ := c.Message("call", "boss/build", `["x"]`, dir)
+	v, _ := puff.ReadValue(r.Value)
+	n, ok := pendingID(v)
+	if !ok {
+		t.Fatalf("build = %s", r.Value)
+	}
+	build := puff.Print(puff.Int(n))
+	var tok string
+	eventually(t, "the worker's token", func() string {
+		b, _ := os.ReadFile(filepath.Join(dir, "token"))
+		tok = strings.TrimSpace(string(b))
+		return fmt.Sprint(len(tok))
+	}, "32")
+	worker := dial(t, dir)
+	worker.Agent = true
+	if r, err := worker.ClaimSession(tok, ""); err != nil || !strings.HasPrefix(r.Value, "(ok [:agent/") {
+		t.Fatalf("the worker's claim = %+v %v", r, err)
+	}
+	r, _ = worker.Message("call", "helper/ask", `["which port?"]`, "")
+	v, _ = puff.ReadValue(r.Value)
+	q, ok := pendingID(v)
+	if !ok {
+		t.Fatalf("the worker's ask = %s", r.Value)
+	}
+
+	resp, _ := c.Message("call", "tasks/tree", "["+build+"]", dir)
+	tree := resp.Value
+	// build > the worker's job > its ask of helper.
+	re := regexp.MustCompile(`^\(ok \{:at \S+ :began \S+ :children \[\{:at \S+ :began \S+ :children \[\{:at \S+ :began \S+ :children \[\] :from :agent/\d+ :id ` + fmt.Sprint(q) + ` :parent (\d+) .*:what ":helper/ask \\"which port\?\\""\}\] :cmd \["sh" .*:from :boss :id (\d+) :parent ` + build + ` .*:status :running .*\}\] :id ` + build + ` .*:what ":boss/build \\"x\\""\}\)$`)
+	m := re.FindStringSubmatch(tree)
+	if m == nil || m[1] != m[2] {
+		t.Fatalf("tasks/tree %s = %s", build, tree)
+	}
+	// Once the worker's job ends, the tree keeps it, ended.
+	os.WriteFile(filepath.Join(dir, "done"), nil, 0o600)
+	eventually(t, "the worker's job, ended", func() string {
+		resp, _ := c.Message("call", "tasks/tree", "["+build+"]", dir)
+		return fmt.Sprint(strings.Contains(resp.Value, ":id "+m[2]+" :parent "+build) && strings.Contains(resp.Value, ":status :ended"))
+	}, "true")
+	if resp, _ := c.Message("call", "tasks/tree", "[99999]", dir); !strings.Contains(resp.Value, ":no-id") {
+		t.Errorf("tasks/tree of none = %s", resp.Value)
 	}
 }

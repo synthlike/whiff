@@ -76,7 +76,7 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 				return puff.Ok(puff.NewVector(all...)), nil
 			}},
 		{Name: "service/status", Args: "service", Mark: puff.MarkRead,
-			Doc: "(ok s): service's line of service/list, {:service :agent :status :note}, and what else whiff knows of it: :file, :load-error, :last {:fn :at} handled, :faults today and the last :fault {:at :message}, :inbox and :timers [{:fn :due}]; for an agent :spent, :turns and :day of the last 24 hours, :last-turn, :every, its session's :mode, as (session/mode) gives it, if it isn't gated, and its :work, the tasks its turns started in the last day, at most 20: [{:id :to :status :at}], :waiting or :held with their :fn, or :ended with their :result cut short. (err {:kind :no-address}) if there is none.",
+			Doc: "(ok s): service's line of service/list, {:service :agent :status :note}, and what else whiff knows of it: :file, :load-error, :last {:fn :at} handled, :faults today and the last :fault {:at :message}, :inbox and :timers [{:fn :due}]; for an agent :spent, :turns and :day of the last 24 hours, :last-turn, :every, its session's :mode, as (session/mode) gives it, if it isn't gated, and its :work, the tasks its turns started in the last day, at most 20: [{:id :to :status :at :children}], :waiting or :held with their :fn, or :ended with their :result cut short, and :children, what each one's work began, as :tasks/tree gives them. (err {:kind :no-address}) if there is none.",
 			Fn: func(_ *puff.Call, args []puff.Value) (puff.Value, error) {
 				addr, err := keywordArg(args[0], "a service like :gh")
 				if err != nil {

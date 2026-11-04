@@ -97,7 +97,10 @@ crash, whether its process may still run, and what can be done with each: Accept
 or Reject one held, Cancel one that hasn't ended, see one's whole result,
 and the actions that result offers, `{:actions [...]}` in its `(ok m)` or
 `(err m)`, as a pipeline build's Retry; `:tasks/failed` only those that
-failed, not those you cancelled or rejected. whiff decides none of those: an
+failed, not those you cancelled or rejected. A task begun in another's
+work keeps it as its `:parent`, so `:tasks/tree id` gives an agent's ask
+with the turn that answered it, or a build with its dev, check and
+reviewer. whiff decides none of those: an
 action is a message to the service that offered it. `:tasks/cancel` is
 yours, as `:review`'s functions are; an agent cancels its session's own
 tasks with `whiff cancel`.

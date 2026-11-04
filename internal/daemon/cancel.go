@@ -79,5 +79,5 @@ func (d *daemon) clientCancel(from string, req rpc.Request) rpc.Response {
 	if req.Agent && from == "" {
 		return rpc.Response{Error: "an agent cancels only its own session's tasks, and this connection holds no address"}
 	}
-	return rpc.Response{Value: puff.Print(d.cancel(clientLineage(from, req, false).session, int64(id)))}
+	return rpc.Response{Value: puff.Print(d.cancel(d.clientLineage(from, req, false).session, int64(id)))}
 }

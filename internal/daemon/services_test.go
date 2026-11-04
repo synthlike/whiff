@@ -1548,6 +1548,11 @@ func TestAgentDelegate(t *testing.T) {
 			t.Errorf("lead's work = %s\nwant %s", work, want)
 		}
 	}
+	// Under each, the helper's turn that answered it: its job, whose
+	// parent the ask is.
+	if !regexp.MustCompile(`\{:at \S+ :children \[\{:at \S+ :began \S+ :children \[\] :cmd \["claude" .* :from :helper :id \d+ :parent ` + task + ` `).MatchString(work) {
+		t.Errorf("lead's work, with what each began = %s", work)
+	}
 	if text, _ := c.Inbox("review"); strings.Contains(text, "jobs/run") {
 		t.Errorf("an agent's turn waits for review:\n%s", text)
 	}
@@ -1769,8 +1774,19 @@ echo done
 	// What the reviewer's JSON says it cost is the build's: the dev's says
 	// nothing, as it prints a summary. It offers what can be done with it,
 	// as :tasks shows you.
-	if got := wait(build(`"main"`, "haiku")); !strings.Contains(got, `{:action [:pipeline/merge 1] :label "Merge whiff/1"}] :branch "whiff/1" :cost 0.02`) || !strings.Contains(got, ":status :ready") || !strings.Contains(got, `Fine.\nSUBJECT: Add the file\nVERDICT: approve`) {
+	first := build(`"main"`, "haiku")
+	if got := wait(first); !strings.Contains(got, `{:action [:pipeline/merge 1] :label "Merge whiff/1"}] :branch "whiff/1" :cost 0.02`) || !strings.Contains(got, ":status :ready") || !strings.Contains(got, `Fine.\nSUBJECT: Add the file\nVERDICT: approve`) {
 		t.Fatalf("the first build = %s", got)
+	}
+	// Its tree has the run's jobs, in order: the dev, the check and the
+	// reviewer, each a child of the build.
+	r, _ := c.Message("call", "tasks/tree", "["+first+"]", "")
+	var ran []string
+	for _, m := range regexp.MustCompile(`:cmd \["(\w+)".*?:from :pipeline :id \d+ :parent `+first+` `).FindAllStringSubmatch(r.Value, -1) {
+		ran = append(ran, m[1])
+	}
+	if strings.Join(ran, ", ") != "claude, true, claude" {
+		t.Errorf("the build's tree ran %q: %s", ran, r.Value)
 	}
 	// Its commit's subject is the reviewer's SUBJECT; its body the task.
 	if out, _ := exec.Command("git", "-C", repo, "log", "-1", "--format=%s|%b", "whiff/1").Output(); string(out) != "Add the file|do it\n\n" {

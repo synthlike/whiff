@@ -154,6 +154,7 @@ func (d *daemon) notify(st *state, s *service, a *asked, fn string) {
 	}
 	m := message{id: st.msgID(), cause: a.msg, from: a.from, fn: fn, args: puff.Print(puff.NewVector(puff.Int(a.id))),
 		dir: a.dir, lineage: a.lineage}
+	m.task = a.id
 	d.put(st, s.name, m)
 }
 
@@ -368,7 +369,7 @@ func (d *daemon) handOn(by string, id int64, m message) error {
 		}
 		if r != nil && was.from == by {
 			found = true
-			d.settle(st, ticket{id: id, msg: m.id, from: m.from, dir: m.dir, lineage: lineage{user: was.user && m.user, session: sameSession(was.session, m.session)}}, answeredBy, r)
+			d.settle(st, ticket{id: id, msg: m.id, from: m.from, dir: m.dir, lineage: lineage{user: was.user && m.user, session: sameSession(was.session, m.session), task: was.task}}, answeredBy, r)
 		}
 	})
 	if !found {

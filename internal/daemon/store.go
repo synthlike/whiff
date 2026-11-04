@@ -536,7 +536,7 @@ func (d *daemon) keepJob(j *job) error {
 }
 
 // endKeys are what endTask writes of a task, over what was stored of it.
-var endKeys = []string{"id", "from", "origin", "cwd", "session", "reviewed", "what", "status", "ended", "by", "result", "handled", "stdin"}
+var endKeys = []string{"id", "from", "origin", "cwd", "session", "reviewed", "what", "parent", "status", "ended", "by", "result", "handled", "stdin"}
 
 // endTask stores r as the result of task t, answered by by, over what was
 // stored of it as it ran, such as a job's :cmd. handled is whether t's
@@ -625,6 +625,9 @@ func ticketEntries(t ticket) []puff.Entry {
 	if t.about != "" {
 		es = append(es, puff.Key("what", puff.String(t.about)))
 	}
+	if t.task != 0 {
+		es = append(es, puff.Key("parent", puff.Int(t.task)))
+	}
 	return es
 }
 
@@ -638,7 +641,8 @@ func storedTicket(id int64, get func(string) puff.Value) ticket {
 	dir, _ := get("cwd").(puff.String)
 	reviewed, _ := get("reviewed").(puff.Bool)
 	about, _ := get("what").(puff.String)
-	return ticket{id: id, from: string(from), dir: string(dir), about: string(about), lineage: lineage{user: org == origin(true), session: string(session), reviewed: bool(reviewed)}}
+	parent, _ := get("parent").(puff.Int)
+	return ticket{id: id, from: string(from), dir: string(dir), about: string(about), lineage: lineage{user: org == origin(true), session: string(session), reviewed: bool(reviewed), task: int64(parent)}}
 }
 
 // fields is the printed map p as a lookup: nil for a key it hasn't.
@@ -888,6 +892,9 @@ func (a *asked) stored() puff.Value {
 	if a.session != "" {
 		with("session", puff.Keyword(a.session))
 	}
+	if a.task != 0 {
+		with("parent", puff.Int(a.task))
+	}
 	if a.expires > 0 {
 		with("expires", puff.Duration(a.expires))
 	}
@@ -934,7 +941,8 @@ func storedAsked(id int64, p string) (*asked, error) {
 	at, _ := get("at").(puff.Time)
 	expires, _ := get("expires").(puff.Duration)
 	msg, _ := get("msg").(puff.Int)
-	a := &asked{ticket: ticket{id: id, msg: int64(msg), from: key("from"), dir: string(dir), lineage: lineage{user: key("origin") == string(origin(true)), session: key("session")}},
+	parent, _ := get("parent").(puff.Int)
+	a := &asked{ticket: ticket{id: id, msg: int64(msg), from: key("from"), dir: string(dir), lineage: lineage{user: key("origin") == string(origin(true)), session: key("session"), task: int64(parent)}},
 		addr: addr, fn: fn, args: args, at: at.Go(), expires: time.Duration(expires)}
 	switch addr {
 	case "me":

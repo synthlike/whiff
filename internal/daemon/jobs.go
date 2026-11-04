@@ -129,9 +129,13 @@ func (d *daemon) runJob(m message, args []puff.Value) (puff.Value, error) {
 		// A job in a chain you accepted goes on in it, unless a model writes
 		// its output: what its sender does with that is the agent's.
 		j.ticket = ticket{id: id, msg: m.id, from: m.from, dir: m.dir,
-			lineage: lineage{user: user, session: m.session, reviewed: m.reviewed && !opts.agent}}
+			lineage: lineage{user: user, session: m.session, reviewed: m.reviewed && !opts.agent, task: m.task}}
 		j.began(p)
 		st.jobs[j.id] = j
+		if g, ok := st.grants[j.opts.token]; ok && j.opts.token != "" {
+			g.job = j.id
+			st.grants[j.opts.token] = g
+		}
 		if err := d.keepJob(j); err != nil {
 			st.note(fmt.Sprintf("job %d isn't stored, so a crash won't tell its sender: %v", j.id, err))
 		}

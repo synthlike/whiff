@@ -103,7 +103,7 @@ func (d *daemon) hold(st *state, addr string, m message) puff.Value {
 // holdEval puts an agent's code, req.Src, evaluated for from, in :review's
 // inbox as {:fn :eval :args [src]}: see queue. Accepting runs it.
 func (d *daemon) holdEval(st *state, from string, req rpc.Request) puff.Value {
-	a := &asked{ticket: ticket{msg: st.msgID(), from: from, dir: req.Dir, lineage: lineage{session: from}}, fn: "eval", args: puff.NewVector(puff.String(req.Src)), src: req.Src}
+	a := &asked{ticket: ticket{msg: st.msgID(), from: from, dir: req.Dir, lineage: lineage{session: from, task: st.sessionJob(from)}}, fn: "eval", args: puff.NewVector(puff.String(req.Src)), src: req.Src}
 	a.about = a.label()
 	r := st.queue(a, "the agent's eval")
 	st.record(entry{at: time.Now(), kind: "eval", id: a.msg, from: from, args: puff.Print(a.args), reply: puff.Print(r), gate: heldGate(r)})
@@ -195,7 +195,7 @@ func (d *daemon) accept(ctx context.Context, chain []string, id int64) (puff.Val
 // What it prints is dropped. chain is accept's; id is the eval's in
 // history.
 func (d *daemon) runHeld(ctx context.Context, chain []string, a *asked, id int64) puff.Value {
-	env := d.newEnv(io.Discard, &caller{addr: a.from, id: id, chain: chain, lineage: lineage{reviewed: true, session: a.session}})
+	env := d.newEnv(io.Discard, &caller{addr: a.from, id: id, chain: chain, lineage: lineage{reviewed: true, session: a.session, task: a.task}})
 	env.Dir = a.dir
 	ctx, cancel := context.WithTimeout(ctx, d.callTimeout)
 	defer cancel()

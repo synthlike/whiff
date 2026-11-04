@@ -68,6 +68,12 @@ type lineage struct {
 	// session is the agent session, agent/<n>, whose message began the
 	// chain; "" for a chain that began elsewhere.
 	session string
+	// task is the task whose work the chain is: the one whose whiff/asked
+	// or whiff/cancelled began it, or the job whose session sent it, as an
+	// agent's turn; 0 for none. A task begun in the chain is its child, and
+	// its ticket keeps task as its parent, so its whiff/done goes on in the
+	// parent's work.
+	task int64
 }
 
 // unreviewed is l without your acceptance: for a message the review gate
@@ -172,6 +178,8 @@ type grant struct {
 	// claimed are the new sessions, agent/<n>, claimed with it, for a job
 	// of a service that isn't an agent: they end with the job.
 	claimed []string
+	// job is the job given it, the parent of what its sessions begin.
+	job int64
 }
 
 // watcher is a client subscribed to topics, every topic if topics is nil.

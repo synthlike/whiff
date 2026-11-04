@@ -2,7 +2,9 @@ package daemon
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -40,6 +42,12 @@ type task struct {
 	// stray is the process group a job that ended :unknown may still run
 	// in, as when whiff died while it ran; 0 if none is there.
 	stray int
+	// parent is the task whose work began it, as an agent's turn, or the
+	// build a pipeline's job is for; 0 for one you or a service began.
+	parent int64
+	began  time.Time  // when it began, if known: an ended ask's isn't kept
+	cmd    puff.Value // a job's command, whole
+	fn     string     // one held or waiting: the function it is for
 }
 
 // tasks is every task keep takes: those that haven't ended, oldest first,
@@ -49,9 +57,12 @@ func (d *daemon) tasks(keep func(task) bool, limit int, now time.Time) []task {
 	var open []task
 	d.do(func(st *state) {
 		for _, a := range st.asked {
-			t := task{id: a.id, from: a.from, to: a.addr, what: a.label(), status: "waiting", at: a.at, reviewed: a.reviewed}
+			t := task{id: a.id, from: a.from, to: a.addr, what: a.label(), status: "waiting", at: a.at, reviewed: a.reviewed, parent: a.task, began: a.at, fn: a.fn}
 			if a.addr == "review" {
 				t.to, t.status, t.held, t.live = a.to, "held", a, st.addrs[a.from] != nil
+				if a.held != nil {
+					t.fn = a.held.fn
+				}
 			}
 			if keep(t) {
 				open = append(open, t)
@@ -63,7 +74,7 @@ func (d *daemon) tasks(keep func(task) bool, limit int, now time.Time) []task {
 				at = j.attempts[0].started
 			}
 			t := task{id: j.id, from: j.from, to: "jobs", what: cmdText(j.cmd), status: "running", at: at, reviewed: j.reviewed,
-				attempts: len(j.attempts), tries: j.opts.retry + 1}
+				attempts: len(j.attempts), tries: j.opts.retry + 1, parent: j.task, began: at, cmd: j.cmd, fn: "run"}
 			if keep(t) {
 				open = append(open, t)
 			}
@@ -93,17 +104,22 @@ func (d *daemon) tasks(keep func(task) bool, limit int, now time.Time) []task {
 			}
 			by, _ := get("by").(puff.Keyword)
 			reviewed, _ := get("reviewed").(puff.Bool)
-			t := task{id: id, from: string(from), to: string(by), status: "ended", at: at.Go(), reviewed: bool(reviewed), result: get("result")}
+			parent, _ := get("parent").(puff.Int)
+			t := task{id: id, from: string(from), to: string(by), status: "ended", at: at.Go(), reviewed: bool(reviewed), result: get("result"), parent: int64(parent)}
 			if w, ok := get("what").(puff.String); ok {
 				t.what = string(w)
 			} else if cmd := get("cmd"); cmd != nil {
-				t.what = cmdText(cmd)
+				t.what, t.cmd = cmdText(cmd), cmd
 			} else if by != "" {
 				t.what = ":" + string(by)
 			}
 			if as, ok := get("attempts").(puff.Vector); ok {
 				retry, _ := get("retry").(puff.Int)
 				t.attempts, t.tries = as.Len(), int(retry)+1
+				if as.Len() > 0 {
+					started, _ := puff.Field(as.At(0), "started").(puff.Time)
+					t.began = started.Go()
+				}
 			}
 			if pid, _ := puff.Field(puff.ErrValue(t.result), "pid").(puff.Int); groupThere(int(pid)) {
 				t.stray = int(pid)
@@ -201,6 +217,9 @@ func (t task) value() puff.Value {
 	if t.to != "" {
 		es = append(es, puff.Key("to", puff.Keyword(t.to)))
 	}
+	if t.parent != 0 {
+		es = append(es, puff.Key("parent", puff.Int(t.parent)))
+	}
 	if t.reviewed {
 		es = append(es, puff.Key("reviewed", puff.Bool(true)))
 	}
@@ -286,6 +305,95 @@ func (t task) item(now time.Time) puff.Value {
 	return m
 }
 
+// node is t as :tasks/tree gives it: as list does, with when it began, a
+// job's :cmd, each argument cut short, what a claude's JSON output says it cost, and its
+// children, each a node, oldest first.
+func (t task) node(children map[int64][]task) puff.Value {
+	m := t.value().(puff.Map)
+	with := func(k string, v puff.Value) { m, _ = m.With(puff.Keyword(k), v) }
+	if !t.began.IsZero() {
+		with("began", puff.NewTime(t.began))
+	}
+	if t.cmd != nil {
+		with("cmd", cutArgs(t.cmd))
+	}
+	if usd, ok := claudeCost(t.result); ok {
+		with("cost", puff.Float(usd))
+	}
+	kids := children[t.id]
+	slices.SortFunc(kids, func(a, b task) int { return int(a.id - b.id) })
+	vs := make([]puff.Value, len(kids))
+	for i, k := range kids {
+		vs[i] = k.node(children)
+	}
+	with("children", puff.NewVector(vs...))
+	return m
+}
+
+// cutArgs is cmd, a job's command, each string in it cut to 80
+// characters: enough to tell what ran, as a claude's --model, without the
+// prompts it was given.
+func cutArgs(cmd puff.Value) puff.Value {
+	vec, ok := cmd.(puff.Vector)
+	if !ok {
+		return cmd
+	}
+	vs := make([]puff.Value, vec.Len())
+	for i := range vec.Len() {
+		vs[i] = vec.At(i)
+		if s, ok := vs[i].(puff.String); ok {
+			if r := []rune(string(s)); len(r) > 80 {
+				vs[i] = puff.String(string(r[:79]) + "…")
+			}
+		}
+	}
+	return puff.NewVector(vs...)
+}
+
+// claudeCost is what r, a job's result, says it cost, if its output is
+// claude -p's JSON, which has :total_cost_usd: as (ok {:stdout json}), or
+// (ok json) for a job :as :text.
+func claudeCost(r puff.Value) (float64, bool) {
+	tag, ok := r.(puff.Tag)
+	if !ok || tag.Name() != "ok" || tag.Len() != 1 {
+		return 0, false
+	}
+	out, ok := tag.At(0).(puff.String)
+	if !ok {
+		out, ok = puff.Field(tag.At(0), "stdout").(puff.String)
+	}
+	if !ok || !strings.Contains(string(out), `"total_cost_usd"`) {
+		return 0, false
+	}
+	var res struct {
+		Cost *float64 `json:"total_cost_usd"`
+	}
+	if json.Unmarshal([]byte(out), &res) != nil || res.Cost == nil {
+		return 0, false
+	}
+	return *res.Cost, true
+}
+
+// tree is task id and what its work began, and theirs, as nodes: (ok
+// node), or (err {:kind :no-id}) if no task id is shown, as one that
+// ended over a day ago.
+func (d *daemon) tree(id int64) puff.Value {
+	children := map[int64][]task{}
+	var root *task
+	for _, t := range d.tasks(func(task) bool { return true }, math.MaxInt, time.Now()) {
+		if t.id == id {
+			root = &t
+		}
+		if t.parent != 0 {
+			children[t.parent] = append(children[t.parent], t)
+		}
+	}
+	if root == nil {
+		return puff.Errorf("no-id", "no task %d is open, or ended in the last day", id)
+	}
+	return puff.Ok(root.node(children))
+}
+
 // ago is d, how long since, as a person says it: just now, 4m ago, 3h ago.
 func ago(d time.Duration) string {
 	switch {
@@ -322,7 +430,7 @@ func (d *daemon) tasksService() *service {
 	return &service{name: "tasks", d: d, cur: caller{addr: "tasks"},
 		fns: map[string]handler{
 			"list": {mark: puff.MarkRead, marked: true,
-				doc: fmt.Sprintf("(ok tasks): the tasks that haven't ended, oldest first, then the last %d that ended in the last day: each {:id :status :state :what :at :from :to :result}. :status is :held, :waiting, :running or :ended; :state says how it ended too: :done, :failed, :cancelled, :rejected, :interrupted, or its result's :status, as :gave-up. :from is its owner, who gets its result (none for you); :to, where it waits or who answered it; :reviewed #t, its chain passed the review gate; :attempts and :tries, how many times a job with :retry ran, of how many it may; :stray, the process group of a job that ended :unknown, while one is there: it may still be running.", tasksShown),
+				doc: fmt.Sprintf("(ok tasks): the tasks that haven't ended, oldest first, then the last %d that ended in the last day: each {:id :status :state :what :at :from :to :result}. :status is :held, :waiting, :running or :ended; :state says how it ended too: :done, :failed, :cancelled, :rejected, :interrupted, or its result's :status, as :gave-up. :from is its owner, who gets its result (none for you); :to, where it waits or who answered it; :parent, the task whose work began it, as tree shows; :reviewed #t, its chain passed the review gate; :attempts and :tries, how many times a job with :retry ran, of how many it may; :stray, the process group of a job that ended :unknown, while one is there: it may still be running.", tasksShown),
 				native: func(message, []puff.Value) (puff.Value, error) {
 					var vs []puff.Value
 					for _, t := range d.tasks(all, tasksShown, time.Now()) {
@@ -336,6 +444,15 @@ func (d *daemon) tasksService() *service {
 			"failed": {mark: puff.MarkRead, marked: true,
 				doc:    "(ok view): the tasks that failed in the last day, newest first, as view gives them: :failed, :interrupted, or a result's :status :failed or :gave-up; not those you cancelled or rejected.",
 				native: view(task.failed)},
+			"tree": {params: []string{"id"}, mark: puff.MarkRead, marked: true,
+				doc: "(ok node): task id, as list gives it, with :began, a job's :cmd, each argument cut to 80 characters, the :cost a claude's JSON output says, and :children, the tasks its work began, as an agent's turn or a pipeline build's jobs, each a node, oldest first. (err {:kind :no-id}) if it isn't open and didn't end in the last day.",
+				native: func(_ message, args []puff.Value) (puff.Value, error) {
+					id, ok := args[0].(puff.Int)
+					if !ok {
+						return nil, fmt.Errorf("want a task id, got %s", puff.Print(args[0]))
+					}
+					return d.tree(int64(id)), nil
+				}},
 			"result": {params: []string{"id"}, mark: puff.MarkRead, marked: true, native: d.taskResult,
 				doc: "(ok r), the result task id ended with, whole, while it is kept; (err {:kind :no-id}) if it hasn't ended, or isn't kept."},
 			"cancel": {params: []string{"id"}, mark: puff.MarkWrite, marked: true, yours: true,

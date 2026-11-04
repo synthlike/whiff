@@ -717,11 +717,12 @@ function field(m, k) {
   return m.v.find(([key]) => key.t === "kw" && key.v === k)?.[1];
 }
 
-// jobName is a job's command, argv a tree, as a step says it: a claude by
-// its model, and whether it has tools, as "claude haiku" or "claude, no
-// tools"; any other as its words, "go test ./...".
+// jobName is a job's command, argv a tree or, as :tasks/tree gives it,
+// its strings, as a step says it: a claude by its model, and whether it
+// has tools, as "claude haiku" or "claude, no tools"; any other as its
+// words, "go test ./...".
 function jobName(argv) {
-  const a = (argv?.v || []).map((t) => t.v);
+  const a = Array.isArray(argv) ? argv : (argv?.v || []).map((t) => t.v);
   if (a[0] !== "claude") return a.join(" ");
   const m = a.indexOf("--model"), tools = a.indexOf("--tools");
   return "claude" + (m >= 0 ? " " + a[m + 1] : "") + (tools >= 0 && a[tools + 1] === "" ? ", no tools" : "");
@@ -766,6 +767,25 @@ function stepsOf(id) {
   return steps.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
 }
 
+// stepsIn is the jobs among children, as service/status gives a task's
+// work, and theirs, in the order they began, as stepsOf gives them: from
+// whiff's own record of what each task's work began, so they outlast
+// sniff's history and a restart.
+function stepsIn(children) {
+  const steps = [];
+  const walk = (n) => {
+    if (n.cmd) {
+      const began = Date.parse(n.began || n.at), result = String(n.result || "");
+      let kind = n.status === "ended" ? (n.state === "done" ? "ok" : "err") : "running";
+      if (kind === "ok" && /^\(ok \{:exit [1-9]/.test(result)) kind = "err";
+      steps.push({ from: n.from, name: jobName(n.cmd), at: n.began || n.at, ms: (n.status === "ended" ? Date.parse(n.at) : Date.now()) - began, kind, cost: n.cost });
+    }
+    (n.children || []).forEach(walk);
+  };
+  children.forEach(walk);
+  return steps.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+}
+
 // stepList is a task's steps, as stepsOf gives them, one line each:
 // who ran what, how long it took or has run, and what it cost. A chain
 // that runs its first step again, as a pipeline run's dev does each
@@ -787,8 +807,9 @@ function stepList(steps) {
 }
 
 // workList is an agent's work, newest first: one row a task, and under
-// it the jobs it led to, the steps of a pipeline run, as history has
-// them. Its id shows its whole chain in Activity.
+// it the jobs it led to, the steps of a pipeline run, as whiff keeps them;
+// for a task from before whiff kept them, as history has them. Its id
+// shows its whole chain in Activity.
 function workList(work) {
   const ol = el("ol", "svc-work");
   for (const w of [...work].reverse()) {
@@ -800,7 +821,7 @@ function workList(work) {
     id.title = "show its chain in Activity";
     id.onclick = () => showOnly(w.id);
     li.append(id, el("span", "work-to", who), el("span", "work-how", how), el("span", "hint", ago(w.at)));
-    const steps = stepsOf(w.id);
+    const steps = w.children?.length ? stepsIn(w.children) : stepsOf(w.id);
     if (steps === null) li.append(el("span", "work-gone hint", "its steps are older than sniff's history"));
     else if (steps.length) li.append(stepList(steps));
     ol.append(li);
