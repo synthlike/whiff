@@ -96,6 +96,7 @@ func (d *daemon) hold(st *state, addr string, m message) puff.Value {
 	if m.topic != "" {
 		a.fn, a.to = "publish", m.topic
 	}
+	a.about = a.label()
 	return st.queue(a, a.what())
 }
 
@@ -103,6 +104,7 @@ func (d *daemon) hold(st *state, addr string, m message) puff.Value {
 // inbox as {:fn :eval :args [src]}: see queue. Accepting runs it.
 func (d *daemon) holdEval(st *state, from string, req rpc.Request) puff.Value {
 	a := &asked{ticket: ticket{msg: st.msgID(), from: from, dir: req.Dir, lineage: lineage{session: from}}, fn: "eval", args: puff.NewVector(puff.String(req.Src)), src: req.Src}
+	a.about = a.label()
 	r := st.queue(a, "the agent's eval")
 	st.record(entry{at: time.Now(), kind: "eval", id: a.msg, from: from, args: puff.Print(a.args), reply: puff.Print(r), gate: heldGate(r)})
 	return r
@@ -127,6 +129,7 @@ func (st *state) queue(a *asked, what string) puff.Value {
 		return puff.Errorf("store", "%s wasn't stored: %v", what, err)
 	}
 	st.asked = append(st.asked, a)
+	st.taskChanged(a.id, a.user)
 	st.publish(message{cause: a.msg, from: "review", topic: "review/pending", args: puff.Print(puff.NewVector(a.value())), lineage: lineage{user: a.user}})
 	return pending(a.id, "%s waits for your review", what)
 }
@@ -290,17 +293,23 @@ func (a *asked) trustable() bool {
 	return a.held != nil && a.held.topic == "" && strings.HasPrefix(a.from, "agent/")
 }
 
+// label is what a does, with its args: :me/ask "go?", or for one held
+// :todo/add "x", publish :git/changed {...}, or the agent's eval and its
+// code.
+func (a *asked) label() string {
+	switch {
+	case a.addr != "review" && a.held == nil && a.src == "":
+		return ":" + a.addr + "/" + a.fn + argsText(a.args)
+	case a.held == nil:
+		return "eval " + a.src
+	}
+	return a.what() + argsText(a.args)
+}
+
 // reviewItem is a, held, as an item of :review/pending: what it would do,
 // who sent it and where, and its actions: Trust too, if it is trustable and
 // its session, live, is still here to trust.
 func (a *asked) reviewItem(live bool) puff.Value {
-	label := a.what()
-	switch {
-	case a.held == nil:
-		label = "eval " + a.src
-	case a.args.Len() > 0:
-		label += " " + strings.TrimSuffix(strings.TrimPrefix(puff.Print(a.args), "["), "]")
-	}
 	from := "client"
 	if a.from != "" {
 		from = ":" + a.from
@@ -318,7 +327,7 @@ func (a *asked) reviewItem(live bool) puff.Value {
 		actions = append(actions, action(fmt.Sprintf("Trust :%s for :%s", a.from, a.to), "trust"))
 	}
 	m, _ := puff.NewMap(
-		puff.Key("label", puff.String(label)),
+		puff.Key("label", puff.String(a.label())),
 		puff.Key("detail", puff.String(fmt.Sprintf("%d from %s in %s", a.id, from, a.dir))),
 		puff.Key("actions", puff.NewVector(actions...)),
 	)

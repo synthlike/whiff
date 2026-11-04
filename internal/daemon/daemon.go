@@ -112,7 +112,8 @@ func Run(ctx context.Context, dir, services string) error {
 		return err
 	}
 	d.wg.Go(d.route)
-	for _, s := range []*service{d.jobsService(), d.meService(), d.reviewService()} {
+	// whiff's own addresses: see own.
+	for _, s := range []*service{d.jobsService(), d.meService(), d.reviewService(), d.tasksService()} {
 		d.do(func(st *state) { st.addrs[s.name] = s })
 		d.wg.Go(func() { s.run(ctx) })
 	}
@@ -498,4 +499,10 @@ func (d *daemon) evalIn(ctx context.Context, env *puff.Env, cur *caller, out *st
 		resp.Value = puff.Print(v)
 	}
 	return resp
+}
+
+// own says whether name is one of whiff's own addresses, which no service
+// file or client may take.
+func own(name string) bool {
+	return name == "jobs" || name == "me" || name == "review" || name == "tasks"
 }

@@ -135,6 +135,7 @@ func (d *daemon) runJob(m message, args []puff.Value) (puff.Value, error) {
 		if err := d.keepJob(j); err != nil {
 			st.note(fmt.Sprintf("job %d isn't stored, so a crash won't tell its sender: %v", j.id, err))
 		}
+		st.taskChanged(j.id, user)
 	})
 	d.publish(message{cause: m.id, from: "jobs", topic: "jobs/started", args: puff.Print(puff.NewVector(j.value())), dir: m.dir, lineage: lineage{user: m.user}})
 	d.wg.Go(func() { d.await(j, p) })

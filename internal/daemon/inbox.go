@@ -25,6 +25,9 @@ type ticket struct {
 	msg  int64  // the id of the message, or eval, it answers: the cause of the answer
 	from string // the sender's address; "" for a client
 	dir  string // the sender's working directory, for the answer
+	// about is what the task does, for :tasks to say once it ended:
+	// :todo/add "x". A job's is its stored :cmd instead.
+	about string
 	// lineage is the message's chain's; reviewed, if you gave the answer,
 	// so what it leads to passes the review gate.
 	lineage
@@ -107,11 +110,13 @@ func (d *daemon) ask(st *state, s *service, m message) puff.Value {
 	// It keeps whether its chain was reviewed, for what whiff/asked leads
 	// to: your reply that a service sends on as a tell is still yours.
 	a := &asked{ticket: ticket{id: st.newID(), msg: m.id, from: m.from, dir: m.dir, lineage: m.lineage}, addr: s.name, fn: m.fn, args: args, at: time.Now(), expires: h.expires}
+	a.about = a.label()
 	// An inbox survives a restart, so its sender hears only once this will.
 	if err := st.keep(a); err != nil {
 		return puff.Errorf("store", ":%s wasn't stored: %v", m.to(s.name), err)
 	}
 	st.asked = append(st.asked, a)
+	st.taskChanged(a.id, m.user)
 	if s.name == "me" {
 		st.meChanged(m.user, m.id)
 	}
@@ -243,6 +248,7 @@ func (d *daemon) settle(st *state, t ticket, by string, result puff.Value) {
 		w <- result
 	}
 	delete(st.waiters, t.id)
+	st.taskChanged(t.id, t.user)
 	if d.tell(st, t, by, result) && st.addrs[t.from] == nil {
 		st.note(fmt.Sprintf("the result of task %d waits for :%s, which isn't loaded", t.id, t.from))
 	}

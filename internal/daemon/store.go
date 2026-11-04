@@ -307,8 +307,7 @@ func (st *state) acceptHeld(id int64) (*asked, error) {
 	}
 	a := st.asked[i]
 	m, err := puff.NewMap(append(ticketEntries(a.ticket),
-		puff.Key("status", puff.Keyword("accepted")),
-		puff.Key("what", puff.String(a.what())))...)
+		puff.Key("status", puff.Keyword("accepted")))...)
 	if err != nil {
 		return nil, err
 	}
@@ -537,7 +536,7 @@ func (d *daemon) keepJob(j *job) error {
 }
 
 // endKeys are what endTask writes of a task, over what was stored of it.
-var endKeys = []string{"id", "from", "origin", "cwd", "session", "reviewed", "status", "ended", "by", "result", "handled", "stdin"}
+var endKeys = []string{"id", "from", "origin", "cwd", "session", "reviewed", "what", "status", "ended", "by", "result", "handled", "stdin"}
 
 // endTask stores r as the result of task t, answered by by, over what was
 // stored of it as it ran, such as a job's :cmd. handled is whether t's
@@ -623,6 +622,9 @@ func ticketEntries(t ticket) []puff.Entry {
 	if t.reviewed {
 		es = append(es, puff.Key("reviewed", puff.Bool(true)))
 	}
+	if t.about != "" {
+		es = append(es, puff.Key("what", puff.String(t.about)))
+	}
 	return es
 }
 
@@ -635,7 +637,8 @@ func storedTicket(id int64, get func(string) puff.Value) ticket {
 	session, _ := get("session").(puff.Keyword)
 	dir, _ := get("cwd").(puff.String)
 	reviewed, _ := get("reviewed").(puff.Bool)
-	return ticket{id: id, from: string(from), dir: string(dir), lineage: lineage{user: org == origin(true), session: string(session), reviewed: bool(reviewed)}}
+	about, _ := get("what").(puff.String)
+	return ticket{id: id, from: string(from), dir: string(dir), about: string(about), lineage: lineage{user: org == origin(true), session: string(session), reviewed: bool(reviewed)}}
 }
 
 // fields is the printed map p as a lookup: nil for a key it hasn't.
@@ -942,6 +945,7 @@ func storedAsked(id int64, p string) (*asked, error) {
 	if err != nil {
 		return nil, err
 	}
+	a.about = a.label()
 	return a, nil
 }
 

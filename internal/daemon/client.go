@@ -107,7 +107,7 @@ func (d *daemon) claim(l *link, req rpc.Request) (*service, rpc.Response) {
 	} else if name == "agent" && req.Agent {
 		name = fmt.Sprintf("agent/%d", d.newAgent())
 		done = puff.Ok(puff.Keyword(name))
-	} else if name == "jobs" || name == "me" || name == "review" || name == "agent" || strings.HasPrefix(name, "agent/") ||
+	} else if own(name) || name == "agent" || strings.HasPrefix(name, "agent/") ||
 		name == "try" || strings.HasPrefix(name, "try/") {
 		return taken("is assigned by whiff")
 	}

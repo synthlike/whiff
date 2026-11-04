@@ -19,7 +19,7 @@ function does, see [stdlib.md](stdlib.md); for whiff in use,
    │ jobs, waiters, subscriptions, history   │
    │                                         │
    │ :git  :gh  :todo  :pipeline  ...        │  a goroutine each,
-   │ :jobs  :me  :review  :agent/1  :hiss    │  holding its own state
+   │ :jobs :me :review :tasks :agent/1 :hiss │  holding its own state
    └─────────────────────────────────────────┘
           ~/.whiff/services/*.puff   ~/.whiff/whiff.db
 ```
@@ -88,6 +88,17 @@ the ask's sender began: an agent's ask is still an agent's write. An
 `(on (whiff/cancelled id) ...)` hears, the same way, of a message
 cancelled while it waited (`whiff cancel`), so work begun for it can stop:
 pipeline cancels the run it started for a `build`.
+
+`:tasks` shows them all, whoever began them: `(call :tasks/list)` gives
+each one held, waiting or running, and each that ended in the last day,
+with its owner, where it is or who answered it, and how it ended;
+`:tasks/view` gives them as items, with what can be done with each: Accept
+or Reject one held, Cancel one that hasn't ended, see one's whole result,
+and the actions that result offers, `{:actions [...]}` in its `(ok m)` or
+`(err m)`, as a pipeline build's Retry. whiff decides none of those: an
+action is a message to the service that offered it. `:tasks/cancel` is
+yours, as `:review`'s functions are; an agent cancels its session's own
+tasks with `whiff cancel`.
 
 A call back into an address already waiting in the chain would wait for
 itself, so it fails at once with `:cycle` instead of timing out.

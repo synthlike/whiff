@@ -149,6 +149,11 @@ func TestLs(t *testing.T) {
   (pending)             :read   (ok view): what waits for your review, as items to accept or reject, oldest first.
   (reject id [reason])  :write  Answer the held message id (err {:kind :rejected :reason reason}) without delivering it; reason, a string, tells its sender why.
   (trust id)            :write  Accept the held message id, an agent session's to a service, and trust the session for that service from now on, as whiff trust does.
+:tasks
+  (cancel id)  :write  Cancel task id, as whiff cancel does: :done, or (err {:kind :ended :result r}) if it had ended.
+  (list)       :read   (ok tasks): the tasks that haven't ended, oldest first, then the last 50 that ended in the last day: each {:id :status :state :what :at :from :to :result}. :status is :held, :waiting, :running or :ended; :state says how it ended too: :done, :failed, :cancelled, :rejected, :interrupted, or its result's :status, as :gave-up. :from is its owner, who gets its result (none for you); :to, where it waits or who answered it; :reviewed #t, its chain passed the review gate.
+  (result id)  :read   (ok r), the result task id ended with, whole, while it is kept; (err {:kind :no-id}) if it hasn't ended, or isn't kept.
+  (view)       :read   (ok view): the tasks as list gives them, as items: one held has :review's actions, one waiting or running Cancel, a job Output too, and one that ended Result, and the actions its result offers, as {:actions [...]} in its (ok m) or (err m).
 read-only commands (internal/puff/commands.go): ` + strings.Join(puff.ReadOnlyCommands(), ", ") + `
 override: ` + files + `:4:3: :files/status is marked :read, but reaches proc/run at 4:61
 warning: ` + greet + `:5:15: :nobody/x doesn't exist

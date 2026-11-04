@@ -118,7 +118,7 @@ var statusRank = map[string]int{"failed": 0, "faulting": 1, "over-budget": 2, "p
 func (st *state) statuses(now time.Time) []status {
 	names := map[string]bool{}
 	for name, s := range st.addrs {
-		if !s.client && s.keep && name != "jobs" && name != "me" && name != "review" {
+		if !s.client && s.keep && !own(name) {
 			names[name] = true
 		}
 	}
