@@ -767,10 +767,16 @@ function stepsOf(id) {
 }
 
 // stepList is a task's steps, as stepsOf gives them, one line each:
-// who ran what, how long it took or has run, and what it cost.
+// who ran what, how long it took or has run, and what it cost. A chain
+// that runs its first step again, as a pipeline run's dev does each
+// round, goes in rounds, each headed by its number.
 function stepList(steps) {
   const ol = el("ol", "work-steps");
+  const key = (s) => s.from + " " + s.name;
+  const starts = steps.filter((s) => key(s) === key(steps[0])).length;
+  let round = 0;
   for (const s of steps) {
+    if (starts > 1 && key(s) === key(steps[0])) ol.append(el("li", "work-round hint", "round " + ++round));
     const li = el("li", s.kind === "running" ? "open" : s.kind === "ok" ? "ok" : "failed");
     const how = (s.kind === "running" ? "running " : s.kind === "ok" ? "" : "failed, ") + roughly(s.ms) + (s.cost ? ", $" + parseFloat(s.cost).toFixed(2) : "");
     li.append(el("span", "work-to", ":" + s.from), el("span", "work-how", s.name), el("span", "hint", how));
