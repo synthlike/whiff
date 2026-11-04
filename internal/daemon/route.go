@@ -418,6 +418,35 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 				})
 				return r, nil
 			}},
+		{Name: "session/cancel", Mark: puff.MarkWrite,
+			Doc: "(ok ids): for an agent, cancels each task its turns' session started that hasn't ended, as whiff cancel does, and gives their ids, oldest first; a service whose inbox one waited in hears whiff/cancelled. (err {:kind :no-session}) for a service that isn't an agent.",
+			Fn: func(_ *puff.Call, _ []puff.Value) (puff.Value, error) {
+				var ids []int64
+				var r puff.Value
+				d.do(func(st *state) {
+					if s := st.addrs[cur.addr]; s == nil || !s.agent {
+						r = puff.Errorf("no-session", ":%s isn't an agent", cur.addr)
+						return
+					}
+					for _, a := range st.asked {
+						if a.from == "agent/"+cur.addr {
+							ids = append(ids, a.id)
+						}
+					}
+				})
+				if r != nil {
+					return r, nil
+				}
+				// Cancelled one at a time, outside the route goroutine, which
+				// cancel waits on; one that ended meanwhile is left out.
+				var done []puff.Value
+				for _, id := range ids {
+					if puff.Equal(d.cancel("", id), puff.Done) {
+						done = append(done, puff.Int(id))
+					}
+				}
+				return puff.Ok(puff.NewVector(done...)), nil
+			}},
 		{Name: "session/mode", Mark: puff.MarkRead,
 			Doc: "(ok m): this agent session's mode, {:mode :gated}, {:mode :free} or {:mode :trusted :services [:todo ...]}, with :until, a time, if it runs out. (err {:kind :no-session}) for anyone else.",
 			Fn: func(_ *puff.Call, _ []puff.Value) (puff.Value, error) {

@@ -833,24 +833,32 @@ async function fillStatus(box, name) {
     for (const [k, v] of serviceLines(st)) dl.append(el("dt", "", k), el("dd", "", v));
     box.replaceChildren(head, dl);
     if (st.work?.length) box.append(el("h4", "", "Work"), workList(st.work));
-    // An agent pauses and resumes here, as you.
+    // An agent pauses and resumes here, as you, and is cancelled while it
+    // works: its turn and what it handed out.
     if (st.agent) {
-      const paused = st.status === "paused";
-      const b = el("button", "svc-act", paused ? "Resume" : "Pause");
-      b.type = "button";
-      b.title = paused ? "take what waits in its inbox, oldest first" : "take no more turns; messages wait in its inbox";
-      b.onclick = async () => {
-        b.disabled = true;
-        try {
-          const r = await fetch("api/call", { method: "POST", body: new URLSearchParams({ action: `[:${name}/${paused ? "resume" : "pause"}]` }) });
-          if (!r.ok) throw new Error((await r.text()).trim());
-        } catch (err) {
-          box.append(el("p", "query-error", err.message));
-        }
-        await loadServices();
-        box.replaceWith(statusBox(name));
+      const act = (label, fn, title) => {
+        const b = el("button", "svc-act", label);
+        b.type = "button";
+        b.title = title;
+        b.onclick = async () => {
+          b.disabled = true;
+          try {
+            const r = await fetch("api/call", { method: "POST", body: new URLSearchParams({ action: `[:${name}/${fn}]` }) });
+            if (!r.ok) throw new Error((await r.text()).trim());
+          } catch (err) {
+            box.append(el("p", "query-error", err.message));
+            return;
+          }
+          await loadServices();
+          box.replaceWith(statusBox(name));
+        };
+        head.append(b);
       };
-      head.append(b);
+      const paused = st.status === "paused";
+      act(paused ? "Resume" : "Pause", paused ? "resume" : "pause",
+        paused ? "take what waits in its inbox, oldest first" : "take no more turns; messages wait in its inbox");
+      if (st.status === "thinking" || st.status === "busy")
+        act("Cancel", "cancel", "pause it, stop its turn and cancel the tasks it handed out; what comes back waits for Resume");
     }
   } catch (err) {
     if (box.seq === seq) box.replaceChildren(el("p", "hint", err.message));

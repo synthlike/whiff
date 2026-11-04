@@ -13,7 +13,8 @@ import (
 // :review is yours. One held or waiting leaves its inbox and is answered
 // (err {:kind :cancelled :outcome :not-started}); a running job's process
 // group is killed, and the job answers (err {:kind :cancelled :outcome
-// :stopped}), unless it ended first. The canceller gets :done, or (err
+// :stopped}), unless it ended first. A service whose inbox it left hears
+// of it, as whiff/cancelled, if it would. The canceller gets :done, or (err
 // {:kind :ended :result r}) for a task that had ended, which keeps r.
 func (d *daemon) cancel(session string, id int64) puff.Value {
 	var r puff.Value
@@ -41,6 +42,7 @@ func (d *daemon) cancel(session string, id int64) puff.Value {
 				d.settleHeld(st, a, cancelled)
 			} else {
 				d.answer(st, a.ticket, a.addr, cancelled)
+				d.notifyCancelled(st, st.addrs[a.addr], a)
 			}
 			r = puff.Done
 			return

@@ -1721,6 +1721,7 @@ func TestPipelineBuild(t *testing.T) {
 	claude := `#!/bin/sh
 if [ "$1 $2 $3 $4" = "-p --strict-mcp-config --tools " ]; then cat >/dev/null; echo "VERDICT: approve"; exit 0; fi
 cat >/dev/null
+if [ -e "$FAKE/hang" ]; then touch "$FAKE/hung"; sleep 30; touch "$FAKE/woke"; exit 0; fi
 case "$*" in *"--model haiku"*) m=haiku ;; *"--model"*) m=other ;; *) m=default ;; esac
 echo "dev $(basename "$PWD") $m" >> "$FAKE/log"
 ls > "$FAKE/saw-$(basename "$PWD")"
@@ -1794,6 +1795,30 @@ echo done
 	}
 	if _, err := os.Stat(filepath.Join(dir, ".whiff", "pipelines", "repo-7")); err == nil {
 		t.Error("a build that couldn't start left its worktree")
+	}
+
+	// A build cancelled while its dev runs: its asker hears so, and the
+	// run begun for it is cancelled, its dev killed, rather than running
+	// on for nobody.
+	os.Remove(filepath.Join(fake, "clash"))
+	os.WriteFile(filepath.Join(fake, "hang"), nil, 0o600)
+	hung := build(`"main"`, "")
+	eventually(t, "the dev starts", func() string { _, err := os.Stat(filepath.Join(fake, "hung")); return fmt.Sprint(err == nil) }, "true")
+	if r, err := c.Message("cancel-task", "", "["+hung+"]", ""); err != nil || r.Value != "(ok :done)" {
+		t.Fatalf("cancel %s = %+v %v", hung, r, err)
+	}
+	if got := wait(hung); !strings.Contains(got, ":kind :cancelled") {
+		t.Errorf("the cancelled build = %s", got)
+	}
+	last := func() string {
+		r, _ := c.Eval(`(match (call :pipeline/runs) [(ok rs) (map/get (unwrap (vector/last rs)) :step)] [e e])`, "")
+		return r.Value
+	}
+	eventually(t, "its run", last, "(some :cancelled)")
+	eventually(t, "its dev's job", func() string { r, _ := c.Eval("(call :jobs/list)", ""); return r.Value }, "(ok [])")
+	time.Sleep(100 * time.Millisecond)
+	if _, err := os.Stat(filepath.Join(fake, "woke")); err == nil {
+		t.Error("the cancelled run's dev ran on")
 	}
 }
 
@@ -1966,4 +1991,113 @@ func TestJobReviewedChain(t *testing.T) {
 		h, _ := historyOf(c)
 		return fmt.Sprint(strings.Contains(h, `:writer/w "`+model+`"`) && strings.Contains(h, "no-reviewer"))
 	}, "true")
+}
+
+// TestAgentCancel cancels lead while its turn runs and a build it handed
+// pipeline has its dev running: the turn stops, the build is cancelled and
+// so is the run begun for it, its dev killed; and lead is paused, so the
+// cancelled build's result waits for you rather than starting a turn.
+func TestAgentCancel(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	src, err := os.ReadFile(filepath.Join("..", "..", "services", "pipeline.puff"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := tempDir(t)
+	fake, bin := filepath.Join(dir, "fake"), filepath.Join(dir, "bin")
+	os.Mkdir(fake, 0o700)
+	os.Mkdir(bin, 0o700)
+	// The dev notes it started and sleeps; lead keeps its token, holds,
+	// and counts its turns.
+	claude := `#!/bin/sh
+case "$*" in
+*"acceptEdits"*) cat >/dev/null; touch "$FAKE/dev"; sleep 30; touch "$FAKE/dev-woke"; echo done; exit 0 ;;
+esac
+cat >/dev/null
+echo "$WHIFF_SESSION" > token
+echo turn >> "$FAKE/turns"
+sleep 30
+printf '{"type":"result","subtype":"success","is_error":false,"result":"done","total_cost_usd":0.01}\n'
+`
+	os.WriteFile(filepath.Join(bin, "claude"), []byte(claude), 0o700)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("FAKE", fake)
+	t.Setenv("HOME", dir)
+	for _, k := range []string{"GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"} {
+		t.Setenv(k, "t")
+	}
+	for _, k := range []string{"GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"} {
+		t.Setenv(k, "t@example.com")
+	}
+	writeServices(t, dir, map[string]string{
+		"pipeline": string(src),
+		"lead":     `(agent lead :prompt "Lead." :can [:pipeline/build])`,
+	})
+	start(t, dir)
+	c := dial(t, dir)
+	repo := filepath.Join(dir, "repo")
+	os.Mkdir(repo, 0o700)
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"commit", "-q", "--allow-empty", "-m", "first"}} {
+		if out, err := exec.Command("git", append([]string{"-C", repo}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	eval := func(code string) string {
+		t.Helper()
+		r, err := c.Eval(code, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r.Value + r.Error
+	}
+	if r, err := c.Mode("agent/lead", "trusted", []string{"pipeline"}, 0); err != nil || r.Value != "(ok :done)" {
+		t.Fatalf("trust = %+v %v", r, err)
+	}
+	if got := eval(`(call :lead/cancel)`); got != "(ok {:tasks [] :turn :none})" {
+		t.Errorf("cancel with nothing going = %s", got)
+	}
+	eval(`(call :lead/resume)`)
+	eval(`(call :lead/tell "build it")`)
+	home := filepath.Join(dir, ".whiff", "agents", "lead")
+	var tok string
+	eventually(t, "lead's turn", func() string {
+		b, _ := os.ReadFile(filepath.Join(home, "token"))
+		tok = strings.TrimSpace(string(b))
+		return fmt.Sprint(len(tok))
+	}, "32")
+	turn := dial(t, dir)
+	turn.Agent = true
+	if r, err := turn.ClaimSession(tok, ""); err != nil || !strings.HasPrefix(r.Value, "(ok [:agent/lead") {
+		t.Fatalf("lead's claim = %+v %v", r, err)
+	}
+	r, _ := turn.Message("call", "pipeline/build", fmt.Sprintf(`[%q "main" "do it" ["true"] ""]`, repo), "")
+	if !strings.HasPrefix(r.Value, "(err {:id ") {
+		t.Fatalf("build = %+v", r)
+	}
+	build := strings.Fields(strings.TrimPrefix(r.Value, "(err {:id "))[0]
+	turn.Close()
+	eventually(t, "the dev starts", func() string { _, err := os.Stat(filepath.Join(fake, "dev")); return fmt.Sprint(err == nil) }, "true")
+
+	got := eval(`(call :lead/cancel)`)
+	if !strings.HasPrefix(got, "(ok {:tasks ["+build+"] :turn ") || strings.Contains(got, ":turn :none") {
+		t.Fatalf("cancel = %s, want the build and the turn", got)
+	}
+	runs := func() string {
+		return eval(`(match (call :pipeline/runs) [(ok rs) (map/get (unwrap (vector/last rs)) :step)] [e e])`)
+	}
+	eventually(t, "the run begun for the build", runs, "(some :cancelled)")
+	eventually(t, "the jobs", func() string { return eval("(call :jobs/list)") }, "(ok [])")
+	// The build's cancelled result waits, as lead is paused.
+	eventually(t, "lead", func() string {
+		return eval(`(match (service/status :lead) [(ok s) [(map/get s :status) (map/get s :note)] ] [e e])`)
+	}, `[(some :paused) (some "1 queued")]`)
+	time.Sleep(200 * time.Millisecond)
+	if turns, _ := os.ReadFile(filepath.Join(fake, "turns")); strings.Count(string(turns), "turn") != 1 {
+		t.Errorf("lead took %d turns, want the one cancel stopped", strings.Count(string(turns), "turn"))
+	}
+	if _, err := os.Stat(filepath.Join(fake, "dev-woke")); err == nil {
+		t.Error("the cancelled run's dev ran on")
+	}
 }

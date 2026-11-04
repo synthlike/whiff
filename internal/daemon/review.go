@@ -24,7 +24,7 @@ import (
 // a person anyway, nor a whiff/done, the answer to something s started,
 // nor a function only you may use, which refuses it anyway.
 func (d *daemon) gated(st *state, s *service, m message) bool {
-	if m.user || m.reviewed || m.topic != "" || m.fn == "whiff/done" || m.fn == "whiff/asked" {
+	if m.user || m.reviewed || m.topic != "" || m.fn == "whiff/done" || m.fn == "whiff/asked" || m.fn == "whiff/cancelled" {
 		return false
 	}
 	h, ok := s.fns[m.fn]

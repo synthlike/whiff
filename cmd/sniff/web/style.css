@@ -161,6 +161,7 @@ h1 { font-size: 15px; margin: 0; letter-spacing: .02em; }
 .svc-status dt { color: var(--muted); }
 .svc-status dd { margin: 0; font-family: var(--mono); overflow-wrap: anywhere; }
 .svc-head .svc-act { margin-left: auto; font-size: 12px; padding: 1px 10px; }
+.svc-head .svc-act + .svc-act { margin-left: 6px; }
 .work { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .tabs {
   display: flex;

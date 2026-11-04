@@ -385,6 +385,16 @@
     [(some last) when (busy?) (call :jobs/cancel (unwrap (int/from-string last)))]
     [_ (ok :idle)]))
 
+(on (cancel)
+  "Cancels what the agent is doing: pauses it, so what comes back waits for you to resume it rather than starting turns; stops the turn running now; and cancels each task its turns handed out that hasn't ended, whose services hear of it, as pipeline stops the run it began. (ok {:turn t :tasks ids}), t the stopped turn's job or :none."
+  (do (try (file/mkdir home))
+    (try (file/write paused-file "paused"))
+    (let [turn (match (vector/last (read-lines turns))
+                 [(some last) when (busy?)
+                  (let [j (unwrap (int/from-string last))] (do (or-else (call :jobs/cancel j) :gone) j))]
+                 [_ :none])]
+      (ok {:turn turn :tasks (unwrap (session/cancel))}))))
+
 (on (pause)
   "Pauses the agent: it takes no more turns, and messages wait in its inbox until you resume it; a turn running now ends as it would. Scheduled wakes don't pile up: the next is set as one is taken."
   (do (try (file/mkdir home))

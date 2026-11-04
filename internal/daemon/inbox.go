@@ -128,11 +128,26 @@ func (d *daemon) ask(st *state, s *service, m message) puff.Value {
 // for every one still waiting, so a handler must skip what it has begun.
 // Like a whiff/done it isn't gated: what the handler does is, by the
 // chain a's sender began.
-func (d *daemon) notifyAsked(st *state, s *service, a *asked) {
-	if h, ok := s.fns["whiff/asked"]; !ok || h.ask {
+func (d *daemon) notifyAsked(st *state, s *service, a *asked) { d.notify(st, s, a, "whiff/asked") }
+
+// notifyCancelled tells s, if it has an (on (whiff/cancelled id) ...),
+// that a, a message to one of its asks, was cancelled and has left its
+// inbox: so a service that began work for it, as pipeline a run, can stop
+// that. Its sender has heard already.
+func (d *daemon) notifyCancelled(st *state, s *service, a *asked) {
+	d.notify(st, s, a, "whiff/cancelled")
+}
+
+// notify sends s fn [id] about a, in the chain a's sender began, if s
+// has an fn that isn't an ask; s nil does nothing.
+func (d *daemon) notify(st *state, s *service, a *asked, fn string) {
+	if s == nil {
 		return
 	}
-	m := message{id: st.msgID(), cause: a.msg, from: a.from, fn: "whiff/asked", args: puff.Print(puff.NewVector(puff.Int(a.id))),
+	if h, ok := s.fns[fn]; !ok || h.ask {
+		return
+	}
+	m := message{id: st.msgID(), cause: a.msg, from: a.from, fn: fn, args: puff.Print(puff.NewVector(puff.Int(a.id))),
 		dir: a.dir, user: a.user, reviewed: a.reviewed, session: a.session}
 	d.put(st, s.name, m)
 }

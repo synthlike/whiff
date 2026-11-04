@@ -84,7 +84,10 @@ id) ...)`, whiff tells it of each message that reaches its inbox, again
 when it loads, and again after each `whiff/done` it handles, for those still
 waiting, so it takes them one at a time and skips what it has begun. Like a
 `whiff/done` that isn't gated, but what its handler does is, by the chain
-the ask's sender began: an agent's ask is still an agent's write.
+the ask's sender began: an agent's ask is still an agent's write. An
+`(on (whiff/cancelled id) ...)` hears, the same way, of a message
+cancelled while it waited (`whiff cancel`), so work begun for it can stop:
+pipeline cancels the run it started for a `build`.
 
 A call back into an address already waiting in the chain would wait for
 itself, so it fails at once with `:cycle` instead of timing out.
@@ -155,7 +158,11 @@ lands in `:me`'s inbox, `ask`, whose answer goes back to whoever asked,
 `d` has passed, with the note, kept in its home so a restart or reload
 sets it again. `later` is `:read`, as all it adds is a turn, which is
 gated and paid for as any. A paused agent takes no turns: what it is sent waits in its
-inbox, and only one wake, as the next is set as one is taken. Tells, asks,
+inbox, and only one wake, as the next is set as one is taken. `stop` ends
+the turn running now; `cancel` ends all it is doing: it pauses the agent,
+stops its turn and cancels the tasks its turns handed out (`session/cancel`),
+so their services stop the work begun for them and the cancelled results
+wait for you to resume it. Tells, asks,
 wakes and laters, and the results of what its turns started, are all asks of the agent, so they wait in its inbox while a turn
 runs and take turns oldest first; your reply to an answer is a tell. Its turns are held
 to `:limits`, $1 and 10 minutes a turn and $5 a day unless it says

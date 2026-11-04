@@ -489,6 +489,19 @@
             [(err e) (let [_ (reply id (err e))] (ok state))])]
          [_ (ok state)])]))
 
+  (on (whiff/cancelled state id) :update
+    "The build id was cancelled while it waited, as by its agent's cancel: the run begun for it is cancelled, as cancel does, and nobody hears how it ends. whiff's own; call cancel instead."
+    (match (vector/find (map/entries (map/get-or state :runs {}))
+             (fn ([_ run]) (and (= (map/get run :asker) (some id)) (active? (map/get-or run :step :none)))))
+      [(some [n {:job j}])
+       (do (or-else (call :jobs/cancel j) :gone)
+         (publish :pipeline/step {:run n :step :cancelled})
+         (ok (set-run state n {:step :cancelled})))]
+      [(some [n _])
+       (do (publish :pipeline/step {:run n :step :cancelled})
+         (ok (set-run state n {:step :cancelled})))]
+      [_ (ok state)]))
+
   (on (runs state) :read
     "Every run, oldest first: {:run :task :step :round :branch :dir :from}, with :step one of :dev, :check, :review, :ready, :gave-up, :failed, :cancelled, :merged or :discarded, and :from the step an ended run ended at (:none while it runs)."
     (ok (vector/map (map/entries (map/get-or state :runs {}))
