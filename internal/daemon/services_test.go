@@ -1442,8 +1442,8 @@ func TestAgentLimits(t *testing.T) {
 		t.Errorf("usage = %s", got)
 	}
 	ask("cheap", "two")
-	historyHas(t, c, `:cheap -> :me/tell "cheap has spent $1.2 in the last 24 hours, its $1.0 a day`)
-	if got := ask("cheap", "three"); !strings.HasPrefix(got, `(err {:kind :over-budget :message "cheap has spent $1.2 in the last 24 hours, its $1.0 a day" :outcome :not-started`) {
+	historyHas(t, c, `:cheap -> :me/tell "cheap has spent $1.20 in the last 24 hours, its $1.00 a day`)
+	if got := ask("cheap", "three"); !strings.HasPrefix(got, `(err {:kind :over-budget :message "cheap has spent $1.20 in the last 24 hours, its $1.00 a day" :outcome :not-started`) {
 		t.Errorf("three = %s", got)
 	}
 	if text, _ := c.Inbox("me"); strings.Count(text, "cheap has spent") != 1 {
@@ -1451,7 +1451,7 @@ func TestAgentLimits(t *testing.T) {
 	}
 
 	// A turn's own budget goes to claude, which stops at it.
-	if got := ask("capped", "spend"); got != `(err {:cost 0.3 :kind :over-budget :message "the turn reached its $0.5 and stopped: Reached maximum budget ($0.5)" :outcome :stopped})` {
+	if got := ask("capped", "spend"); got != `(err {:cost 0.3 :kind :over-budget :message "the turn reached its $0.50 and stopped: Reached maximum budget ($0.5)" :outcome :stopped})` {
 		t.Errorf("spend = %s", got)
 	}
 
@@ -1691,7 +1691,7 @@ func TestAgentDelegateAsk(t *testing.T) {
 		t.Errorf("lead's ask left its inbox before helper answered:\n%s", text)
 	}
 	os.WriteFile(filepath.Join(agents, "helper", "go"), nil, 0o600)
-	want := `(ok "resume in lead: Task ` + task + `, which you started in an earlier turn, has ended: (ok \"new in helper: hold\"). Carry on with what it was for: your answer now goes to whoever asked you, as your answer to their message.")`
+	want := `(ok "resume in lead: Task ` + task + `, which you started in an earlier turn, has ended: (ok \"new in helper: hold\"). You have spent $0.01 in the last 24 hours, your own turns and what your tasks say they cost together, of your $5.00 a day. Carry on with what it was for: your answer now goes to whoever asked you, as your answer to their message.")`
 	if r, err := c.Message("wait", "", "["+asked+"]", ""); err != nil || r.Value != want {
 		t.Errorf("lead's answer = %+v %v\nwant %s", r, err, want)
 	}
@@ -1720,7 +1720,7 @@ func TestPipelineBuild(t *testing.T) {
 	// same.txt saying so too: two runs' same.txt don't merge. It notes its
 	// model, and what it found.
 	claude := `#!/bin/sh
-if [ "$1 $2 $3 $4" = "-p --strict-mcp-config --tools " ]; then cat >/dev/null; echo "VERDICT: approve"; exit 0; fi
+if [ "$1 $2 $3 $4" = "-p --strict-mcp-config --tools " ]; then cat >/dev/null; printf '%s\n' '{"type":"result","result":"Fine.\nVERDICT: approve","total_cost_usd":0.02}'; exit 0; fi
 cat >/dev/null
 if [ -e "$FAKE/hang" ]; then touch "$FAKE/hung"; sleep 30; touch "$FAKE/woke"; exit 0; fi
 case "$*" in *"--model haiku"*) m=haiku ;; *"--model"*) m=other ;; *) m=default ;; esac
@@ -1766,7 +1766,9 @@ echo done
 		}
 		return r.Value
 	}
-	if got := wait(build(`"main"`, "haiku")); !strings.HasPrefix(got, `(ok {:branch "whiff/1"`) || !strings.Contains(got, ":status :ready") {
+	// What the reviewer's JSON says it cost is the build's: the dev's says
+	// nothing, as it prints a summary.
+	if got := wait(build(`"main"`, "haiku")); !strings.HasPrefix(got, `(ok {:branch "whiff/1" :cost 0.02`) || !strings.Contains(got, ":status :ready") || !strings.Contains(got, `Fine.\nVERDICT: approve`) {
 		t.Fatalf("the first build = %s", got)
 	}
 	two, three := build(`"whiff/1"`, ""), build(`"whiff/1"`, "")

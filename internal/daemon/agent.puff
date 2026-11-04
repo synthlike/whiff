@@ -89,8 +89,11 @@
        [[(none) (ok js)] (vector/any? js (fn ({:id i}) (= (int/to-string i) last)))]
        [_ #f])]))
 
-; dollars is usd for people: $0.42.
-(def (dollars usd) (str "$" (float/to-string (float/div (float/round (* usd 100.0)) 100.0))))
+; dollars is usd for people, in cents: $0.42, $5.00.
+(def (dollars usd)
+  (let [cents (unwrap (int/from-float (float/round (* usd 100.0))))
+        c (int/rem cents 100)]
+    (str "$" (int/to-string (int/div cents 100)) "." (if (< c 10) "0" "") (int/to-string c))))
 
 ; spending are [time usd task] for the last 24 hours: each turn's, task
 ; "", and each task's its result said it cost, task its id.
@@ -274,16 +277,21 @@
     (vector/filter waiting
       (fn (m) (match m [{:fn :whiff/result :args [o _]} (= (turn-of o) by)] [_ #f])))))
 
-; child-cost spends what result r, of task, which a turn started, says it
-; cost: (ok {:cost usd ...}), as a pipeline build's, or another agent's
-; ask's that says so; anything else cost the agent nothing it knows of.
-(def (child-cost task r)
+; result-cost is what result r, of a task a turn started, says it cost:
+; (ok {:cost usd ...}), as a pipeline build's, or another agent's ask's
+; that says so; anything else cost the agent nothing it knows of: 0.0.
+(def (result-cost r)
   (match r
     [(ok m) when (= (value/type m) :map)
      (match (map/get m :cost)
-       [(some usd) when (and (vector/contains? [:int :float] (value/type usd)) (> (number usd) 0.0)) (spend (number usd) (int/to-string task))]
-       [_ (ok :done)])]
-    [_ (ok :done)]))
+       [(some usd) when (and (vector/contains? [:int :float] (value/type usd)) (> (number usd) 0.0)) (number usd)]
+       [_ 0.0])]
+    [_ 0.0]))
+
+; child-cost spends what result r, of task, says it cost, if anything.
+(def (child-cost task r)
+  (let [usd (result-cost r)]
+    (if (> usd 0.0) (spend usd (int/to-string task)) (ok :done))))
 
 ; result-text is a turn's text for results, inbox items of the tasks an
 ; earlier turn of the agent's started, for root. For an ask that waits,
@@ -294,7 +302,11 @@
                 (vector/map results
                   (fn ({:args [t r]}) (str "Task " (int/to-string t) ", which you started in an earlier turn, has ended: " (value/to-string r) ".")))
                 " ")
-        others (vector/filter (open-for root) (fn (o) (not (vector/contains? ids o))))]
+        others (vector/filter (open-for root) (fn (o) (not (vector/contains? ids o))))
+        ; What it has spent, with what these results cost, which it spends
+        ; as this turn starts: so a report of what the work cost has both.
+        usd (vector/reduce results (spent) (fn (sum {:args [_ r]}) (+ sum (result-cost r))))
+        ended (str ended " You have spent " (dollars usd) " in the last 24 hours, your own turns and what your tasks say they cost together, of your " (dollars day-usd) " a day.")]
     (match (asked root)
       [(some [a "ask"]) when (and (waits? a) (vector/empty? others))
        (str ended " Carry on with what it was for: your answer now goes to whoever asked you, as your answer to their message.")]

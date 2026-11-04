@@ -182,7 +182,7 @@
       (if (= diff "")
         (finish state n :failed "The developer changed nothing.")
         (let [input (str review-prompt "\n\nTask: " task "\n\nThe check " (check-text checked) (files-text (named dir task)) "\n\nThe diff:\n" diff)
-              id (try (submitted (call :jobs/run ["claude" "-p" "--strict-mcp-config" "--tools" "" "--no-session-persistence"]
+              id (try (submitted (call :jobs/run ["claude" "-p" "--strict-mcp-config" "--tools" "" "--no-session-persistence" "--output-format" "json"]
                                    {:stdin input :dir dir :as :text :timeout 10m})))]
           (ok (waiting (set-run state n {:checked checked :diff diff}) n :review id))))))
 
@@ -305,8 +305,19 @@
                    [(none) (map/get-or d :tool_name "a tool")])))]
       [_ []]))
 
-  ; dev-cost is what a dev turn cost, from out, its JSON result: 0.0 if
-  ; out isn't that.
+  ; review-text is the reviewer's review, from out, its JSON result; out
+  ; itself if it isn't that.
+  (def (review-text out)
+    (match (json/parse out)
+      [(ok res) when (= (value/type res) :map) (map/get-or res :result out)]
+      [_ out]))
+
+  (test "a review, from the reviewer's JSON, or as it is"
+    (= [(review-text "{\"result\":\"VERDICT: approve\",\"total_cost_usd\":0.02}") (review-text "VERDICT: approve")]
+      ["VERDICT: approve" "VERDICT: approve"]))
+
+  ; dev-cost is what a dev or reviewer turn cost, from out, its JSON
+  ; result: 0.0 if out isn't that.
   (def (dev-cost out)
     (match (json/parse out)
       [(ok res) when (= (value/type res) :map)
@@ -373,7 +384,7 @@
            [(err e) (finish state n :failed (failure "The check didn't run" round id e))])]
         [_
          (match r
-           [(ok text) (reviewed state n text)]
+           [(ok out) (reviewed (set-run state n {:cost (+ (map/get-or run :cost 0.0) (dev-cost out))}) n (review-text out))]
            [(err e) (finish state n :failed (failure "The reviewer failed" round id e))])])))
 
   ; stray is (ok (some pid)) if run's last job may still be running, in
@@ -470,7 +481,7 @@
     (begin state repo base task check #t {}))
 
   (ask (build repo base task check model)
-    "Runs task as start-on does, in the repository at repo, from base (a commit or branch, or a vector of them, merged), with the dev Claude on model (\"\" for the default): pending at once, and once the run ends (ok {:run :status :branch :dir :note :cost}), :status :ready, :gave-up or :failed, :cost what its dev turns cost in dollars. How an agent hands work to smaller ones and hears back.")
+    "Runs task as start-on does, in the repository at repo, from base (a commit or branch, or a vector of them, merged), with the dev Claude on model (\"\" for the default): pending at once, and once the run ends (ok {:run :status :branch :dir :note :cost}), :status :ready, :gave-up or :failed, :cost what its dev and reviewer turns cost in dollars. task's first sentence is the commit's subject, so it says what the run changes. How an agent hands work to smaller ones and hears back.")
 
   (on (whiff/asked state id) :update
     "A build waits in the inbox: its run starts now, unless it has. whiff's own; call build instead."
