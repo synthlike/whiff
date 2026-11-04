@@ -100,7 +100,13 @@ func TestTasks(t *testing.T) {
 		t.Errorf("the failed task's result, cut short = %s", r)
 	}
 
+	told := id(call("me/tell", `["done"]`))
 	view := call("tasks/view", "[]")
+	// One in your inbox is answered or dismissed, as Inbox has it, not
+	// cancelled.
+	if !strings.Contains(view, `{:actions [{:action [:me/answer `+told+`] :label "Dismiss"}]`) || strings.Contains(view, "[:tasks/cancel "+told+"]") {
+		t.Errorf("tasks/view's report in your inbox:\n%s", view)
+	}
 	for _, want := range []string{
 		`{:actions [{:action [:tasks/cancel ` + waiting + `] :label "Cancel"}] :detail "task ` + waiting + ` for you · just now" :label "waiting  :box/q 1"}`,
 		`{:action [:review/accept ` + held + `] :label "Accept"}`,

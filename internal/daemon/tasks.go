@@ -35,7 +35,7 @@ type task struct {
 	at       time.Time // when it began, or for one that ended, when it ended
 	reviewed bool      // you accepted it, or the chain it is in
 	result   puff.Value
-	held     *asked // one the review gate holds
+	asked    *asked // one held or waiting in an inbox
 	live     bool   // held: its sender is still here, so its session can be trusted
 	// attempts is how many times a job ran, of tries, as :retry allows.
 	attempts, tries int
@@ -57,9 +57,9 @@ func (d *daemon) tasks(keep func(task) bool, limit int, now time.Time) []task {
 	var open []task
 	d.do(func(st *state) {
 		for _, a := range st.asked {
-			t := task{id: a.id, from: a.from, to: a.addr, what: a.label(), status: "waiting", at: a.at, reviewed: a.reviewed, parent: a.task, began: a.at, fn: a.fn}
+			t := task{id: a.id, from: a.from, to: a.addr, what: a.label(), status: "waiting", at: a.at, reviewed: a.reviewed, parent: a.task, began: a.at, fn: a.fn, asked: a}
 			if a.addr == "review" {
-				t.to, t.status, t.held, t.live = a.to, "held", a, st.addrs[a.from] != nil
+				t.to, t.status, t.live = a.to, "held", st.addrs[a.from] != nil
 				if a.held != nil {
 					t.fn = a.held.fn
 				}
@@ -239,10 +239,10 @@ func (t task) value() puff.Value {
 // item is t as an item of :tasks/view: its state and what it does, then
 // its id, owner, who answered, when, its attempts, whether it may still
 // run, and its result; and what can be done
-// with it. One held has :review's actions; one waiting or running can be
-// cancelled, and a job's output read; one that ended shows its result
-// whole, and has the actions its result offers, as {:actions [...]} in its
-// (ok m) or (err m).
+// with it. One held has :review's actions, one in your inbox :me's; one
+// waiting elsewhere or running can be cancelled, and a job's output read;
+// one that ended shows its result whole, and has the actions its result
+// offers, as {:actions [...]} in its (ok m) or (err m).
 func (t task) item(now time.Time) puff.Value {
 	owner := "you"
 	if t.from != "" {
@@ -284,9 +284,15 @@ func (t task) item(now time.Time) puff.Value {
 	}
 	switch t.status {
 	case "held":
-		add(puff.Field(t.held.reviewItem(t.live), "actions"))
+		add(puff.Field(t.asked.reviewItem(t.live), "actions"))
 	case "waiting":
-		actions = append(actions, action("Cancel", "tasks/cancel"))
+		// One in your inbox is yours to answer or dismiss, as Inbox has it:
+		// cancelling it would tell its sender it was cancelled.
+		if t.asked.addr == "me" {
+			add(puff.Field(t.asked.meItem(), "actions"))
+		} else {
+			actions = append(actions, action("Cancel", "tasks/cancel"))
+		}
 	case "running":
 		actions = append(actions, action("Output", "jobs/output"), action("Cancel", "tasks/cancel"))
 	case "ended":
@@ -439,7 +445,7 @@ func (d *daemon) tasksService() *service {
 					return puff.Ok(puff.NewVector(vs...)), nil
 				}},
 			"view": {mark: puff.MarkRead, marked: true,
-				doc:    "(ok view): the tasks as list gives them, as items: one held has :review's actions, one waiting or running Cancel, a job Output too, and one that ended Result, and the actions its result offers, as {:actions [...]} in its (ok m) or (err m).",
+				doc:    "(ok view): the tasks as list gives them, as items: one held has :review's actions, one in your inbox :me's, one waiting elsewhere or running Cancel, a job Output too, and one that ended Result, and the actions its result offers, as {:actions [...]} in its (ok m) or (err m).",
 				native: view(all)},
 			"failed": {mark: puff.MarkRead, marked: true,
 				doc:    "(ok view): the tasks that failed in the last day, newest first, as view gives them: :failed, :interrupted, or a result's :status :failed or :gave-up; not those you cancelled or rejected.",
