@@ -298,7 +298,9 @@ func (d *daemon) tell(st *state, t ticket, by string, result puff.Value) bool {
 	if t.from != "" {
 		to = m.to(t.from)
 	}
-	st.record(entry{at: time.Now(), kind: m.kind(), id: m.id, cause: m.cause, user: m.user, from: by, to: to, args: m.args})
+	e := m.entry(time.Now(), to, "", "")
+	e.from = by
+	st.record(e)
 	return false
 }
 

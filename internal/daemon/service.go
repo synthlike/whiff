@@ -584,8 +584,9 @@ func (s *service) serve(ctx context.Context, m message) {
 		if gate == "" && s.d.forSession(st, s, m) {
 			gate = "for " + m.session
 		}
-		st.record(entry{at: begin, kind: m.kind(), id: m.id, cause: m.cause, user: m.user, from: m.from, to: m.to(s.name),
-			args: m.args, reply: r, took: time.Since(begin), gate: gate})
+		e := m.entry(begin, m.to(s.name), r, gate)
+		e.took = time.Since(begin)
+		st.record(e)
 		st.served(s, m, begin)
 	})
 	if m.reply != nil {
@@ -705,7 +706,7 @@ func (s *service) handle(ctx context.Context, m message) (reply string, faulted,
 	}
 	// An :update handler's state is committed before its reply is sent.
 	if update && t.Name() == "ok" {
-		if r, err = s.update(t.At(0), m.topic != "" || m.fn == "whiff/done" || m.fn == "whiff/asked" || m.fn == "whiff/cancelled"); err != nil {
+		if r, err = s.update(t.At(0), m.topic != "" || m.notice()); err != nil {
 			return fail("fault", "%s: %s: %v", pos, what, err)
 		}
 	}

@@ -99,6 +99,22 @@ func (m message) kind() string {
 	return "send"
 }
 
+// notice says whether m is whiff telling a service of something already
+// begun: a whiff/done, whiff/asked or whiff/cancelled.
+func (m message) notice() bool {
+	switch m.fn {
+	case "whiff/done", "whiff/asked", "whiff/cancelled":
+		return m.topic == ""
+	}
+	return false
+}
+
+// entry is m's entry in history, at at, delivered to, to, with its
+// reply and how the review gate let it through, if it did.
+func (m message) entry(at time.Time, to, reply, gate string) entry {
+	return entry{at: at, kind: m.kind(), id: m.id, cause: m.cause, user: m.user, from: m.from, to: to, args: m.args, reply: reply, gate: gate}
+}
+
 // to is what m is for at addr: addr/fn, or addr on :topic.
 func (m message) to(addr string) string {
 	if m.topic != "" {
@@ -249,7 +265,7 @@ func (d *daemon) put(st *state, addr string, m message) puff.Value {
 			res = puff.Errorf("full", ":%s's mailbox is full", addr)
 		}
 	}
-	st.record(entry{at: time.Now(), kind: m.kind(), id: m.id, cause: m.cause, user: m.user, from: m.from, to: m.to(addr), args: m.args, reply: puff.Print(res), gate: gate})
+	st.record(m.entry(time.Now(), m.to(addr), puff.Print(res), gate))
 	return res
 }
 
@@ -285,7 +301,7 @@ func (st *state) publish(m message) {
 		case s.mailbox <- m:
 		default:
 			res := puff.Errorf("full", ":%s's mailbox is full", addr)
-			st.record(entry{at: time.Now(), kind: m.kind(), id: m.id, cause: m.cause, user: m.user, from: m.from, to: m.to(addr), args: m.args, reply: puff.Print(res), gate: m.gate})
+			st.record(m.entry(time.Now(), m.to(addr), puff.Print(res), m.gate))
 		}
 	}
 }
