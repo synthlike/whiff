@@ -1964,7 +1964,7 @@ func TestJobReviewedChain(t *testing.T) {
   (on (plain) :write "A job." (call :jobs/run ["true"]))
   (on (model) :write "A model's job." (call :jobs/run ["true"] {:origin :agent}))
   (on (whiff/done id r) "Writes, as its job ended." (call :writer/w (int/to-string id))))`,
-		"writer": `(service writer (on (w name) :write "Writes a file." (file/write name "x")))`,
+		"writer": `(service writer (on (w name) :write "Writes a file." (file/write (path/join "` + dir + `" name) "x")))`,
 	})
 	start(t, dir)
 	a := dial(t, dir)
