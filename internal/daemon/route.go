@@ -228,7 +228,7 @@ func (d *daemon) put(st *state, addr string, m message) puff.Value {
 	// An agent session's mode may let its message through, as accepted.
 	if !m.user && !m.reviewed && st.lets(m.from, addr) {
 		m.reviewed = true
-		if s := st.addrs[addr]; s != nil && m.topic == "" && (&marker{base: d.base, services: st.addrs}).msgMark(s, m) == puff.MarkWrite {
+		if s := st.addrs[addr]; s != nil && m.topic == "" && d.markerOn(st).msgMark(s, m) == puff.MarkWrite {
 			m.gate = st.modeOf(m.from).name()
 		}
 	}
@@ -504,9 +504,7 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 					return nil, fmt.Errorf("want a topic like :git/changed, got %s", puff.Print(args[0]))
 				}
 				if what, ok := puff.ReadOnly(c.Ctx); ok {
-					mk := d.marker()
-					mk.seen = map[string]bool{}
-					if mk.topic(string(topic)) == puff.MarkWrite {
+					if d.marker().topic(string(topic)) == puff.MarkWrite {
 						return nil, fmt.Errorf(":%s has :write subscribers, and %s is :read", topic, what)
 					}
 				}

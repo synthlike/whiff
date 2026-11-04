@@ -182,7 +182,7 @@ func (d *daemon) actedOn(addr string, m message, msg puff.Vector) {
 	var ids []int64
 	d.do(func(st *state) {
 		s := st.addrs[addr]
-		if s == nil || (&marker{base: d.base, services: st.addrs}).msgMark(s, m) != puff.MarkWrite {
+		if s == nil || d.markerOn(st).msgMark(s, m) != puff.MarkWrite {
 			return
 		}
 		for _, a := range st.inbox("me") {

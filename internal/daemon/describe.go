@@ -30,7 +30,7 @@ type marker struct {
 	// is :read, as it goes through as accepted.
 	trusted map[string]bool
 
-	seen map[string]bool
+	seen map[string]bool // what this walk has visited: see visit
 	// strict leaves out :read claims: what a function reaches whatever its
 	// handlers say, for overrides and the backstop (see service.handle).
 	strict bool
@@ -52,16 +52,35 @@ func (d *daemon) marker() *marker {
 	return mk
 }
 
+// markerOn is a marker over the address table as it is, on the route
+// goroutine.
+func (d *daemon) markerOn(st *state) *marker {
+	return &marker{base: d.base, services: st.addrs}
+}
+
+// visit says whether key, a handler or subscriber, is new to this walk,
+// and marks it seen.
+func (mk *marker) visit(key string) bool {
+	if mk.seen[key] {
+		return false
+	}
+	if mk.seen == nil {
+		mk.seen = map[string]bool{}
+	}
+	mk.seen[key] = true
+	return true
+}
+
 // mark is the mark of s's handler fn.
 func (mk *marker) mark(s *service, fn string) puff.Mark {
-	mk.seen, mk.strict, mk.why = map[string]bool{}, false, nil
+	mk.seen, mk.strict, mk.why = nil, false, nil
 	return mk.node(s, fn)
 }
 
 // reaches is the mark of s's handler fn, or of its subscriber to topic
 // if fn is "", with every :read claim left out.
 func (mk *marker) reaches(s *service, fn, topic string) puff.Mark {
-	mk.seen, mk.strict, mk.why = map[string]bool{}, true, nil
+	mk.seen, mk.strict, mk.why = nil, true, nil
 	if fn == "" {
 		return mk.sub(s, s.subs[topic])
 	}
@@ -100,11 +119,9 @@ func (mk *marker) node(s *service, name string) puff.Mark {
 	case ok && h.update:
 		return mk.updates(h.pos)
 	}
-	key := s.name + "/" + name
-	if mk.seen[key] {
+	if !mk.visit(s.name + "/" + name) {
 		return puff.MarkRead
 	}
-	mk.seen[key] = true
 	return mk.forms(s, s.code[name])
 }
 
@@ -198,7 +215,7 @@ func (d *daemon) evalMark(env *puff.Env, from string, forms []*puff.Form) puff.M
 		}
 	}
 	mk := d.marker()
-	mk.base, mk.seen = env, map[string]bool{}
+	mk.base = env
 	d.do(func(st *state) {
 		if m := st.modeOf(from); m != nil {
 			mk.trusted = maps.Clone(m.trust)
@@ -211,11 +228,9 @@ func (d *daemon) evalMark(env *puff.Env, from string, forms []*puff.Form) puff.M
 func (mk *marker) topic(name string) puff.Mark {
 	for _, s := range mk.services {
 		sub, ok := s.subs[name]
-		key := s.name + " on :" + name
-		if !ok || mk.seen[key] {
+		if !ok || !mk.visit(s.name+" on :"+name) {
 			continue
 		}
-		mk.seen[key] = true
 		if mk.sub(s, sub) == puff.MarkWrite {
 			return puff.MarkWrite
 		}
@@ -372,7 +387,7 @@ func (mk *marker) ls() string {
 		}
 		for _, topic := range slices.Sorted(maps.Keys(s.subs)) {
 			sub := s.subs[topic]
-			mk.seen, mk.strict = map[string]bool{}, false
+			mk.seen, mk.strict = nil, false
 			fmt.Fprintf(tw, "  on :%s (%s)\t%s\n", topic, sub.param, mk.forms(s, sub.body))
 		}
 		warnings = append(warnings, mk.missing(s)...)

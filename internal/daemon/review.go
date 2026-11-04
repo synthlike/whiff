@@ -36,7 +36,7 @@ func (d *daemon) gated(st *state, s *service, m message) bool {
 	if from := st.addrs[m.from]; s.name == "jobs" && m.fn == "run" && from != nil && from.agent {
 		return false
 	}
-	mk := &marker{base: d.base, services: st.addrs}
+	mk := d.markerOn(st)
 	return mk.msgMark(s, m) == puff.MarkWrite
 }
 
@@ -48,7 +48,7 @@ func (d *daemon) forSession(st *state, s *service, m message) bool {
 	if m.user || !m.reviewed || m.session == "" || m.from == m.session {
 		return false
 	}
-	mk := &marker{base: d.base, services: st.addrs, seen: map[string]bool{}}
+	mk := d.markerOn(st)
 	if m.topic != "" {
 		return mk.sub(s, s.subs[m.topic]) == puff.MarkWrite
 	}
@@ -64,7 +64,7 @@ func (d *daemon) publishGated(m message) puff.Value {
 	r := puff.Done
 	d.do(func(st *state) {
 		if !m.user && !m.reviewed {
-			mk := &marker{base: d.base, services: st.addrs, seen: map[string]bool{}}
+			mk := d.markerOn(st)
 			write := mk.topic(m.topic) == puff.MarkWrite
 			switch {
 			case st.lets(m.from, ""):
