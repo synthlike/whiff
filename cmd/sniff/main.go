@@ -438,21 +438,37 @@ func (s *server) events(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// addresses answers every address with its functions: [{"address" "client"
-// "state" "fns": [{"fn" "params" "doc" "mark" "form"}]}].
-func (s *server) addresses(w http.ResponseWriter, r *http.Request) {
+// answerJSON answers with what answer gives over a connection to the
+// daemon, as JSON: 503 if there is none, code if answer fails.
+func (s *server) answerJSON(w http.ResponseWriter, code int, answer func(c *rpc.Client) (any, error)) {
 	c, err := s.dial()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
 	defer c.Close()
-	out, err := describeAll(c)
+	v, err := answer(c)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		http.Error(w, err.Error(), code)
 		return
 	}
-	writeJSON(w, out)
+	writeJSON(w, v)
+}
+
+// addressParam is r's ?address, without its colon; ok is false, and r
+// answered 400, if it isn't an address.
+func addressParam(w http.ResponseWriter, r *http.Request) (name string, ok bool) {
+	name, ok = keyword(r.URL.Query().Get("address"))
+	if !ok {
+		http.Error(w, "want an address", http.StatusBadRequest)
+	}
+	return name, ok
+}
+
+// addresses answers every address with its functions: [{"address" "client"
+// "state" "fns": [{"fn" "params" "doc" "mark" "form"}]}].
+func (s *server) addresses(w http.ResponseWriter, r *http.Request) {
+	s.answerJSON(w, http.StatusBadGateway, func(c *rpc.Client) (any, error) { return describeAll(c) })
 }
 
 // describeAll is every address with its functions, as addresses answers.
@@ -479,109 +495,81 @@ func describeAll(c *rpc.Client) ([]any, error) {
 // state answers the address's state, (service/state :address)'s Result as a
 // tree.
 func (s *server) state(w http.ResponseWriter, r *http.Request) {
-	name := strings.TrimPrefix(r.URL.Query().Get("address"), ":")
-	if k, err := puff.ReadValue(":" + name); err != nil || name == "" || !puff.Equal(k, puff.Keyword(name)) {
-		http.Error(w, "want an address", http.StatusBadRequest)
+	name, ok := addressParam(w, r)
+	if !ok {
 		return
 	}
-	c, err := s.dial()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
-		return
-	}
-	defer c.Close()
-	v, err := c.EvalValue("(service/state "+puff.Print(puff.Keyword(name))+")", "")
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-	writeJSON(w, treeOf(puff.Print(v)))
+	s.answerJSON(w, http.StatusBadGateway, func(c *rpc.Client) (any, error) {
+		v, err := c.EvalValue("(service/state "+puff.Print(puff.Keyword(name))+")", "")
+		if err != nil {
+			return nil, err
+		}
+		return treeOf(puff.Print(v)), nil
+	})
 }
 
 // services answers whiff services, service/list, as plain JSON: each
 // service file {"service", "agent", "status", "note"}, what needs you
 // first.
 func (s *server) services(w http.ResponseWriter, r *http.Request) {
-	c, err := s.dial()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
-		return
-	}
-	defer c.Close()
-	v, err := c.EvalOk("(service/list)")
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-	writeJSON(w, plain(v))
+	s.answerJSON(w, http.StatusBadGateway, func(c *rpc.Client) (any, error) {
+		v, err := c.EvalOk("(service/list)")
+		if err != nil {
+			return nil, err
+		}
+		return plain(v), nil
+	})
 }
 
 // service answers whiff services name, service/status, as plain JSON:
 // times, dollars and durations as puff prints them. 404 for no service.
 func (s *server) service(w http.ResponseWriter, r *http.Request) {
-	name := strings.TrimPrefix(r.URL.Query().Get("address"), ":")
-	if k, err := puff.ReadValue(":" + name); err != nil || name == "" || !puff.Equal(k, puff.Keyword(name)) {
-		http.Error(w, "want an address", http.StatusBadRequest)
+	name, ok := addressParam(w, r)
+	if !ok {
 		return
 	}
-	c, err := s.dial()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
-		return
-	}
-	defer c.Close()
-	v, err := c.EvalOk("(service/status " + puff.Print(puff.Keyword(name)) + ")")
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
-		return
-	}
-	st := plain(v)
-	// An agent's work: each result as {"ok": bool, "value": ...}, for the
-	// page to say how it came back.
-	if m, ok := v.(puff.Map); ok {
-		if work, ok := m.Get(puff.Keyword("work")); ok {
+	s.answerJSON(w, http.StatusNotFound, func(c *rpc.Client) (any, error) {
+		v, err := c.EvalOk("(service/status " + puff.Print(puff.Keyword(name)) + ")")
+		if err != nil {
+			return nil, err
+		}
+		st := plain(v)
+		// An agent's work: each result as {"ok": bool, "value": ...}, for
+		// the page to say how it came back.
+		if work, ok := puff.Field(v, "work").(puff.Vector); ok {
 			items := st.(map[string]any)["work"].([]any)
-			for i := range work.(puff.Vector).Len() {
-				it, _ := work.(puff.Vector).At(i).(puff.Map)
-				if r, ok := it.Get(puff.Keyword("result")); ok {
-					if tag, ok := r.(puff.Tag); ok && tag.Len() == 1 {
-						items[i].(map[string]any)["result"] = map[string]any{"ok": tag.Name() == "ok", "value": plain(tag.At(0))}
-					}
+			for i := range work.Len() {
+				if tag, ok := puff.Field(work.At(i), "result").(puff.Tag); ok && tag.Len() == 1 {
+					items[i].(map[string]any)["result"] = map[string]any{"ok": tag.Name() == "ok", "value": plain(tag.At(0))}
 				}
 			}
 		}
-	}
-	writeJSON(w, st)
+		return st, nil
+	})
 }
 
 // session answers what the agent session address did, as whiff session
 // shows it: {"entries": [...], "summary": "agent/3: 2 writes went through ..."}.
 func (s *server) session(w http.ResponseWriter, r *http.Request) {
-	name := strings.TrimPrefix(r.URL.Query().Get("address"), ":")
-	if k, err := puff.ReadValue(":" + name); err != nil || name == "" || !puff.Equal(k, puff.Keyword(name)) {
-		http.Error(w, "want an address", http.StatusBadRequest)
+	name, ok := addressParam(w, r)
+	if !ok {
 		return
 	}
-	c, err := s.dial()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
-		return
-	}
-	defer c.Close()
-	es, err := c.History()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-	got, summary := rpc.Session(es, name)
-	out := struct {
-		Entries []json.RawMessage `json:"entries"`
-		Summary string            `json:"summary"`
-	}{Entries: []json.RawMessage{}, Summary: summary}
-	for _, e := range got {
-		out.Entries = append(out.Entries, entryJSON(e))
-	}
-	writeJSON(w, out)
+	s.answerJSON(w, http.StatusBadGateway, func(c *rpc.Client) (any, error) {
+		es, err := c.History()
+		if err != nil {
+			return nil, err
+		}
+		got, summary := rpc.Session(es, name)
+		out := struct {
+			Entries []json.RawMessage `json:"entries"`
+			Summary string            `json:"summary"`
+		}{Entries: []json.RawMessage{}, Summary: summary}
+		for _, e := range got {
+			out.Entries = append(out.Entries, entryJSON(e))
+		}
+		return out, nil
+	})
 }
 
 // view answers what target, address/fn, answers called as you with args, a
