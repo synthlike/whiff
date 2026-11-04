@@ -153,7 +153,7 @@ subscribers and private `def`s. An agent is a file too, `(agent name
 {:turn usd :day usd :time d}] [:every d])`, which whiff runs as a service
 of its own turn loop (`internal/daemon/agent.puff`): `tell`, whose answer
 lands in `:me`'s inbox, `ask`, whose answer goes back to whoever asked,
-`forget`, `usage`, `stop`, `pause` and `resume`, a `wake` with
+`forget`, `usage`, `stop`, `cancel`, `restart`, `pause` and `resume`, a `wake` with
 `:every`, and `later d note`, its turns' own tool: a turn of its own once
 `d` has passed, with the note, kept in its home so a restart or reload
 sets it again. `later` is `:read`, as all it adds is a turn, which is
@@ -162,7 +162,13 @@ inbox, and only one wake, as the next is set as one is taken. `stop` ends
 the turn running now; `cancel` ends all it is doing: it pauses the agent,
 stops its turn and cancels the tasks its turns handed out (`session/cancel`),
 so their services stop the work begun for them and the cancelled results
-wait for you to resume it. Tells, asks,
+wait for you to resume it. A turn isn't run again on its own once it ran,
+as its tools may have written: one claude didn't start, as its session had
+begun, is taken again at once, resuming it; one that failed after it
+started leaves you why, with a Restart the turn action (`restart turn`),
+a new turn of the same conversation given the message, why it failed and
+the tasks it had started, so it carries on instead of doing them twice.
+A task that failed is retried by its service, as pipeline's Retry. Tells, asks,
 wakes and laters, and the results of what its turns started, are all asks of the agent, so they wait in its inbox while a turn
 runs and take turns oldest first; your reply to an answer is a tell. Its turns are held
 to `:limits`, $1 and 10 minutes a turn and $5 a day unless it says

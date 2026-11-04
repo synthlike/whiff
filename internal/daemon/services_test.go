@@ -414,6 +414,7 @@ case "$msg" in spend)
   exit 1 ;;
 esac
 case "$msg" in slow) sleep 1 ;; fail) echo "it broke" >&2; exit 1 ;; hold) while [ ! -e go ]; do sleep 0.02; done ;; esac
+case "$mode $msg" in "new inuse") echo "Error: Session ID $(cat last-id) is already in use." >&2; exit 1 ;; esac
 answer "$mode in $(basename "$PWD"): $msg"
 `
 	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(fake), 0o700); err != nil {
@@ -508,8 +509,8 @@ func TestAssistantService(t *testing.T) {
 		t.Fatal(err)
 	}
 	tell("fail")
-	inboxed(`:assistant -> :me/tell "I couldn't answer: {:exit 1 :kind :exit :message \"job `)
-	inboxed(` exited 1\" :stderr \"it broke\\n\"}"`)
+	inboxed(`:assistant -> :me/tell "I couldn't answer: job `)
+	inboxed(` exited 1: it broke\n\nWhat the turn did before it failed stays done.`)
 	// hello's and the second were replied to and too soon's dismissed:
 	// slow's, meanwhile's and fail's wait.
 	if text, _ := c.Inbox("me"); strings.Count(text, ":assistant -> ") != 3 {
@@ -1993,11 +1994,14 @@ func TestJobReviewedChain(t *testing.T) {
 	}, "true")
 }
 
-// TestAgentCancel cancels lead while its turn runs and a build it handed
-// pipeline has its dev running: the turn stops, the build is cancelled and
-// so is the run begun for it, its dev killed; and lead is paused, so the
-// cancelled build's result waits for you rather than starting a turn.
-func TestAgentCancel(t *testing.T) {
+// leadBuilding starts lead, trusted with pipeline/build, and a turn of
+// its that hands pipeline a build, whose dev runs until killed: what it
+// gives is an eval, the build's task id and the fake's directory, where
+// the dev notes "dev" as it starts and "dev-woke" if it ends on its own,
+// lead "turns" and each turn's message in "msg". Lead's turn holds until
+// $FAKE/die, then exits 1.
+func leadBuilding(t *testing.T) (eval func(string) string, build, fake string) {
+	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("no git")
 	}
@@ -2006,20 +2010,22 @@ func TestAgentCancel(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := tempDir(t)
-	fake, bin := filepath.Join(dir, "fake"), filepath.Join(dir, "bin")
+	fake = filepath.Join(dir, "fake")
+	bin := filepath.Join(dir, "bin")
 	os.Mkdir(fake, 0o700)
 	os.Mkdir(bin, 0o700)
-	// The dev notes it started and sleeps; lead keeps its token, holds,
-	// and counts its turns.
 	claude := `#!/bin/sh
 case "$*" in
 *"acceptEdits"*) cat >/dev/null; touch "$FAKE/dev"; sleep 30; touch "$FAKE/dev-woke"; echo done; exit 0 ;;
 esac
-cat >/dev/null
+cat > "$FAKE/msg"
 echo "$WHIFF_SESSION" > token
 echo turn >> "$FAKE/turns"
-sleep 30
-printf '{"type":"result","subtype":"success","is_error":false,"result":"done","total_cost_usd":0.01}\n'
+case "$(cat "$FAKE/msg")" in "build it")
+  i=0; while [ ! -e "$FAKE/die" ] && [ $i -lt 1500 ]; do sleep 0.02; i=$((i+1)); done
+  echo "the API went away" >&2; exit 1 ;;
+esac
+printf '{"type":"result","subtype":"success","is_error":false,"result":"carried on","total_cost_usd":0.01}\n'
 `
 	os.WriteFile(filepath.Join(bin, "claude"), []byte(claude), 0o700)
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -2044,7 +2050,7 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"done","t
 			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
 	}
-	eval := func(code string) string {
+	eval = func(code string) string {
 		t.Helper()
 		r, err := c.Eval(code, "")
 		if err != nil {
@@ -2055,10 +2061,6 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"done","t
 	if r, err := c.Mode("agent/lead", "trusted", []string{"pipeline"}, 0); err != nil || r.Value != "(ok :done)" {
 		t.Fatalf("trust = %+v %v", r, err)
 	}
-	if got := eval(`(call :lead/cancel)`); got != "(ok {:tasks [] :turn :none})" {
-		t.Errorf("cancel with nothing going = %s", got)
-	}
-	eval(`(call :lead/resume)`)
 	eval(`(call :lead/tell "build it")`)
 	home := filepath.Join(dir, ".whiff", "agents", "lead")
 	var tok string
@@ -2076,10 +2078,18 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"done","t
 	if !strings.HasPrefix(r.Value, "(err {:id ") {
 		t.Fatalf("build = %+v", r)
 	}
-	build := strings.Fields(strings.TrimPrefix(r.Value, "(err {:id "))[0]
+	build = strings.Fields(strings.TrimPrefix(r.Value, "(err {:id "))[0]
 	turn.Close()
 	eventually(t, "the dev starts", func() string { _, err := os.Stat(filepath.Join(fake, "dev")); return fmt.Sprint(err == nil) }, "true")
+	return eval, build, fake
+}
 
+// TestAgentCancel cancels lead while its turn runs and a build it handed
+// pipeline has its dev running: the turn stops, the build is cancelled and
+// so is the run begun for it, its dev killed; and lead is paused, so the
+// cancelled build's result waits for you rather than starting a turn.
+func TestAgentCancel(t *testing.T) {
+	eval, build, fake := leadBuilding(t)
 	got := eval(`(call :lead/cancel)`)
 	if !strings.HasPrefix(got, "(ok {:tasks ["+build+"] :turn ") || strings.Contains(got, ":turn :none") {
 		t.Fatalf("cancel = %s, want the build and the turn", got)
@@ -2099,5 +2109,93 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"done","t
 	}
 	if _, err := os.Stat(filepath.Join(fake, "dev-woke")); err == nil {
 		t.Error("the cancelled run's dev ran on")
+	}
+	if got := eval(`(call :lead/cancel)`); got != "(ok {:tasks [] :turn :none})" {
+		t.Errorf("cancel with nothing going = %s", got)
+	}
+}
+
+// TestAgentRestartTasks has lead's turn fail once it handed pipeline a
+// build: it isn't run again on its own, and restarting it tells the new
+// turn why and that the build is still going, so it doesn't start another.
+func TestAgentRestartTasks(t *testing.T) {
+	eval, build, fake := leadBuilding(t)
+	os.WriteFile(filepath.Join(fake, "die"), nil, 0o600)
+	inbox := func() string {
+		return eval(`(match (call :me/inbox) [(ok v) (value/to-string v)] [e e])`)
+	}
+	var turn string
+	eventually(t, "the failure", func() string {
+		m := regexp.MustCompile(`:lead/restart (\d+)`).FindStringSubmatch(inbox())
+		if m == nil {
+			return "no restart offered: " + inbox()
+		}
+		turn = m[1]
+		return "offered"
+	}, "offered")
+	time.Sleep(200 * time.Millisecond)
+	if turns, _ := os.ReadFile(filepath.Join(fake, "turns")); strings.Count(string(turns), "turn") != 1 {
+		t.Fatalf("lead took %d turns before you restarted it, want 1", strings.Count(string(turns), "turn"))
+	}
+	if got := eval(`(call :lead/restart ` + turn + `)`); got != "(ok :restarting)" {
+		t.Fatalf("restart = %s", got)
+	}
+	eventually(t, "the restarted turn", func() string {
+		return fmt.Sprint(strings.Count(func() string { b, _ := os.ReadFile(filepath.Join(fake, "turns")); return string(b) }(), "turn"))
+	}, "2")
+	msg, _ := os.ReadFile(filepath.Join(fake, "msg"))
+	for _, want := range []string{"the API went away", "The tasks it started: " + build + " to :pipeline, still waiting", "don't start them again", "The message was:\n\nbuild it"} {
+		if !strings.Contains(string(msg), want) {
+			t.Errorf("the restarted turn got:\n%s\nwant it to say %q", msg, want)
+		}
+	}
+}
+
+// TestAgentRestart has a turn that claude doesn't start, as its session
+// had begun, taken again on its own, resuming it; and one that fails once
+// it ran left for you, with an action that restarts it, telling the new
+// turn what the failed one was given.
+func TestAgentRestart(t *testing.T) {
+	dir := tempDir(t)
+	fakeClaude(t, dir)
+	writeServices(t, dir, map[string]string{"fixer": `(agent fixer :prompt "Fix.")`})
+	start(t, dir)
+	c := dial(t, dir)
+	eval := func(src string) string {
+		r, _ := c.Eval(src, "")
+		return r.Value + r.Error
+	}
+	inbox := func() string { text, _ := c.Inbox("me"); return text }
+
+	// Nothing ran: taken again at once, as a resumed session.
+	eval(`(call :fixer/tell "inuse")`)
+	eventually(t, "the retaken turn", func() string { return fmt.Sprint(strings.Contains(inbox(), "resume in fixer: inuse")) }, "true")
+	if strings.Contains(inbox(), "lost") {
+		t.Errorf("the inbox says the message was lost:\n%s", inbox())
+	}
+
+	// It ran and failed: you hear why, with a restart.
+	eval(`(call :fixer/tell "fail")`)
+	var turn string
+	eventually(t, "the failure", func() string {
+		m := regexp.MustCompile(`:fixer/restart (\d+)`).FindStringSubmatch(inbox())
+		if m == nil {
+			return "no restart offered:\n" + inbox()
+		}
+		turn = m[1]
+		return "offered"
+	}, "offered")
+	if !strings.Contains(inbox(), "I couldn't answer: job "+turn+" exited 1") {
+		t.Errorf("the failure says:\n%s", inbox())
+	}
+	if got := eval(`(call :fixer/restart ` + turn + `)`); got != "(ok :restarting)" {
+		t.Fatalf("restart = %s", got)
+	}
+	eventually(t, "the restarted turn", func() string {
+		return fmt.Sprint(strings.Contains(inbox(), "resume in fixer: Your turn on the message below was cut off") &&
+			strings.Contains(inbox(), "The message was:"))
+	}, "true")
+	if got := eval(`(call :fixer/restart ` + turn + `)`); !strings.HasPrefix(got, "(err {:kind :no-turn") {
+		t.Errorf("a second restart = %s, want :no-turn", got)
 	}
 }

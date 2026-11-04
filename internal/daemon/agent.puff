@@ -26,6 +26,8 @@
 (def costs (path/join home "costs"))          ; "time usd" for each turn, the last 24 hours'
 (def paused-file (path/join home "paused"))   ; "paused" while it takes no turns
 (def later-file (path/join home "later"))     ; [{:id :due :note}], the turns it set itself with later
+(def current-file (path/join home "current")) ; {:turn :text}, the last turn started and what it was given
+(def failed-file (path/join home "failed"))   ; [{:turn :text :why}], the last turns that failed, which restart takes again
 (def day-usd (unwrap (map/get limits :day)))
 (def turn-usd (unwrap (map/get limits :turn)))
 (def system (str "You are " name ", " """
@@ -315,7 +317,8 @@
                     [[_ [t]] t]
                     [_ wake-text])]
          (match (start text)
-           [(ok t) (do (vector/each batch
+           [(ok t) (do (try (file/write-atomic current-file (value/to-string {:turn t :text text})))
+                     (vector/each batch
                          (fn ({:id m}) (try (file/append asks (str t " " (int/to-string m) " " (keyword/name f) (if (= root "") "" (str " " root)) "\n")))))
                      (ok :thinking))]
            [(err e) (do (reply i (err e)) (ok :refused))]))])))
@@ -348,22 +351,79 @@
             (if (vector/empty? (open-for root))
               (let [_ (reply-ask (unwrap (int/from-string ra)) o)] (done))
               (do (begun) (done)))]
-           [_ (let [_ (answered o #t)] (done))]))]
+           [_ (let [_ (answered turn o #t)] (done))]))]
       ; answered's is your inbox's pending: what the sender hears is reply's.
-      ["tell" (let [_ (answered o #t)] (reply i (match o [(ok _) (ok :told)] [e e])))]
-      [_ (let [_ (answered o #t)] (reply i (ok :done)))])))
+      ["tell" (let [_ (answered turn o #t)] (reply i (match o [(ok _) (ok :told)] [e e])))]
+      [_ (let [_ (answered turn o #t)] (reply i (ok :done)))])))
 
-; answered leaves a turn's answer in your inbox, unless it is "nothing"
-; and quiet, as a tell's, a wake's or a result's may be.
-(def (answered r quiet)
+; answered leaves turn's answer r in your inbox, unless it is "nothing"
+; and quiet, as a tell's, a wake's or a result's may be. A turn that
+; claude didn't start, as its session had begun, ran nothing: it is taken
+; again, resuming the session, once. One that failed once it ran may have
+; done some of its work, so it isn't run again on its own: you hear why,
+; and may restart it.
+(def (answered turn r quiet)
   (match r
     [(ok answer) when (and quiet (= (string/lower (string/trim answer)) "nothing"))
      (do (begun) (ok :done))]
     [(ok answer) (do (begun) (call :me/tell (string/trim answer)))]
     [(err {:kind :exit :stderr e}) when (string/contains? e "already in use")
      (do (begun)
-       (call :me/tell "My session had already begun, so that message was lost; please send it again."))]
-    [(err e) (call :me/tell (string/concat "I couldn't answer: " (value/to-string e)))]))
+       (match (current turn)
+         [(some text) (send :tell text)]
+         [(none) (call :me/tell "My session had already begun, so that message was lost; please send it again.")]))]
+    [(err e) (failed-turn turn e)]))
+
+; current is the text turn was given, if it is the last turn started.
+(def (current turn)
+  (match (value/from-string (read-file current-file))
+    [(ok {:turn t :text text}) when (= t turn) (some text)]
+    [_ (none)]))
+
+; failed-turns are the turns that failed which restart may take again,
+; [{:turn :text :why}], the last 10.
+(def (failed-turns) (or-else (value/from-string (read-file failed-file)) []))
+
+(def (set-failed fs)
+  (file/write-atomic failed-file (value/to-string (vector/slice fs (max 0 (- (vector/length fs) 10)) (vector/length fs)))))
+
+; failed-turn tells you turn failed with e, offering to restart it: not
+; one you cancelled, nor one the budget stopped, which would only stop
+; again, nor one whose text is gone.
+(def (failed-turn turn e)
+  (let [stderr (string/trim (map/get-or e :stderr ""))
+        why (str (map/get-or e :message (value/to-string e))
+              (match (vector/last (string/lines stderr)) [(some l) when (not (= l "")) (str ": " l)] [_ ""]))
+        say (str "I couldn't answer: " why)]
+    (match [(map/get-or e :kind :none) (current turn)]
+      [[:cancelled _] (call :me/tell say)]
+      [[:over-budget _] (call :me/tell say)]
+      [[_ (some text)]
+       (do (try (set-failed (vector/append (failed-turns) {:turn turn :text text :why why})))
+         (call :me/tell (str say "\n\nWhat the turn did before it failed stays done. Restarting it takes its message again, telling me what it had started, so I carry on rather than do it twice.")
+           {:actions [{:label "Restart the turn" :action [(unwrap (keyword/from-string (str name "/restart"))) (unwrap (int/from-string turn))]}]}))]
+      [_ (call :me/tell say)])))
+
+; started-by says what turn, a failed one, had started: each task of the
+; agent's work today whose turn it was, with how it stands.
+(def (started-by turn)
+  (let [work (match (service/status (self)) [(ok s) (map/get-or s :work [])] [_ []])
+        mine (vector/filter work (fn ({:id i}) (= (turn-of i) turn)))]
+    (if (vector/empty? mine)
+      "It started no tasks that whiff kept; calls that answered at once may have run, so check before writing anything again."
+      (str "The tasks it started: "
+        (string/join (vector/map mine
+                       (fn (w) (str (int/to-string (unwrap (map/get w :id))) " to " (value/to-string (unwrap (map/get w :to)))
+                                 ", " (match (map/get w :result)
+                                        [(some r) (str "ended " (value/to-string r))]
+                                        [(none) (str "still " (keyword/name (map/get-or w :status :waiting)))]))))
+          "; ")
+        ". Their results come to you as messages of their own; don't start them again."))))
+
+(def (restart-text turn why text)
+  (str "Your turn on the message below was cut off before it finished: " why
+    ". What it did stays done. " (started-by turn)
+    " Look back at what you did in that turn, and carry on from where it stopped.\n\nThe message was:\n\n" text))
 
 (ask (tell text)
   "Leaves the agent a message: pending at once, its answer in your inbox, and (ok :told) for the sender when its turn ends. Messages wait their turn, oldest first.")
@@ -394,6 +454,16 @@
                   (let [j (unwrap (int/from-string last))] (do (or-else (call :jobs/cancel j) :gone) j))]
                  [_ :none])]
       (ok {:turn turn :tasks (unwrap (session/cancel))}))))
+
+(on (restart turn)
+  "Takes turn, one that failed once it ran, again as a new turn of the same conversation: it gets the message it had, why it failed and the tasks it had started, so it carries on rather than does them twice. Its answer comes to your inbox, as a tell's. (ok :restarting); (err {:kind :no-turn}) for a turn that didn't fail so, or was restarted."
+  (let [i (if (= (value/type turn) :int) (int/to-string turn) turn)]
+    (match (vector/find (failed-turns) (fn ({:turn t}) (= t i)))
+      [(some {:why why :text text})
+       (let [_ (try (set-failed (vector/filter (failed-turns) (fn ({:turn t}) (not (= t i))))))
+             _ (send :tell (restart-text i why text))] ; pending: a tell waits its turn
+         (ok :restarting))]
+      [(none) (err {:kind :no-turn :message (str "turn " i " didn't fail once it ran, or was restarted already")})])))
 
 (on (pause)
   "Pauses the agent: it takes no more turns, and messages wait in its inbox until you resume it; a turn running now ends as it would. Scheduled wakes don't pile up: the next is set as one is taken."
@@ -440,7 +510,7 @@
        (let [o (outcome i r)]
          (match (asked i)
            [(some [a k]) (finished i a k o)]
-           [(none) (answered o #f)]))] ; a turn from before tells queued
+           [(none) (answered i o #f)]))] ; a turn from before tells queued
       ; Your reply to an answer is a tell, which waits its turn.
       [_ (match r
            [(ok text) when (= (value/type text) :string) (send :tell text)]
