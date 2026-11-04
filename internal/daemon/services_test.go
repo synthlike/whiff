@@ -1691,7 +1691,7 @@ func TestAgentDelegateAsk(t *testing.T) {
 		t.Errorf("lead's ask left its inbox before helper answered:\n%s", text)
 	}
 	os.WriteFile(filepath.Join(agents, "helper", "go"), nil, 0o600)
-	want := `(ok "resume in lead: Task ` + task + `, which you started in an earlier turn, has ended: (ok \"new in helper: hold\"). You have spent $0.01 in the last 24 hours, your own turns and what your tasks say they cost together, of your $5.00 a day. Carry on with what it was for: your answer now goes to whoever asked you, as your answer to their message.")`
+	want := `(ok "resume in lead: Task ` + task + `, which you started in an earlier turn, has ended: (ok \"new in helper: hold\"). Carry on with what it was for: your answer now goes to whoever asked you, as your answer to their message.")`
 	if r, err := c.Message("wait", "", "["+asked+"]", ""); err != nil || r.Value != want {
 		t.Errorf("lead's answer = %+v %v\nwant %s", r, err, want)
 	}

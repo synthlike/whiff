@@ -302,11 +302,7 @@
                 (vector/map results
                   (fn ({:args [t r]}) (str "Task " (int/to-string t) ", which you started in an earlier turn, has ended: " (value/to-string r) ".")))
                 " ")
-        others (vector/filter (open-for root) (fn (o) (not (vector/contains? ids o))))
-        ; What it has spent, with what these results cost, which it spends
-        ; as this turn starts: so a report of what the work cost has both.
-        usd (vector/reduce results (spent) (fn (sum {:args [_ r]}) (+ sum (result-cost r))))
-        ended (str ended " You have spent " (dollars usd) " in the last 24 hours, your own turns and what your tasks say they cost together, of your " (dollars day-usd) " a day.")]
+        others (vector/filter (open-for root) (fn (o) (not (vector/contains? ids o))))]
     (match (asked root)
       [(some [a "ask"]) when (and (waits? a) (vector/empty? others))
        (str ended " Carry on with what it was for: your answer now goes to whoever asked you, as your answer to their message.")]
