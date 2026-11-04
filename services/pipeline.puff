@@ -296,10 +296,13 @@
           note (str note (refused-text (map/get-or (run-of state n) :denied [])))]
       ; :me/tell answers pending, as it waits in your inbox.
       (do (if quiet :quiet (or-else (call :me/tell (str "pipeline " n ", " task ": " (keyword/name status) ". " note) {:actions (actions n status branch from)}) :told))
-        ; A build's asker hears how it ended.
+        ; A build's asker hears how it ended, with what can be done about
+        ; it, which :tasks shows you; an agent asker may take one only if
+        ; its :can reaches it, as lead's doesn't.
         (match (map/get (run-of state n) :asker)
           [(some a) (or-else (reply a (ok {:run n :status status :branch branch :dir dir :note note
-                                           :cost (map/get-or (run-of state n) :cost 0.0)})) :gone)]
+                                           :cost (map/get-or (run-of state n) :cost 0.0)
+                                           :actions (actions n status branch from)})) :gone)]
           [(none) :none])
         (heard (publish :pipeline/done {:run n :status status :branch branch :dir dir :note note :from from}))
         ; After :pipeline/done, so a planner hears of the end first.
@@ -494,7 +497,7 @@
     (begin state repo base task check #t {}))
 
   (ask (build repo base task check model)
-    "Runs task as start-on does, in the repository at repo, from base (a commit or branch, or a vector of them, merged), with the dev Claude on model (\"\" for the default): pending at once, and once the run ends (ok {:run :status :branch :dir :note :cost}), :status :ready, :gave-up or :failed, :cost what its dev and reviewer turns cost in dollars. How an agent hands work to smaller ones and hears back.")
+    "Runs task as start-on does, in the repository at repo, from base (a commit or branch, or a vector of them, merged), with the dev Claude on model (\"\" for the default): pending at once, and once the run ends (ok {:run :status :branch :dir :note :cost :actions}), :status :ready, :gave-up or :failed, :cost what its dev and reviewer turns cost in dollars, :actions what you can do about it, as Merge or Retry. How an agent hands work to smaller ones and hears back.")
 
   (on (whiff/asked state id) :update
     "A build waits in the inbox: its run starts now, unless it has. whiff's own; call build instead."

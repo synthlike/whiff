@@ -1767,8 +1767,9 @@ echo done
 		return r.Value
 	}
 	// What the reviewer's JSON says it cost is the build's: the dev's says
-	// nothing, as it prints a summary.
-	if got := wait(build(`"main"`, "haiku")); !strings.HasPrefix(got, `(ok {:branch "whiff/1" :cost 0.02`) || !strings.Contains(got, ":status :ready") || !strings.Contains(got, `Fine.\nSUBJECT: Add the file\nVERDICT: approve`) {
+	// nothing, as it prints a summary. It offers what can be done with it,
+	// as :tasks shows you.
+	if got := wait(build(`"main"`, "haiku")); !strings.Contains(got, `{:action [:pipeline/merge 1] :label "Merge whiff/1"}] :branch "whiff/1" :cost 0.02`) || !strings.Contains(got, ":status :ready") || !strings.Contains(got, `Fine.\nSUBJECT: Add the file\nVERDICT: approve`) {
 		t.Fatalf("the first build = %s", got)
 	}
 	// Its commit's subject is the reviewer's SUBJECT; its body the task.
