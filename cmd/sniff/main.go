@@ -533,19 +533,37 @@ func (s *server) service(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return nil, err
 		}
-		st := plain(v)
-		// An agent's work: each result as {"ok": bool, "value": ...}, for
-		// the page to say how it came back.
-		if work, ok := puff.Field(v, "work").(puff.Vector); ok {
-			items := st.(map[string]any)["work"].([]any)
-			for i := range work.Len() {
-				if tag, ok := puff.Field(work.At(i), "result").(puff.Tag); ok && tag.Len() == 1 {
-					items[i].(map[string]any)["result"] = map[string]any{"ok": tag.Name() == "ok", "value": plain(tag.At(0))}
-				}
-			}
-		}
-		return st, nil
+		return statusJSON(v), nil
 	})
+}
+
+// statusJSON is service/status's value v as the page gets it: plain, with
+// an agent's work's results as {"ok": bool, "value": ...}, for the page to
+// say how each came back, and each action's message printed, as a form
+// sends it.
+func statusJSON(v puff.Value) any {
+	st := plain(v)
+	work, ok := puff.Field(v, "work").(puff.Vector)
+	if !ok {
+		return st
+	}
+	items := st.(map[string]any)["work"].([]any)
+	for i := range work.Len() {
+		item := items[i].(map[string]any)
+		if tag, ok := puff.Field(work.At(i), "result").(puff.Tag); ok && tag.Len() == 1 {
+			item["result"] = map[string]any{"ok": tag.Name() == "ok", "value": plain(tag.At(0))}
+		}
+		if as, ok := puff.Field(work.At(i), "actions").(puff.Vector); ok {
+			out := make([]any, as.Len())
+			for j := range as.Len() {
+				a := plain(as.At(j)).(map[string]any)
+				a["action"] = puff.Print(puff.Field(as.At(j), "action"))
+				out[j] = a
+			}
+			item["actions"] = out
+		}
+	}
+	return st
 }
 
 // session answers what the agent session address did, as whiff session

@@ -806,11 +806,70 @@ function stepList(steps) {
   return ol;
 }
 
+// workActions are what can be done with a task of an agent's work, each
+// {label, action, ask}, action printed, as service/status gives them: a
+// :read one, as Result or Show review and diff, is a link to its page, a
+// tab; a :write one, as Merge or Retry, a button that sends it as you,
+// with a box for your answer first if it asks, then shows what it
+// answered and calls then.
+function workActions(actions, then) {
+  const box = el("span", "work-actions");
+  const said = el("span", "work-said hint");
+  const send = async (b, action, answer) => {
+    b.disabled = true;
+    const body = new URLSearchParams({ action });
+    if (answer !== undefined) body.set("answer", answer);
+    try {
+      const r = await fetch("api/call", { method: "POST", body });
+      if (!r.ok) throw new Error((await r.text()).trim());
+      const reply = await r.json();
+      said.textContent = print(reply);
+      said.classList.toggle("bad", kindOf(reply) !== "ok");
+      if (then) setTimeout(then, 1500);
+    } catch (err) {
+      said.textContent = err.message;
+      said.classList.add("bad");
+      b.disabled = false;
+    }
+  };
+  for (const a of actions || []) {
+    const m = /^\[:(\S+?)(?: (.*))?\]$/.exec(a.action);
+    if (!m) continue;
+    const [, target, rest = ""] = m;
+    if (marks.get(target) === "read") {
+      const link = el("a", "work-act", a.label);
+      link.href = "/view/" + encodeURI(target) + (rest ? "?args=" + encodeURIComponent("[" + rest + "]") : "");
+      link.title = "opens " + a.action + " as a tab";
+      box.append(link);
+    } else if (a.ask) {
+      const d = el("details", "work-act");
+      const form = el("form");
+      const input = el("input");
+      input.placeholder = a.ask;
+      input.setAttribute("aria-label", a.ask);
+      const go = el("button", "", "Send");
+      form.append(input, go);
+      form.onsubmit = (ev) => { ev.preventDefault(); send(go, a.action, input.value); };
+      d.append(el("summary", "", a.label), form);
+      d.title = "sends " + a.action + " as you, with your answer";
+      box.append(d);
+    } else {
+      const b = el("button", "work-act", a.label);
+      b.type = "button";
+      b.title = "sends " + a.action + " as you";
+      b.onclick = () => send(b, a.action);
+      box.append(b);
+    }
+  }
+  box.append(said);
+  return box;
+}
+
 // workList is an agent's work, newest first: one row a task, and under
 // it the jobs it led to, the steps of a pipeline run, as whiff keeps them;
 // for a task from before whiff kept them, as history has them. Its id
 // shows its whole chain in Activity.
-function workList(work) {
+function workList(work, then) {
   const ol = el("ol", "svc-work");
   for (const w of [...work].reverse()) {
     const [who, how] = workText(w);
@@ -821,6 +880,7 @@ function workList(work) {
     id.title = "show its chain in Activity";
     id.onclick = () => showOnly(w.id);
     li.append(id, el("span", "work-to", who), el("span", "work-how", how), el("span", "hint", ago(w.at)));
+    if (w.actions?.length) li.append(workActions(w.actions, then));
     const steps = w.children?.length ? stepsIn(w.children) : stepsOf(w.id);
     if (steps === null) li.append(el("span", "work-gone hint", "its steps are older than sniff's history"));
     else if (steps.length) li.append(stepList(steps));
@@ -853,7 +913,7 @@ async function fillStatus(box, name) {
     const dl = el("dl");
     for (const [k, v] of serviceLines(st)) dl.append(el("dt", "", k), el("dd", "", v));
     box.replaceChildren(head, dl);
-    if (st.work?.length) box.append(el("h4", "", "Work"), workList(st.work));
+    if (st.work?.length) box.append(el("h4", "", "Work"), workList(st.work, () => fillStatus(box, name)));
     // An agent pauses and resumes here, as you, and is cancelled while it
     // works: its turn and what it handed out.
     if (st.agent) {

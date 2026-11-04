@@ -1550,7 +1550,7 @@ func TestAgentDelegate(t *testing.T) {
 	}
 	// Under each, the helper's turn that answered it: its job, whose
 	// parent the ask is.
-	if !regexp.MustCompile(`\{:at \S+ :children \[\{:at \S+ :began \S+ :children \[\] :cmd \["claude" .* :from :helper :id \d+ :parent ` + task + ` `).MatchString(work) {
+	if !regexp.MustCompile(`\{:actions \[\{:action \[:tasks/result ` + task + `\] :label "Result"\}\] :at \S+ :children \[\{:at \S+ :began \S+ :children \[\] :cmd \["claude" .* :from :helper :id \d+ :parent ` + task + ` `).MatchString(work) {
 		t.Errorf("lead's work, with what each began = %s", work)
 	}
 	if text, _ := c.Inbox("review"); strings.Contains(text, "jobs/run") {

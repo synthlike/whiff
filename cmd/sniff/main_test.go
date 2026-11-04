@@ -663,3 +663,18 @@ func TestReview(t *testing.T) {
 		t.Errorf("your add after = %s", got)
 	}
 }
+
+// TestStatusJSON gives the page an agent's work with each result as ok
+// and value, and each action's message printed, as a form sends it.
+func TestStatusJSON(t *testing.T) {
+	v, err := puff.ReadValue(`{:status :idle :work [{:id 7 :to :pipeline :status :ended :result (ok {:status :failed :run 3})
+  :actions [{:label "Result" :action [:tasks/result 7]} {:label "Retry with a note" :action [:pipeline/retry 3] :ask "A note"}]}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(statusJSON(v))
+	want := `{"status":"idle","work":[{"actions":[{"action":"[:tasks/result 7]","label":"Result"},{"action":"[:pipeline/retry 3]","ask":"A note","label":"Retry with a note"}],"id":7,"result":{"ok":true,"value":{"run":3,"status":"failed"}},"status":"ended","to":"pipeline"}]}`
+	if string(b) != want {
+		t.Errorf("statusJSON =\n%s, want\n%s", b, want)
+	}
+}
