@@ -169,7 +169,7 @@ func TestStateOf(t *testing.T) {
 		}
 	}
 	resp, err := c.Eval(`(address/list)`, "")
-	want := `(ok [{:address :counter :client #f :state #t} {:address :hiss :client #t :state #f} {:address :jobs :client #f :state #f} {:address :me :client #f :state #f} {:address :plain :client #f :state #f} {:address :review :client #f :state #f} {:address :tasks :client #f :state #f}])`
+	want := `(ok [{:address :counter :client #f :state #t} {:address :hiss :client #t :state #f} {:address :jobs :client #f :state #f} {:address :me :client #f :state #f} {:address :plain :client #f :state #f} {:address :review :client #f :state #f} {:address :tasks :client #f :state #f} {:address :timers :client #f :state #f}])`
 	if err != nil || resp.Value != want {
 		t.Errorf("(address/list) = %+v %v, want %s", resp, err, want)
 	}

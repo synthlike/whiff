@@ -443,7 +443,9 @@ nothing missed between the snapshot and the stream.
   that set them: a reload drops them, and so does a restart if the service
   has a `:start`, which sets the ones it needs, so a loop doesn't double. A
   one-off timer a service with a `:start` set for itself goes too, and
-  history says how many.
+  history says how many. `:timers`, whiff's own address, lists the timers
+  waiting (`list`, and `view` with Cancel, beside Tasks in sniff), and
+  `cancel id`, yours, deletes one: a timer fires only while it is stored.
 - A message that waited through a restart keeps its origin, sender,
   session and chain, as ids, message ids in history and agent numbers are
   never given out twice. Its `:expires` counts from when it arrived. What waits for an address that

@@ -167,12 +167,16 @@ type kept struct {
 // k, the message name is handling, handled: so a restart gives again only a
 // message whose effect on the state was lost.
 func (d *daemon) storeState(name, p string, k kept) error {
-	return d.db.Update(func(tx *bbolt.Tx) error {
+	err := d.db.Update(func(tx *bbolt.Tx) error {
 		if err := tx.Bucket(stateBucket).Put([]byte(name), []byte(p)); err != nil {
 			return err
 		}
 		return k.handled(tx, name)
 	})
+	if err == nil && k.timer != "" {
+		d.timersChanged()
+	}
+	return err
 }
 
 // handled marks k handled by owner, which isn't given it again. One that
@@ -180,6 +184,8 @@ func (d *daemon) storeState(name, p string, k kept) error {
 func (d *daemon) handled(owner string, k kept) {
 	err := d.db.Update(func(tx *bbolt.Tx) error { return k.handled(tx, owner) })
 	switch {
+	case err == nil && k.timer != "":
+		d.timersChanged()
 	case err == nil:
 	case k.task != 0:
 		fmt.Fprintf(d.log, "whiff: the result of task %d may come to :%s again: %v\n", k.task, owner, err)
@@ -777,6 +783,7 @@ func (d *daemon) keepTimer(t *timer) error {
 	})
 	if err == nil {
 		t.key = key
+		d.timersChanged()
 	}
 	return err
 }
@@ -791,6 +798,7 @@ func (d *daemon) forgetTimer(t *timer) {
 	if err != nil {
 		fmt.Fprintf(d.log, "whiff: a timer for :%s stays stored: %v\n", t.m.to(t.addr), err)
 	}
+	d.timersChanged()
 }
 
 // arm delivers t when it is due. In a mailbox, its message stays stored
@@ -821,6 +829,10 @@ func (d *daemon) arm(t *timer, stop, placed <-chan struct{}) {
 			case <-d.ctx.Done():
 				return
 			}
+		}
+		// Cancelled, it is no longer stored.
+		if !d.stillSet(t) {
+			return
 		}
 		m := t.m
 		m.kept.timer = string(t.key)

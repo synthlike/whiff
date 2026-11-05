@@ -113,7 +113,7 @@ func Run(ctx context.Context, dir, services string) error {
 	}
 	d.wg.Go(d.route)
 	// whiff's own addresses: see own.
-	for _, s := range []*service{d.jobsService(), d.meService(), d.reviewService(), d.tasksService()} {
+	for _, s := range []*service{d.jobsService(), d.meService(), d.reviewService(), d.tasksService(), d.timersService()} {
 		d.do(func(st *state) { st.addrs[s.name] = s })
 		d.wg.Go(func() { s.run(ctx) })
 	}

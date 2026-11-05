@@ -157,6 +157,10 @@ func TestLs(t *testing.T) {
   (tree id)    :read   (ok node): task id, as list gives it, with :began, a job's :cmd, each argument cut to 80 characters, the :cost a claude's JSON output says, and :children, the tasks its work began, as an agent's turn or a pipeline build's jobs, each a node, oldest first. (err {:kind :no-id}) if it isn't open and didn't end in the last day.
   (view)       :read   (ok view): the tasks as list gives them, as items: one held has :review's actions, one in your inbox :me's, one waiting elsewhere or running Cancel, a job Watch too, and one that ended Result, and the actions its result offers, as {:actions [...]} in its (ok m) or (err m).
   (watch id)   :read   (ok view): running job id's output as items, its last 200 lines, oldest first, claude -p's stream-json read as steps: began, says, thinks, calls, answer or error, and ended or failed with its cost; following :jobs/<id>, which a job with :stream #t publishes each line on, as an agent's turns and pipeline's devs do. One not running, its item as view gives it, after how its claude turn ended. (err {:kind :no-id}) if it isn't open and didn't end in the last day.
+:timers
+  (cancel id)  :write  Cancel timer id, so it never sends its message: :done, or (err {:kind :no-id}) if none waits. One firing as you cancel it may still be delivered. A service's timers to itself that its :start sets, as an agent's :every and later notes, come back when it loads again.
+  (list)       :read   (ok timers): every send-after waiting for its time, soonest first, each {:id :to :fn :args :due :from}: what it sends to whom, when, and who set it (none for you). An agent's :every and its later notes are timers too.
+  (view)       :read   (ok view): the timers as list gives them, as items, soonest first, each with Cancel; following :timers/changed, which is published as one is set, fires or is cancelled.
 read-only commands (internal/puff/commands.go): ` + strings.Join(puff.ReadOnlyCommands(), ", ") + `
 override: ` + files + `:4:3: :files/status is marked :read, but reaches proc/run at 4:61
 warning: ` + greet + `:5:15: :nobody/x doesn't exist

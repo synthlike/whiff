@@ -1714,7 +1714,7 @@ function drawPicks() {
         [`${a.fns.length} function${a.fns.length === 1 ? "" : "s"}`, a.state && "state", a.client && "client", fault && "fault"].filter(Boolean).join(" · ")));
       return pick([what], "", () => go(() => { activate(null); showAddress(a.address); }), true);
     })]);
-    const views = [...new Set(["/view/review/pending", "/view/me/inbox", "/view/tasks/view", "/view/tasks/failed", ...pins, ...tabs.map((t) => t.href)])];
+    const views = [...new Set(["/view/review/pending", "/view/me/inbox", "/view/tasks/view", "/view/tasks/failed", "/view/timers/view", ...pins, ...tabs.map((t) => t.href)])];
     groups.push(["Views", [
       ...(hits("activity") ? [pick([el("span", "", "Activity")], "", () => go(() => activate(null)), true)] : []),
       ...first(views, titleOf).map((href) => pick([el("code", "", titleOf(href))], "opens a tab", () => go(() => openTab(href)), true)),
