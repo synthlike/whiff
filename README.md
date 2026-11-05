@@ -54,8 +54,9 @@ whiff session agent/1      # everything the session wrote, and how
 
 - **Services** keep state, subscribe to topics, run long jobs, and mark each
   function `:read` or `:write`. [services/](services/README.md) has the ones
-  in daily use: `git`, `gh`, `todo`, an `assistant` agent, and `plan` +
-  `pipeline`, Claude building a goal task by task.
+  in daily use: `git`, `gh`, `todo`, an `assistant` agent, `plan` +
+  `pipeline`, Claude building a goal task by task, and `board` + `lead`, an
+  agent that splits a goal into tickets and has a team build them.
 - **Views**: a function can answer with items, a board or file locations.
   The CLI prints them for fzf (`whiff call todo/view | fzf | whiff act`);
   sniff shows them as pages with buttons.
@@ -63,20 +64,37 @@ whiff session agent/1      # everything the session wrote, and how
 Docs: [use cases](docs/use-cases.md) · [procs](docs/procs.md) ·
 [design](docs/design.md) · [tasks](docs/tasks.md) · [stdlib](docs/stdlib.md)
 
+## sniff
+
+`sniff` opens whiff in a browser. Activity shows each request as a card:
+what it asked, who answered, what it cost, and every message it caused, as
+steps or as lanes:
+
+![Activity: a lead's build of a small Go tool, in lanes](docs/images/sniff-activity.png)
+
+The Map draws who talks to whom, one band a project, with the project's team
+and what it spent today:
+
+![Map: the wordy project's band](docs/images/sniff-map.png)
+
+The Board shows what is being built in a project, ticket by ticket, beside
+the team that builds it:
+
+![Board: wordy's tickets and team](docs/images/sniff-board.png)
+
 ## Status
 
-v0.6. whiff survives a restart: service state, inboxes, the review queue,
-timers, task results and 30 days of history are in `~/.whiff/whiff.db`. Work
-has one id from submission to result, and every failure says its `:outcome`:
-not started, stopped, or unknown, when a job may still be running after a
-crash. Jobs retry with `:retry n` (a write only if `:idempotent`), errors
-offer the next step as actions, and `procs` runs dev servers and containers
-as jobs. puff gains `use` for shared code and faults that point at their
-cause.
+v0.7. Agents live in whiff: `(agent name :prompt :model :can [...])` gives
+one a mailbox, whiff's functions as tools and `:limits` in dollars and time.
+An agent can queue work, pause, set itself a turn for later, and hand parts
+of a goal to others; their results come back to it as one turn, also after
+a restart. Work belongs to a project, the repository it runs in: `:board`
+plans a project's tickets and builds them through `pipeline`, with a team
+of models per role, a check, a cap on runs at once and a budget a day. sniff
+shows it all as Activity, the Map and the Board.
 
-v0.7 will focus on resident agents and bounded delegation: an agent that
-queues work, hands parts of it to others and comes back with a result after
-an interruption.
+Next: a lead that plans the whole goal before building, a budget that counts
+the lead's own turns, and asking the lead from sniff.
 
 ## Inspirations
 
