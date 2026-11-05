@@ -422,7 +422,11 @@ chain. A chain is in a **project** once a job in it runs in a git
 repository: the repository's folder name, a worktree's being its
 repository's. Its messages from then on carry it, as does the session of
 an agent's turn run there, so `project:tally` finds them and sniff marks
-each card with its project, a click showing only that project's.
+each card with its project, a click showing only that project's. On
+the Map each project is a band, holding the addresses two thirds of
+whose messages are its work, under a shared band of what several use;
+a band folds into one box, and an arrow from one project's band into
+another's is drawn dashed, as work that crosses projects.
 History is stored in whiff.db for 30 days; clients get the last
 1000 entries, and `whiff history -f` and sniff follow it live, with
 nothing missed between the snapshot and the stream.

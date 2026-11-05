@@ -478,6 +478,18 @@ svg.map { display: block; max-width: 100%; height: auto; font-family: var(--sans
 .map .edge.err path:not(.hit) { stroke: var(--err); }
 .map .edge.fault path:not(.hit) { stroke: var(--fault); }
 .map .edge:hover path:not(.hit) { stroke: var(--accent); }
+.map .edge.cross path:not(.hit) { stroke: var(--err); stroke-dasharray: 7 4; }
+.map .edge.cross .edge-label { fill: var(--err); }
+.map .band rect { fill: color-mix(in srgb, var(--select) 22%, transparent); stroke: var(--line); }
+.map .band.shared rect { fill: none; stroke-dasharray: 4 4; }
+.map .band-name { font: 600 13px var(--mono); fill: var(--accent); }
+.map .band.shared .band-name { fill: var(--muted); font-weight: 500; }
+.map .band-name.link, .map .band-caret { cursor: pointer; }
+.map .band-name.link:hover { text-decoration: underline; }
+.map .band-caret { font-size: 11px; fill: var(--muted); }
+.map .band-sub { font-size: 11.5px; fill: var(--muted); }
+.map .node.band-node rect { fill: color-mix(in srgb, var(--select) 60%, var(--panel)); stroke: var(--accent); stroke-dasharray: 5 3; }
+.map .node.band-node .node-name { fill: var(--accent); }
 .map .edge-label { font: 11px var(--mono); fill: var(--muted); paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round; }
 .map .edge.err .edge-label { fill: var(--err); }
 .map .edge.fault .edge-label { fill: var(--fault); }

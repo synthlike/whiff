@@ -157,7 +157,7 @@ function took(ms) {
 }
 
 const home = (s) => s.replace(/\/(Users|home)\/[^/\s"]+\//g, "~/");
-const plural = (n, what) => `${n} ${what}${n === 1 ? "" : "s"}`;
+const plural = (n, what, many = what + "s") => `${n} ${n === 1 ? what : many}`;
 
 // isDone says whether e answers a pending, [id result]: a done, or the
 // whiff/result an agent hears of what its turn started.
@@ -602,14 +602,46 @@ const fitting = new ResizeObserver((es) => { for (const e of es) fitLabels(e.tar
 // thick as how often, amber or red if some failed. Answers and whiff's
 // notices go without saying. Click a box for the address, an arrow for
 // its messages.
-function mapEl(is) {
+function mapEl(is, projAt, perProject) {
   const edges = new Map(), first = new Map(), handled = new Map();
   const answered = new Set(); // what answered something, as one that is gone once did
+  const drawn = (e) => !(e.kind === "note" || isDone(e) || e.to?.endsWith("/whiff/asked"));
+  // Bands: an address is in a project's band when two thirds of the
+  // messages it sent or got are of that project's requests, so one that
+  // another project reaches into stays in its own, and the arrow in shows
+  // as crossing; one used as much by several, or by none, as you and
+  // :jobs, is shared. A band folded is one box, "#project".
+  const tally = new Map(); // address → project ("" for none) → messages
+  const inBand = (x, p) => {
+    const t = tally.get(x) || tally.set(x, new Map()).get(x);
+    t.set(p, (t.get(p) || 0) + 1);
+  };
+  for (const i of is) {
+    const e = entries[i];
+    if (!drawn(e)) continue;
+    inBand(placeOf(from(e)), projAt.get(i) || "");
+    if (e.kind !== "eval") inBand(placeOf(to(e)), projAt.get(i) || "");
+  }
+  const bandOf = new Map();
+  for (const [x, t] of tally) {
+    const all = [...t.values()].reduce((a, b) => a + b, 0);
+    const [p, n] = [...t].sort((a, b) => b[1] - a[1])[0];
+    bandOf.set(x, n * 3 >= all * 2 ? p : "");
+  }
+  bandOf.set("client", "");
+  if (bandOf.has("me")) bandOf.set("me", "");
+  const members = new Map();
+  for (const [x, b] of bandOf) if (b) members.set(b, (members.get(b) || 0) + 1);
+  const folded = (x) => {
+    const b = bandOf.get(x);
+    return b && foldedBands.has(b) ? "#" + b : x;
+  };
+  for (const b of members.keys()) bandOf.set("#" + b, b);
   for (const i of is) {
     const e = entries[i];
     if (e.kind !== "note" && e.to && e.reply && field(e.reply.v?.[0], "kind")?.v !== "no-address") answered.add(placeOf(to(e)));
-    if (e.kind === "note" || isDone(e) || e.to?.endsWith("/whiff/asked")) continue;
-    const a = placeOf(from(e)), b = e.kind === "eval" ? a : placeOf(to(e));
+    if (!drawn(e)) continue;
+    const a = folded(placeOf(from(e))), b = e.kind === "eval" ? a : folded(placeOf(to(e)));
     for (const x of [a, b]) if (!first.has(x)) first.set(x, i);
     const key = a + "\t" + b;
     if (!edges.has(key)) edges.set(key, { a, b, from: from(e), to: e.kind === "eval" ? from(e) : to(e), n: 0, err: 0, fault: 0, pub: true, last: i });
@@ -663,12 +695,29 @@ function mapEl(is) {
     cols[d].sort((x, y) => at(x) - at(y) || first.get(x) - first.get(y));
     cols[d].forEach((x, r) => row.set(x, r));
   }
-  const NW = 168, NH = 44, CG = 120, RG = 30, PAD = 24;
+  const NW = 168, NH = 44, CG = 120, RG = 30, PAD = 24, HEAD = 34, GAP = 22;
   const pos = new Map();
-  // Room on the left for what goes around a column.
-  cols.forEach((col, d) => (col || []).forEach((x, r) => pos.set(x, { x: PAD + 70 + d * (NW + CG), y: PAD + r * (NH + RG) })));
   const W = PAD * 2 + 70 + cols.length * (NW + CG) - CG + 60;
-  const H = PAD * 2 + Math.max(...cols.map((c) => c?.length || 0)) * (NH + RG) - RG + 50;
+  // A band a project, under the shared one, in the order they first
+  // show; each column's rows in it in the order above. Without projects,
+  // no bands.
+  const bands = ["", ...[...members.keys()].sort((p, q) => Math.min(...[...first.keys()].filter((x) => bandOf.get(x) === p).map((x) => first.get(x)))
+    - Math.min(...[...first.keys()].filter((x) => bandOf.get(x) === q).map((x) => first.get(x))))];
+  const banded = bands.length > 1;
+  const bandsG = svgEl("g");
+  let top = PAD;
+  for (const b of bands) {
+    const nodes = cols.map((col) => col.filter((x) => (bandOf.get(x) || "") === b));
+    const n = Math.max(0, ...nodes.map((c) => c.length));
+    if (!n && !b) continue;
+    const y0 = top + (banded ? HEAD : 0);
+    // Room on the left for what goes around a column.
+    nodes.forEach((col, d) => col.forEach((x, r) => pos.set(x, { x: PAD + 70 + d * (NW + CG), y: y0 + r * (NH + RG) })));
+    const h = (banded ? HEAD : 0) + n * (NH + RG) - RG + (banded ? 16 : 0);
+    if (banded) bandsG.append(bandEl(b, PAD - 12, top - 8, W - 2 * PAD + 24, h + 8, perProject.get(b), members.get(b) || 0));
+    top += h + GAP + (banded ? 0 : 28);
+  }
+  const H = top + 28;
   const svg = svgEl("svg", { class: "map", viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": "Who talks to whom" });
   const edgesG = svgEl("g"), nodesG = svgEl("g");
   // Ports: a node's arrows on to the next columns leave its right side
@@ -713,15 +762,27 @@ function mapEl(is) {
       const bez = (a, b, c, e) => u * u * u * a + 3 * u * u * t * b + 3 * u * t * t * c + t * t * t * e;
       mid = [bez(x0, x1, x2, x3), bez(y0, y1, y2, y3)];
     }
-    const g = svgEl("g", { class: "edge" + (ed.fault ? " fault" : ed.err ? " err" : "") + (ed.pub ? " pub" : "") });
-    g.dataset.query = `from:${ed.from} to:${ed.to}`;
+    // From one project's band to another's: work that crosses projects.
+    const ba = bandOf.get(ed.a), bb = bandOf.get(ed.b), cross = ba && bb && ba !== bb;
+    const g = svgEl("g", { class: "edge" + (ed.fault ? " fault" : ed.err ? " err" : "") + (ed.pub ? " pub" : "") + (cross ? " cross" : "") });
+    g.dataset.query = [ed.a.startsWith("#") ? "" : `from:${ed.from}`, ed.b.startsWith("#") ? "" : `to:${ed.to}`].filter(Boolean).join(" ") || `from:${ed.from}`;
     g.append(svgEl("path", { d, class: "hit" }), svgEl("path", { d, "stroke-width": 1.2 + Math.min(4, Math.log2(ed.n)), "marker-end": "url(#ah)" }));
     const bad = ed.fault ? ` · ${ed.fault} faulted` : ed.err ? ` · ${ed.err} failed` : "";
     g.append(svgEl("text", { x: mid[0], y: mid[1] - 4, "text-anchor": "middle", class: "edge-label" }, ed.n + bad));
-    g.append(svgEl("title", {}, `${placeName(ed.a)} → ${placeName(ed.b)}: ${plural(ed.n, ed.pub ? "publish" : "message")}${bad}\nlast: ${arrowLabel(entries[ed.last]).slice(0, 120)}\nclick to show them`));
+    g.append(svgEl("title", {}, (cross ? `crosses from ${ba} to ${bb}: work of one project sent to another's\n` : "") + `${placeName(ed.a)} → ${placeName(ed.b)}: ${plural(ed.n, ed.pub ? "publish" : "message")}${bad}\nlast: ${arrowLabel(entries[ed.last]).slice(0, 120)}\nclick to show them`));
     edgesG.append(g);
   }
   for (const [x, p] of pos) {
+    if (x.startsWith("#")) {
+      const b = x.slice(1), g = svgEl("g", { class: "node band-node" });
+      g.dataset.band = b;
+      g.append(svgEl("rect", { x: p.x, y: p.y, width: NW, height: NH, rx: 8 }),
+        svgEl("text", { x: p.x + 14, y: p.y + 20, class: "node-name" }, b.slice(0, 20)),
+        svgEl("text", { x: p.x + 14, y: p.y + 35, class: "node-sub" }, `project · ${plural(members.get(b), "address", "addresses")}`),
+        svgEl("title", {}, `${b}, folded: click to unfold its addresses`));
+      nodesG.append(g);
+      continue;
+    }
     const st = services.get(x), fault = faulted.has(x) && !st;
     const cls = x === "client" ? "you" : fault ? "fault" : st ? statusClass(st.status) : "";
     const g = svgEl("g", { class: "node " + (cls || "quiet") + (isAgent(x) ? " agent" : "") + (x === shownAddress ? " selected" : "") });
@@ -746,11 +807,42 @@ function mapEl(is) {
         : placeName(x) + (st?.note ? ": " + st.note : "") + "\nclick for its functions, status and state"));
     nodesG.append(g);
   }
-  svg.append(edgesG, nodesG);
+  svg.append(bandsG, edgesG, nodesG);
   const box = el("div", "map-box");
   box.append(svg, el("p", "hint map-hint", (showBg ? "Every message shown" : "The requests shown, not the background") +
     ": click an address for its details, an arrow for its messages. The filter narrows it too."));
   return box;
+}
+
+// The bands folded on the map, kept in this browser.
+const foldedBands = new Set(store.get("folded-bands") || []);
+function foldBand(b) {
+  if (!foldedBands.delete(b)) foldedBands.add(b);
+  store.set("folded-bands", [...foldedBands]);
+  redraw();
+}
+
+// bandEl draws a project's band behind its addresses, its heading saying
+// what of the requests shown are its and what they cost; for "", what the
+// projects share.
+function bandEl(b, x, y, w, h, info, n) {
+  const g = svgEl("g", { class: "band" + (b ? "" : " shared") });
+  g.append(svgEl("rect", { x, y, width: w, height: h, rx: 12 }));
+  if (!b) {
+    g.append(svgEl("text", { x: x + 14, y: y + 22, class: "band-name" }, "shared"),
+      svgEl("text", { x: x + 72, y: y + 22, class: "band-sub" }, "you, and what several projects use"));
+    return g;
+  }
+  const folded = foldedBands.has(b);
+  const caret = svgEl("text", { x: x + 14, y: y + 22, class: "band-caret" }, folded ? "▸" : "▾");
+  caret.dataset.band = b;
+  caret.append(svgEl("title", {}, folded ? "unfold its addresses" : "fold it into one box"));
+  const name = svgEl("text", { x: x + 30, y: y + 22, class: "band-name link" }, b);
+  name.dataset.project = b;
+  name.append(svgEl("title", {}, `show only ${b}'s requests`));
+  const sub = [info && plural(info.requests, "request"), plural(n, "address", "addresses"), info?.cost > 0 && "$" + info.cost.toFixed(2)].filter(Boolean).join(" · ");
+  g.append(caret, name, svgEl("text", { x: x + 38 + b.length * 8.5, y: y + 22, class: "band-sub" }, sub));
+  return g;
 }
 
 // setLayout shows Activity as cards or as the map, and remembers it.
@@ -787,6 +879,7 @@ function redraw() {
   const frag = document.createDocumentFragment();
   let run = null, running = 0;
   const shown = []; // the entries the map draws: the requests', and the background's if shown
+  const projAt = new Map(), perProject = new Map(); // an entry's project; a project's requests and cost
   const flush = () => {
     if (run) frag.append(bgEl(run));
     run = null;
@@ -795,6 +888,8 @@ function redraw() {
     const ch = all[n];
     if (only !== null && !ch.some(([i]) => entries[i].id === only)) continue;
     if (project && only === null && projectIn(ch) !== project) continue;
+    const p = projectIn(ch);
+    if (p) for (const [i] of ch) projAt.set(i, p);
     if (only === null && isBackground(ch)) {
       (run ||= []).push(ch);
       if (showBg) for (const [i] of ch) shown.push(i);
@@ -803,6 +898,11 @@ function redraw() {
     for (const [i] of ch) shown.push(i);
     flush();
     const c = cardOf(ch);
+    if (p) {
+      const info = perProject.get(p) || perProject.set(p, { requests: 0, cost: 0 }).get(p);
+      info.requests++;
+      info.cost += c.cost;
+    }
     const agent = [to(c.root), c.root.from].find((a) => busy.has(a));
     if (agent) {
       busy.delete(agent);
@@ -812,7 +912,7 @@ function redraw() {
     frag.append(cardEl(c));
   }
   flush();
-  if (layout === "map") rows.replaceChildren(mapEl(shown));
+  if (layout === "map") rows.replaceChildren(mapEl(shown, projAt, perProject));
   else rows.replaceChildren(frag);
   $("empty").hidden = entries.length > 0;
   if (counts.running !== running) {
@@ -1748,8 +1848,10 @@ function setStatus(s) {
 }
 
 $("rows").addEventListener("click", (ev) => {
-  const p = ev.target.closest(".card-head .project");
+  const p = ev.target.closest("[data-project]");
   if (p) return showProject(p.dataset.project);
+  const band = ev.target.closest(".map [data-band]");
+  if (band) return foldBand(band.dataset.band);
   const h = ev.target.closest(".card-head");
   if (h) {
     const k = h.dataset.id;
