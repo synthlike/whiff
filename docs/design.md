@@ -267,7 +267,7 @@ open at once, or `:tasks`. Parents and children are in
 ## Views
 
 A function can answer with a view, a plain value any client can show:
-`(items [...])` to pick from, each `{:label :detail :actions}`;
+`(items [...])` to pick from, each `{:label :detail :tag :actions}`, :tag a word, as a project, that sniff draws in a colour of its own;
 `(locations [...])`, places in files; `(text "...")`; `(board [...])`,
 columns of items. `view/items` and friends build them and check their
 shape. They are data like any other answer, so history and agents see them
@@ -426,7 +426,10 @@ each card with its project, a click showing only that project's. On
 the Map each project is a band, holding the addresses two thirds of
 whose messages are its work, under a shared band of what several use;
 a band folds into one box, and an arrow from one project's band into
-another's is drawn dashed, as work that crosses projects.
+another's is drawn dashed, as work that crosses projects. A handler asks
+its chain's project with `(project/name)`, and that of a directory with
+`(project/name dir)`; `services/board.puff` puts tickets, plans' tasks and
+pipeline runs each in its project so.
 History is stored in whiff.db for 30 days; clients get the last
 1000 entries, and `whiff history -f` and sniff follow it live, with
 nothing missed between the snapshot and the stream.

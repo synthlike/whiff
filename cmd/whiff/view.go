@@ -77,6 +77,9 @@ func viewText(v puff.Value) (string, bool) {
 			action := puff.Field(it, "action")
 			actions, _ := puff.Field(it, "actions").(puff.Vector)
 			d := str(it, "detail")
+			if t := str(it, "tag"); t != "" {
+				d = strings.TrimSpace("#" + t + "  " + d)
+			}
 			if u := str(it, "url"); u != "" {
 				d = strings.TrimSpace(d + "  " + u)
 			}

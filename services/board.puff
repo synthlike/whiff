@@ -1,0 +1,169 @@
+; board: the work of each project as tickets in columns, Todo, Doing,
+; Review, Done and Failed, for you to look at in sniff or the CLI. A lead
+; agent puts its plan here, a ticket a task, and moves each as its
+; developer works; plans' tasks and pipeline runs show on it too, each in
+; the project of the repository it is built in, so the board is all of
+; what is being built, and by whom. Its own tickets are its state; plans'
+; and runs' are asked of :plan and :pipeline each time it is shown.
+;   whiff call board/add tally "store todos in a map"   ; (ok 1)
+;   whiff call board/assign 1 agent/7
+;   whiff call board/move 1 :doing        ; :todo :doing :review :done :failed
+;   whiff call board/note 1 "waits for the scaffold"
+;   whiff call board/show                 ; every project's tickets
+;   whiff call board/for tally            ; one project's
+;   whiff call board/tickets              ; its own tickets as data
+;   whiff sub board/changed               ; {:project p :id n} when one moves
+
+(service board :state {:next 1 :tickets {}}
+  (def steps [:todo :doing :review :done :failed])
+
+  ; columns are the board's, each the steps of the tickets in it: its
+  ; own, then plans' and runs', as :plan and :pipeline name them.
+  (def columns
+    [["Todo" [:todo :planning :planned]] ["Doing" [:doing :starting :dev :check]] ["Review" [:review]]
+     ["Done" [:done :ready]] ["Failed" [:failed :gave-up :cancelled :skipped]]])
+
+  (def (ticket-of state id)
+    (match (map/get-in state [:tickets id])
+      [(some t) (ok t)]
+      [_ (err {:kind :no-ticket :message (str "no ticket " id)})]))
+
+  ; changed is (ok [reply state]), once :board/changed says ticket id of
+  ; project moved.
+  (def (changed state project id reply)
+    (do (publish :board/changed {:project project :id id})
+      (ok [reply state])))
+
+  ; set-ticket merges m into ticket id: (ok [:done state]).
+  (def (set-ticket state id m)
+    (let [t (try (ticket-of state id))]
+      (changed (map/set-in state [:tickets id] (map/merge t m)) (map/get-or t :project "") id :done)))
+
+  ; first-line is text's first line, cut to n characters.
+  (def (first-line text n)
+    (let [line (match (string/lines (string/trim text)) [[l & _] l] [_ ""])]
+      (if (> (string/length line) n) (str (string/slice line 0 (- n 1)) "…") line)))
+
+  (test "a ticket's label is its first line, cut short"
+    (= [(first-line "fix it\nmore" 20) (first-line "abcdef" 4) (first-line "" 4)] ["fix it" "abc…" ""]))
+
+  ; own is the board's ticket id, t, as one of the board's: {:project :step :item}.
+  (def (own id t)
+    (let [{:project p :title title :step s} t
+          who (map/get-or t :who "")
+          note (map/get-or t :note "")
+          next (match s [:todo :doing] [:doing :review] [:review :done] [_ :none])]
+      {:project p :step s
+       :item {:label title
+              :detail (string/join (vector/filter [(str "#" id) who note] (fn (x) (not (= x "")))) " · ")
+              :actions (vector/concat
+                         (if (= next :none) [] [{:label (str "Move to " (keyword/name next)) :action [:board/move id next]}])
+                         [{:label "Assign" :action [:board/assign id] :ask "Who works on it, as agent/7"}
+                          {:label "Remove" :action [:board/remove id]}])}}))
+
+  (test "a ticket moves on to the next column, and says who has it"
+    (= (own 3 {:project "tally" :title "a" :step :doing :who "agent/7" :note ""})
+      {:project "tally" :step :doing
+       :item {:label "a" :detail "#3 · agent/7"
+              :actions [{:label "Move to review" :action [:board/move 3 :review]}
+                        {:label "Assign" :action [:board/assign 3] :ask "Who works on it, as agent/7"}
+                        {:label "Remove" :action [:board/remove 3]}]}}))
+
+  ; run is a pipeline run, r, as :pipeline/runs gives it, as a ticket:
+  ; cancelled while it runs, shown always.
+  (def (run r)
+    (let [{:run n :task task :step s :round rd :branch b :dir d} r
+          show {:label "Show review and diff" :action [:pipeline/show n]}]
+      {:project (or-else (project/name d) "")
+       :step s
+       :item {:label (first-line task 90) :detail (str "run " n ", round " rd ", " b)
+              :actions (if (vector/contains? [:dev :check :review] s)
+                         [show {:label "Cancel the run" :action [:pipeline/cancel n]}]
+                         [show])}}))
+
+  (def kept 10) ; ended runs shown, the newest
+
+  ; shown is runs, as :pipeline/runs gives them, but those a plan built,
+  ; whose numbers are in planned, and those merged or thrown away: each
+  ; running one, and the kept newest that ended.
+  (def (shown runs planned)
+    (let [rs (vector/filter runs (fn ({:run n :step s}) (not (or (vector/contains? planned n) (vector/contains? [:merged :discarded] s)))))
+          running (vector/filter rs (fn ({:step s}) (vector/contains? [:dev :check :review] s)))
+          ended (vector/filter rs (fn ({:step s}) (not (vector/contains? [:dev :check :review] s))))
+          n (vector/length ended)]
+      (vector/concat running (vector/slice ended (max 0 (- n kept)) n))))
+
+  (test "runs a plan built show as its tasks, and only the newest that ended"
+    (= (vector/map (shown (vector/concat [{:run 1 :step :dev} {:run 2 :step :ready} {:run 3 :step :merged}]
+                            (vector/map (vector/range 4 16) (fn (n) {:run n :step :ready})))
+                     [2])
+         (fn ({:run n}) n))
+      [1 6 7 8 9 10 11 12 13 14 15]))
+
+  ; all is every ticket: the board's own, then plans', then runs.
+  (def (all state)
+    (let [{:tickets ps :runs planned} (or-else (call :plan/board-tickets) {:tickets [] :runs []})]
+      (vector/concat
+        (vector/map (map/entries (map/get-or state :tickets {})) (fn ([id t]) (own id t)))
+        ps
+        (vector/map (shown (or-else (call :pipeline/runs) []) planned) run))))
+
+  ; view is ts as a board, each label a line, and each item tagged with
+  ; its project if many projects are shown.
+  (def (view ts many)
+    (view/board (vector/map columns
+                  (fn ([title in])
+                    {:title title
+                     :items (vector/map (vector/filter ts (fn ({:step s}) (vector/contains? in s)))
+                              (fn ({:project p :item it})
+                                (let [it (map/update it :label (fn (l) (first-line l 120)))]
+                                  (if (and many (not (= p ""))) (map/set it :tag p) it))))}))
+      {:changed [:board/changed :plan/changed :pipeline/step :pipeline/done]}))
+
+  (test "a ticket in the column of its step, tagged with its project when many are shown"
+    (= (view [{:project "tally" :step :review :item {:label "a" :detail "#1"}}] #t)
+      (view/board [{:title "Todo" :items []} {:title "Doing" :items []} {:title "Review" :items [{:label "a" :detail "#1" :tag "tally"}]}
+                   {:title "Done" :items []} {:title "Failed" :items []}]
+        {:changed [:board/changed :plan/changed :pipeline/step :pipeline/done]})))
+
+  (on (add state project title) :write :update
+    "Adds a ticket for title to project's Todo column, project the name of its repository, as (project/name) gives it: (ok id)."
+    (let [id (map/get-or state :next 1)
+          title (string/trim title)]
+      (if (= title "")
+        (err {:kind :bad-title :message "a ticket needs a title"})
+        (changed (-> state
+                   (map/set :next (+ id 1))
+                   (map/set-in [:tickets id] {:project project :title title :step :todo :who "" :note ""}))
+          project id id))))
+
+  (on (move state id step) :write :update
+    "Moves ticket id to step, one of :todo, :doing, :review, :done or :failed: (ok :done); (err {:kind :no-ticket}) if there is none."
+    (if (vector/contains? steps step)
+      (set-ticket state id {:step step})
+      (err {:kind :bad-step :message (str "want one of :todo :doing :review :done :failed, got " step)})))
+
+  (on (assign state id who) :write :update
+    "Says who works on ticket id, an agent as agent/7 or a name, \"\" for nobody: (ok :done)."
+    (set-ticket state id {:who (str who)}))
+
+  (on (note state id text) :write :update
+    "Sets ticket id's note, what is worth knowing of it, as what it waits on, \"\" for none: (ok :done)."
+    (set-ticket state id {:note (string/trim text)}))
+
+  (on (remove state id) :write :update
+    "Removes ticket id from the board: (ok :done)."
+    (let [t (try (ticket-of state id))]
+      (changed (map/update state :tickets (fn (ts) (map/delete ts id))) (map/get-or t :project "") id :done)))
+
+  (on (tickets state) :read
+    "The board's own tickets, oldest first: {:id :project :title :step :who :note}. Plans' tasks and runs are :plan's and :pipeline's."
+    (ok (vector/map (map/entries (map/get-or state :tickets {})) (fn ([id t]) (map/set t :id id)))))
+
+  (on (show state) :read
+    "Every project's tickets as a board, in columns Todo, Doing, Review, Done and Failed: the board's own, plans' tasks and pipeline runs, each saying its project. Picking one moves it on, or shows or cancels its run."
+    (ok (view (all state) #t)))
+
+  (on (for state project) :read
+    "Project's tickets as show gives them, only its own."
+    (ok (view (vector/filter (all state) (fn ({:project p}) (= p project))) #f))))

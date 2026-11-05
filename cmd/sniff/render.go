@@ -48,6 +48,8 @@ type column struct {
 type item struct {
 	Label   prose
 	Detail  string
+	Tag     string // a word that sets it apart, as its project
+	Hue     int    // Tag's colour, as hueOf gives it: class hue-n
 	URL     string // its page, http or https only
 	Actions []act
 }
@@ -193,6 +195,9 @@ func itemsOf(v puff.Value, marks map[string]string, back string) ([]item, bool) 
 		}
 		it := item{Label: proseOf(label)}
 		it.Detail, _ = strOf(m, "detail")
+		if it.Tag, _ = strOf(m, "tag"); it.Tag != "" {
+			it.Hue = hueOf(it.Tag)
+		}
 		// view/items checks it too, but a service can build (items ...) itself.
 		if u, _ := strOf(m, "url"); strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://") {
 			it.URL = u
@@ -424,4 +429,20 @@ func fold(v puff.Value, depth int) node {
 	}
 	n.Fold = len(n.Text) > 64 && (n.Kind == "map" || n.Kind == "vec" || n.Kind == "tag")
 	return n
+}
+
+// hues is how many colours tags are drawn in, style.css's hue-0 to hue-7,
+// far enough apart to tell two projects by.
+const hues = 8
+
+// hueOf is the colour a tag is drawn in, its hue-n class: the same each
+// time, so a project keeps its colour, and as the page's hueOf gives it,
+// FNV-1a. A class, not a style, since sniff's pages allow no inline styles.
+func hueOf(tag string) int {
+	h := uint32(2166136261)
+	for i := 0; i < len(tag); i++ {
+		h ^= uint32(tag[i])
+		h *= 16777619
+	}
+	return int(h % hues)
 }

@@ -50,7 +50,7 @@
 {{- end}}</div>{{end}}
 
 {{/* An item, with what can be done with it. */}}
-{{define "item"}}<div class="item">{{template "prose" .Label}}{{if .Detail}}<span class="detail">{{.Detail}}</span>{{end}}
+{{define "item"}}<div class="item">{{if .Tag}}<span class="tag hue-{{.Hue}}">{{.Tag}}</span>{{end}}{{template "prose" .Label}}{{if .Detail}}<span class="detail">{{.Detail}}</span>{{end}}
 {{- if .URL}}<a class="url" href="{{.URL}}" target="_blank" rel="noopener noreferrer">{{.URL}}</a>{{end}}
 {{- if .Actions}}<span class="actions">{{range .Actions}}{{template "act" .}}{{end}}</span>{{end}}</div>{{end}}
 

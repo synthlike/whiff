@@ -39,6 +39,11 @@ Or try one without installing it: `whiff try services/git.puff status`.
 - `plan`: `start goal check` has a planner Claude split goal into a few
   tasks and builds them one after another as `pipeline` runs, each from the
   last one's branch. `plans` says where each is. Needs `pipeline`.
+- `board`: what is being built, by project, as tickets in Todo, Doing,
+  Review, Done and Failed: its own (`add project title`, `move id step`,
+  `assign id who`), plans' tasks and pipeline runs, each in the project
+  of its repository. `show` is every project's, `for project` one's;
+  sniff's sidebar opens it, for the project shown if one is.
 - `assistant`: a resident agent, one `(agent assistant :prompt "...")`
   form. `tell text` wakes Claude for one turn of the same session, with no
   tools; its answer lands in your inbox (`whiff inbox`), and replying to it

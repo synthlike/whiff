@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"path/filepath"
 	"slices"
 	"time"
 
@@ -133,6 +134,26 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 					return nil, errors.New("only a service, or a client that holds an address, has one")
 				}
 				return puff.Keyword(cur.addr), nil
+			}},
+		{Name: "project/name", Args: "[dir]", Mark: puff.MarkRead,
+			Doc: "(some name): the project of the work this message is in, once a job in its chain ran in a git repository; given dir, the project of work there, the name of the repository it is in, a worktree's being its repository's. (none) outside one.",
+			Fn: func(c *puff.Call, args []puff.Value) (puff.Value, error) {
+				p := cur.project
+				if len(args) > 0 {
+					dir, ok := args[0].(puff.String)
+					if !ok {
+						return nil, fmt.Errorf("project/name: want a directory as a string, got %s", puff.Print(args[0]))
+					}
+					d := string(dir)
+					if !filepath.IsAbs(d) && c.Env.Dir != "" {
+						d = filepath.Join(c.Env.Dir, d)
+					}
+					p = projectOf(d)
+				}
+				if p == "" {
+					return puff.None(), nil
+				}
+				return puff.Some(puff.String(p)), nil
 			}},
 		{Name: "session/tasks", Mark: puff.MarkRead,
 			Doc: "(ok ids): for an agent, the tasks its turns' session started that haven't ended, oldest first: its messages waiting in an inbox or for your review. (err {:kind :no-session}) for a service that isn't an agent.",

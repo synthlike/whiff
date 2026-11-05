@@ -33,6 +33,7 @@
     <div class="group">
       <button type="button" id="side-activity" class="side-activity" title="a card a request, newest first"><span class="name">Activity</span></button>
       <button type="button" id="side-map" class="side-map" title="who talks to whom: an address a box, an arrow a pair that talked"><span class="name">Map</span></button>
+      <a id="side-board" class="side-board" href="/view/board/show" title="what is being built, a ticket each, by project: :board's own tickets, plans' tasks and pipeline runs"><span class="name">Board</span></a>
     </div>
     <p class="hint side-note">Agents, services, tasks, timers and pinned views live under <kbd class="mod-k">⌘K</kbd></p>
     <p class="hint side-keys"><kbd>j</kbd> <kbd>k</kbd> move · <kbd>enter</kbd> open · <kbd>/</kbd> filter · <kbd>esc</kbd> close</p>
@@ -46,7 +47,7 @@
         <div class="activity-head">
           <h2 id="activity-title">Activity</h2>
           <button type="button" id="only" class="chip" aria-pressed="true" title="Show every chain again" hidden>One chain ×</button>
-          <button type="button" id="project" class="chip" aria-pressed="true" title="Show every project's requests again" hidden></button>
+          <button type="button" id="project" class="chip project" aria-pressed="true" title="Show every project's requests again" hidden></button>
           <form id="filters" class="filters" role="search" aria-label="Filter messages">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 5h18M6 12h12M10 19h4"></path></svg>
             <input id="query" type="search" aria-label="Filter" placeholder="Filter — errors, slow, writes, to:lead…" autocomplete="off" spellcheck="false"

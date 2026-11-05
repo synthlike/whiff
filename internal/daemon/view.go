@@ -16,7 +16,7 @@ import (
 // fetches it again; they follow the view as its second argument.
 
 // itemFields are an item's fields, in items and in a board's columns.
-var itemFields = map[string]check{"label": isString, "detail": isString, "url": isURL, "action": isAction, "actions": isActions}
+var itemFields = map[string]check{"label": isString, "detail": isString, "tag": isString, "url": isURL, "action": isAction, "actions": isActions}
 
 // optsDoc is how each view/ function says what its opts are.
 const optsDoc = " opts, {:changed :address/topic}, names the topic published when it changes, or a vector of them."
@@ -24,7 +24,7 @@ const optsDoc = " opts, {:changed :address/topic}, names the topic published whe
 func viewBuiltins() []*puff.Builtin {
 	return []*puff.Builtin{
 		{Name: "view/items", Args: "items [opts]", Mark: puff.MarkRead,
-			Doc: "(items items): a view of items to pick from, each {:label \"...\"} with an optional :detail string, :url, an http or https link to its page, which a client shows, and :actions, what can be done with it, each {:label \"Move to Done\" :action [:address/fn args...]}, the message picking it sends, and an optional :ask, a question whose answer, text, a client adds as its last argument, \"\" if you give none; :action alone is one action without a label." + optsDoc,
+			Doc: "(items items): a view of items to pick from, each {:label \"...\"} with an optional :detail string, :tag, a word that sets it apart, as its project, which sniff shows in a colour of its own, :url, an http or https link to its page, which a client shows, and :actions, what can be done with it, each {:label \"Move to Done\" :action [:address/fn args...]}, the message picking it sends, and an optional :ask, a question whose answer, text, a client adds as its last argument, \"\" if you give none; :action alone is one action without a label." + optsDoc,
 			Fn: func(_ *puff.Call, args []puff.Value) (puff.Value, error) {
 				return withOpts(view("items", args[0], itemFields, "label"))(args)
 			}},

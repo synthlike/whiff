@@ -18,6 +18,10 @@
   --lit: #2f6fb3;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  /* A project's colour: its hue, --hue, at these lightnesses. */
+  --tag-fg: 32%;
+  --tag-bg: 93%;
+  --tag-line: 78%;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -39,6 +43,9 @@
     --kw: #b694e6;
     --str: #6cc28f;
     --lit: #79a9e0;
+    --tag-fg: 76%;
+    --tag-bg: 21%;
+    --tag-line: 36%;
     color-scheme: dark;
   }
 }
@@ -363,15 +370,25 @@ main.dock-bottom aside .kv dd { max-height: 6em; }
 .card-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 8px; }
 .card-head .time { padding: 0; font: 11.5px var(--mono); color: var(--muted); }
 .card-head .who { color: var(--muted); white-space: nowrap; }
-.card-head .project {
-  margin-left: 8px;
-  padding: 0 6px;
-  border: 1px solid var(--line);
+/* A project's colour, as hueOf picks it: hues far enough apart to tell
+   two by. */
+.hue-0 { --hue: 215; } .hue-1 { --hue: 145; } .hue-2 { --hue: 275; } .hue-3 { --hue: 28; }
+.hue-4 { --hue: 330; } .hue-5 { --hue: 185; } .hue-6 { --hue: 75; } .hue-7 { --hue: 0; }
+/* A project, or a view item's :tag: a chip in the project's own colour. */
+.tag, .card-head .project, .chip.project {
+  display: inline-block;
+  padding: 1px 8px;
+  border: 1px solid hsl(var(--hue, 210) 45% var(--tag-line));
   border-radius: 999px;
-  font: 11px var(--mono);
-  color: var(--accent);
+  font: 600 11.5px var(--mono);
+  color: hsl(var(--hue, 210) 60% var(--tag-fg));
+  background: hsl(var(--hue, 210) 70% var(--tag-bg));
+  white-space: nowrap;
 }
-.card-head .project:hover { border-color: var(--accent); background: var(--select); }
+.card-head .project { margin-left: 8px; }
+.card-head .project:hover, .chip.project:hover { border-color: hsl(var(--hue, 210) 60% var(--tag-fg)); }
+.view .item > .tag { margin-bottom: 2px; }
+.view .item > .tag + * { flex-basis: 100%; }
 .card-head .ask { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card-head .caret { font-size: 10px; color: var(--muted); text-align: right; }
 .outcome-line { grid-column: 2 / -1; display: flex; align-items: baseline; gap: 10px; min-width: 0; font-size: 12.5px; }
@@ -482,7 +499,8 @@ svg.map { display: block; max-width: 100%; height: auto; font-family: var(--sans
 .map .edge.cross .edge-label { fill: var(--err); }
 .map .band rect { fill: color-mix(in srgb, var(--select) 22%, transparent); stroke: var(--line); }
 .map .band.shared rect { fill: none; stroke-dasharray: 4 4; }
-.map .band-name { font: 600 13px var(--mono); fill: var(--accent); }
+.map .band-name { font: 600 13px var(--mono); fill: hsl(var(--hue, 210) 60% var(--tag-fg)); }
+.map .band:not(.shared) > rect { fill: hsl(var(--hue, 210) 70% var(--tag-bg) / 0.45); stroke: hsl(var(--hue, 210) 45% var(--tag-line)); }
 .map .band.shared .band-name { fill: var(--muted); font-weight: 500; }
 .map .band-name.link, .map .band-caret { cursor: pointer; }
 .map .band-name.link:hover { text-decoration: underline; }

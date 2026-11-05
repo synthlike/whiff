@@ -2,6 +2,7 @@ package main
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -56,6 +57,8 @@ func TestRender(t *testing.T) {
 	for _, tt := range []struct{ printed, want string }{
 		{`(ok (board [{:title "Done" :items []} {:title "Dev" :items [{:label "a"}]}]))`,
 			`<div class="view board"><div class="column"><h4>Done<span class="count">0</span></h4><p class="hint">None.</p></div><div class="column"><h4>Dev<span class="count">1</span></h4><div class="item"><span>a</span></div></div></div>`},
+		// A :tag is a chip in a hue its own, the same each time: hueOf("tally").
+		{`(ok (items [{:label "a" :tag "tally"}]))`, `<div class="item"><span class="tag hue-` + strconv.Itoa(hueOf("tally")) + `">tally</span><span>a</span></div>`},
 		// A :url that isn't http or https isn't a link.
 		{`(ok (items [{:label "a" :url "javascript:alert(1)"}]))`, `<div class="item"><span>a</span></div>`},
 		{`(ok (text "a <diff>"))`, `<div class="view"><pre>a &lt;diff&gt;</pre></div>`},
@@ -106,5 +109,12 @@ func TestLongString(t *testing.T) {
 	open := `</summary><div class="str text">` + strings.Repeat("é", longString-1) + "\n&lt;b&gt;</div></details>"
 	if !strings.Contains(b.String(), `<details class="long"><summary><span class="str">&#34;éé`) || !strings.Contains(b.String(), open) {
 		t.Errorf("a long string drawn: %s", b.String())
+	}
+}
+
+// The page draws a tag in the hue sniff does: they hash alike.
+func TestHueOf(t *testing.T) {
+	if hueOf("tally") == hueOf("shop") || hueOf("") != 2166136261%hues {
+		t.Errorf("hueOf: tally %d shop %d empty %d", hueOf("tally"), hueOf("shop"), hueOf(""))
 	}
 }

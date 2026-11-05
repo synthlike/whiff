@@ -52,7 +52,7 @@ func TestProjectTag(t *testing.T) {
 		"builder": `(service builder
   (on (build) "Runs a job in tally." (call :jobs/run ["true"] {:dir "` + repo + `"}))
   (on (whiff/done id r) "Tells after on it." (send :after/it 1)))`,
-		"after": `(service after (on (it x) "Does nothing." (ok x)))`,
+		"after": `(service after (on (it x) "Says its chain's project, and tally's." (ok [(project/name) (project/name "` + repo + `/cmd")])))`,
 	})
 	start(t, dir)
 	c := dial(t, dir)
@@ -72,6 +72,12 @@ func TestProjectTag(t *testing.T) {
 		}
 		return "no send yet"
 	}, "tally")
+
+	// A handler knows its chain's project, and that of a directory.
+	historyHas(t, c, `:builder -> :after/it 1  (ok [(some "tally") (some "tally")])`)
+	if resp, err := c.Eval(`[(project/name) (project/name "/")]`, dir); err != nil || resp.Value != `[(none) (none)]` {
+		t.Errorf("project outside one = %s %v", resp.Value, err)
+	}
 
 	h, err := historyOf(c)
 	if err != nil {

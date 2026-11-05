@@ -81,6 +81,15 @@ let project = new URLSearchParams(location.search).get("p") || "";
 // projectIn is the project of chain's work: the first its messages name,
 // as the daemon tags a chain once a job in it runs in a repository, so
 // what came before, the request itself, has none yet.
+// hueOf is the class a project, or a view item's tag, is drawn in, hue-0
+// to hue-7, as sniff's render.go gives it: FNV-1a, so each keeps its
+// colour.
+function hueOf(tag) {
+  let h = 2166136261;
+  for (const b of new TextEncoder().encode(tag)) h = Math.imul(h ^ b, 16777619) >>> 0;
+  return "hue-" + (h % 8);
+}
+
 function projectIn(chain) {
   for (const [i] of chain) if (entries[i].project) return entries[i].project;
   return "";
@@ -374,6 +383,7 @@ function cardEl(c) {
     el("span", "ask", askText(r) || fn(r)), el("span", "caret", open ? "▾" : "▸"));
   if (c.project) {
     const p = el("span", "project", c.project);
+    p.classList.add(hueOf(c.project));
     p.dataset.project = c.project;
     p.title = `in ${c.project}: show only its requests`;
     head.querySelector(".who").append(p);
@@ -827,6 +837,7 @@ function foldBand(b) {
 // projects share.
 function bandEl(b, x, y, w, h, info, n) {
   const g = svgEl("g", { class: "band" + (b ? "" : " shared") });
+  if (b) g.classList.add(hueOf(b));
   g.append(svgEl("rect", { x, y, width: w, height: h, rx: 12 }));
   if (!b) {
     g.append(svgEl("text", { x: x + 14, y: y + 22, class: "band-name" }, "shared"),
@@ -950,14 +961,22 @@ function showProject(name) {
   if (name) u.set("p", name);
   else u.delete("p");
   history.replaceState(null, "", location.pathname + (u.size ? "?" + u : "") + location.hash);
-  $("project").hidden = !name;
-  $("project").textContent = name + " ×";
+  drawProject();
   activate(null);
+  markSide();
   redraw();
 }
+
+// drawProject shows the project shown, if one is, beside the filter, and
+// points the sidebar's Board at its tickets.
+function drawProject() {
+  $("project").hidden = !project;
+  $("project").textContent = project + " ×";
+  $("project").className = "chip project " + hueOf(project);
+  $("side-board").href = project ? "/view/board/for?args=" + encodeURIComponent(`[${JSON.stringify(project)}]`) : "/view/board/show";
+}
 $("project").onclick = () => showProject("");
-$("project").hidden = !project;
-$("project").textContent = project + " ×";
+drawProject();
 
 // showBackground shows every background event, or folds them again.
 function showBackground(on) {
