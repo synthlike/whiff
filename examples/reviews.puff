@@ -1,0 +1,13 @@
+(service reviews
+  (on (view) "Open, non-draft pull requests that need review."
+    (let [prs (try (call :gh/prs))
+          waiting (vector/filter prs
+                    (fn ({:draft draft :review r})
+                      (and (not draft) (= r :review-required))))]
+      (ok (view/items (vector/map waiting
+                        (fn ({:title title :url url})
+                          {:label title :url url}))))))
+
+  (on :gh/changed (event)
+    (let [{:dir dir} event]
+      (call :me/tell (str "Pull requests changed in " dir)))))
