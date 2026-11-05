@@ -1,11 +1,14 @@
 # Tasks
 
-The spec for durable work, built in v0.6: "Today" says how whiff meets it.
-[design.md](design.md) has the rest of whiff.
+How whiff tracks durable work: jobs, questions, approvals and the results
+of delegated work. [design.md](design.md) has the rest of whiff.
+The [walkthrough](walkthrough.md#let-a-job-answer-later) introduces a job
+and its result; [troubleshooting](troubleshooting.md#a-task-stays-pending)
+covers diagnosing one that hasn't ended.
 
 ## The idea
 
-whiff already has one shape for work that answers later. A job, an ask and a
+whiff has one shape for work that answers later. A job, an ask and a
 message the review gate holds all give a `ticket`: an id, and where the answer
 goes. A **task** is that ticket made durable. There's no new thing to submit
 and no new id: the `:id` in a pending is the task's id, from submission to
@@ -31,30 +34,36 @@ submitted ────────────────┘
 | `:running` | A process may be doing the work | a job starting |
 | `:ended` | It has its result, which never changes | anything below |
 
-There's no queued status: a job starts when it is accepted. If v0.7 needs a
-limit on running jobs, `:queued` joins here, between accepted and running.
+There is no queued task status: a job starts when it is accepted. An
+agent's asks wait as `:waiting` while it is busy or paused. The board
+limits concurrent pipeline runs by refusing another build with `:busy`;
+the caller can submit it once a run ends. procs' `:queued` is a service
+status for a process waiting on its dependencies, not a task status.
 
 A pending means **accepted**, not done, and not successful: whiff has stored
 the task and owes its owner a result. Submission fails only as a Result that
 isn't pending, like `(err {:kind :start})`, and then there's no task.
 
-Every result carries how it ended:
+Failures from task cancellation, expiry and interruption carry an
+`:outcome`. A successful result or a finished process reports its own
+value or exit status:
 
 | Result | How it ended |
 | --- | --- |
 | `(ok ...)`, or a job's `{:exit n ...}` | It finished |
 | `(err {:kind :rejected :outcome :not-started})` | You rejected it |
 | `(err {:kind :expired :outcome :not-started})` | Nobody answered in time |
-| `(err {:kind :cancelled :outcome :not-started})` | Cancelled before it started |
+| `(err {:kind :cancelled :outcome :not-started})` | A held message or waiting ask was cancelled |
 | `(err {:kind :cancelled :outcome :stopped})` | Cancelled and killed |
-| `(err {:kind :cancelled :outcome :unknown})` | Your accept was cancelled while what it let through ran |
 | `(err {:kind :timeout :outcome :stopped})` | Timed out and killed |
 | `(err {:kind :interrupted :outcome :stopped})` | Killed by `whiff stop` |
 | `(err {:kind :interrupted :outcome :unknown})` | whiff died while it ran; has `:pid` if it may still run |
 
 `:outcome` is the one thing to read before acting on a failure:
 
-- `:not-started`: nothing happened, so it's safe to submit again.
+- `:not-started`: a held message was not delivered, or an ask was
+  removed before it was answered. An ask may already have child work;
+  check that work before submitting it again.
 - `:stopped`: the process is gone, but what it had done stays done. A
   job's err has `:stdout` and `:stderr`, the end of what it printed, its
   shutdown included, as a finished job's result does.
@@ -65,8 +74,9 @@ None of them says anything was undone. whiff can't undo a command.
 ## Who gets the result
 
 A task has one **owner**, its sender: a service, or a client. `hand-on` moves
-ownership, in one transaction, to the caller of the handler. After the task
-ended, as today, the first owner keeps its copy and the new one gets it too.
+ownership, in one transaction, to the caller of the handler. If the task
+has already ended, the first owner keeps its copy and the new one gets it
+too.
 
 The result is stored **when the task ends, before anyone is told**.
 
@@ -113,6 +123,10 @@ is: an agent cancels only what its own session started.
 | `:running` | Its process group gets SIGTERM, then SIGKILL after 3s | `:cancelled`, `:stopped` |
 | `:ended` | Nothing | `(err {:kind :ended :result r})` to the canceller; the task keeps `r` |
 
+An ask can already have work running while it waits for its answer. Its
+service hears `whiff/cancelled id` and must stop that work, as pipeline
+does for a cancelled build. Effects already performed remain.
+
 The first transaction to end a task wins. A job that exits as you cancel it
 keeps its real result, and a task can't end twice: an answer that comes after
 the end is dropped, and history says so.
@@ -139,33 +153,21 @@ reviewer jobs, the dev with a session of its own, `agent/<n>`.
 Depth is bounded by what each session may call: a dev may ask its lead, and
 nothing else, so it can't start children of its own.
 
-## Today
+## Supported behavior
 
-| Spec | Today |
+| Capability | Behavior |
 | --- | --- |
 | Pending means accepted and stored | Yes for jobs, asks and held messages (`tasks` and `inbox` buckets) |
 | A result is stored before anyone is told | Yes, in `tasks`, for 30 days: `whiff wait` reads it after a restart |
 | A service gets its result until handled | Yes: the mark commits with a stateful service's state; a stateless one's is set once its handler returns |
 | One id from held to ended | Yes: a held job keeps its id, and accepting stores it as accepted as it leaves the queue |
-| `:outcome` on every failure | Yes |
+| Outcomes for cancellation, expiry and interruption | `:not-started`, `:stopped` or `:unknown`; a process that exits normally reports its exit status |
 | Cancelling any task | Yes, `whiff cancel` and the agent's `cancel` tool, and a task ends once; not a message you accepted while it is delivered, which ends within a call's 5s |
 | Attempts and retries | Yes, for jobs: `:retry n` on `:jobs/run`, and `:idempotent #t` for a write that is safe to run twice. A job whose process group may still run after a crash isn't run again |
 | Parents | Yes: a task begun in another's work, by the service its `whiff/asked` reaches or by the session of the job it runs, as an agent's turn, keeps that task as its `:parent`, stored with it; `:tasks/tree id` gives a task with what its work began, nested, and an agent's Status in sniff draws a build's jobs from it |
-| Seeing every task | Yes: `:tasks/list` and `:tasks/view` give each task held, waiting or running and each that ended in the last day, with its owner, attempts, result, whether its process may still run, and what one that hasn't ended waits on (your review, its agent's queue or pause, its own work); `:tasks/failed` only those that failed. Its actions are Cancel, Accept and Reject, Watch, and those its result offers, as a build's Retry. sniff links to both |
+| Seeing every task | Yes: `:tasks/list` and `:tasks/view` give each task held, waiting or running and up to 50 of the latest that ended in the last day, with its owner, attempts, result, whether its process may still run, and what one that hasn't ended waits on (your review, its agent's queue or pause, its own work); `:tasks/failed` only those that failed. Its actions are Cancel, Accept and Reject, Watch, and those its result offers, as a build's Retry. sniff links to both |
 | Seeing what is scheduled | Yes: `:timers/list` and `:timers/view` give every `send-after` waiting, an agent's next wake and later notes too, with who set it; `:timers/cancel id` stops one. Questions and approvals are `:me/inbox` and `:review/pending`, views of their own; sniff draws all of them the same way |
 | Watching one run | Yes: `:tasks/watch id` is a running job's output as it comes, an agent's turn or a pipeline dev's read from claude's stream-json as what it says and calls and what answers, following `:jobs/<id>`; `whiff sub jobs/<id>` gives the lines themselves |
 
-`whiff try` is unchanged: a trial's state, inbox and timers aren't stored. A
-task a trial starts is, as it was, so `whiff wait` finds its result.
-
-## Order to build it
-
-Each step leaves whiff working, and closes the worst loss left:
-
-1. A `tasks` bucket, replacing `jobs`, holding the result as a task ends.
-   `whiff wait` reads it, so results survive a restart. `:outcome` everywhere.
-2. One transaction per handled message, with redelivery of `whiff/done`. This
-   closes the crash that strands a pipeline run.
-3. One id from held to ended: a held job takes the id its sender already has.
-4. `whiff cancel`, for every status.
-5. Attempts, then retries.
+`whiff try` does not store a trial's state, inbox or timers. A task a trial
+starts is stored, so `whiff wait` finds its result.

@@ -1,8 +1,15 @@
 # whiff in use
 
-Things whiff is for, from small to big, each with the commands and what goes
-on underneath. The services are the ones in [services/](../services/README.md);
-[design.md](design.md) explains the machinery.
+Things whiff is for, with commands and what goes on underneath. The
+services are the ones in [services/](../services/README.md);
+[design.md](design.md) explains the machinery. Examples assume the
+services they call are installed as described in the service catalog,
+and commands that link files run from the whiff checkout.
+
+For a first service, follow the [message walkthrough](walkthrough.md).
+The [puff guide](puff.md) explains the language, the
+[agent guide](agents.md) brings together tools and turn behavior, and
+[troubleshooting](troubleshooting.md) covers failures and recovery.
 
 ## A dev pipeline: a planner, a developer and a reviewer
 
@@ -16,6 +23,7 @@ whole goal. Your own working tree is never touched.
 Install the two services and start a plan in your repository:
 
 ```sh
+mkdir -p ~/.whiff/services
 ln -s "$PWD"/services/pipeline.puff "$PWD"/services/plan.puff ~/.whiff/services/
 cd ~/src/todo
 whiff call plan/start "A small todo CLI in Go ..." '["go" "test" "./..."]'
@@ -70,9 +78,10 @@ done 2. call mom
 2. [x] call mom
 ```
 
-The subjects in that log are shortened here: that run's commits had the
-whole task as their subject. Commits now get the task's first sentence as
-their subject, as shown, and the whole task in their body.
+This transcript is from an earlier run, with shortened commit subjects.
+The pipeline now uses the reviewer's `SUBJECT:` line for a commit
+subject, falling back to the task's first sentence, and puts the whole
+task in the commit body.
 
 Or one task, without the planner:
 
@@ -111,18 +120,65 @@ Why it is built this way:
 - **Your check decides, not the dev.** whiff runs the tests itself; a review
   that approves failing code goes back to the dev.
 - **What each Claude can do is the job's command line:** the planner reads
-  (`--tools Read,Glob,Grep`), the dev edits and runs only the check
-  (`--allowedTools "Bash(go test ./...)"`), the reviewer has no tools, and
-  none of them loads the MCP servers of your own Claude setup
-  (`--strict-mcp-config`): the first real run's dev found hiss's and tried
-  to propose its edits there.
+  (`--tools Read,Glob,Grep`); the dev can edit, run the check (including
+  variants with the same program and first argument), run `go vet`,
+  `go build` and `gofmt`, and inspect git status, diff and log. The
+  reviewer has no tools. All use `--strict-mcp-config`, so they do not
+  load your own Claude MCP setup. A dev working for a resident agent
+  gets a whiff connection restricted to that agent's `ask` function.
   whiff decides when and where they run, not what they do to files: the
   worktree is the fence.
 
-Where this is going: a planner that fans tasks out in parallel and merges
-them, picks reviewers by what changed, or starts whatever services it needs
-as it goes. The pieces are the same (jobs, `whiff/done`, `publish`, state);
-this is the first shape.
+`plan` builds tasks in order. For parallel work, the included `lead`
+agent coordinates `board` tickets and `pipeline` runs, as below.
+
+## A team of agents on a project
+
+`lead` is a resident agent that delegates code changes to pipeline runs.
+Its prompt tells it to put the whole plan on the board first: a scaffold,
+parts built in parallel from that scaffold's branch, then integration
+from the parts' branches merged. Each run has a developer, a check and a
+reviewer. A developer can ask the lead questions while it works.
+
+From the whiff checkout, install the three services (requires the Claude
+CLI, git and Go):
+
+```sh
+mkdir -p ~/.whiff/services
+ln -s "$PWD"/services/pipeline.puff "$PWD"/services/board.puff "$PWD"/services/lead.puff ~/.whiff/services/
+whiff trust agent/lead board pipeline
+```
+
+In the repository you want it to work on, configure the project's team.
+For a repository called `todo`:
+
+```sh
+cd ~/src/todo
+whiff eval '(call :board/set-team "todo" {:repo (os/cwd) :dev "haiku" :reviewer "sonnet" :check ["go" "test" "./..."] :most 3 :day 5})'
+whiff call board/tell todo "Build a todo CLI with add, list and done, stored in todo.json."
+whiff call board/for todo
+whiff services lead
+sniff -open
+```
+
+The board's `:most` limits concurrent runs; its `:day` checks what the
+project's runs cost, for runs started in the last 24 hours, before
+admitting another build.
+It does not reserve a budget for running work or include the lead's own
+turns. The lead has its own `:limits`, which count its turns and the costs
+reported by its delegated tasks. `board/set-team` also supports a
+`:models` allowlist, and `board/reset-team` restores defaults.
+
+The lead hears the results of work started in one turn together, then
+decides what to do next. Its final report lands in `whiff inbox` with the
+branch to review and merge. Pausing it lets current work finish while
+results wait; cancelling it stops its turn and outstanding tasks:
+
+```sh
+whiff call lead/pause
+whiff call lead/resume
+whiff call lead/cancel
+```
 
 ## Your TODO list from anywhere
 
@@ -156,8 +212,8 @@ whiff sub gh/changed
 `gh` keeps the open pull requests of every repository it watches in its
 state, and every 5 minutes it looks again (a `send-after` to itself) and
 publishes `:gh/changed {:dir :prs}` for each that changed. Anything can
-subscribe: `whiff sub`, hiss for a toast, or another service, `(on
-:gh/changed (v) ...)`. The state survives restarts; `gh/unwatch` stops.
+subscribe: `whiff sub`, sniff while it shows a view that names this topic,
+or another service, `(on :gh/changed (v) ...)`. The state survives restarts; `gh/unwatch` stops.
 
 ## Your dev servers, without a terminal each
 
@@ -227,7 +283,7 @@ turn. `assistant.puff` is one form, and another agent is another file:
 (agent researcher
   :prompt "Follow the BIP-360 discussion for the user."
   :model "opus"
-  :can [:gh/prs :todo/add]
+  :can [:gh/prs :todo/open :todo/add]
   :every 1d)
 ```
 
@@ -235,9 +291,10 @@ turn. `assistant.puff` is one form, and another agent is another file:
 itself, and its `todo/add` waits for your review like any agent's write,
 unless you `whiff trust agent/researcher todo`. Whatever its `:can`, it
 has `researcher/later` too, to look again in a while ("the vote closes
-Friday: look then"), which comes back as a turn of its own. Its turns cost at most `:limits`, $1 each and $5 a day unless it
-says otherwise; `whiff call researcher/usage` says what it spent, and
-`researcher/stop` ends a turn that runs away.
+Friday: look then"), which comes back as a turn of its own. Its `:limits`
+default to $1 and 10 minutes a turn and $5 in the last 24 hours, including
+costs reported by delegated tasks; `whiff call researcher/usage` says
+what it spent, and `researcher/stop` ends a turn that runs away.
 
 `:every` gives it a turn of its own each day, which reaches your inbox only
 if it has something to say. A service uses an agent with `ask`, whose
@@ -274,8 +331,8 @@ whiff sub review/pending          # you review: follow the queue
 ```
 
 The agent's session gets an address, `:agent/1`, every service function as
-a tool, and `eval`, `wait` and `inbox`. What it reads goes straight through;
-what it writes waits for you:
+a tool, and `eval`, `wait`, `cancel` and `inbox`. What it reads goes
+straight through; what it writes waits for you:
 
 ```sh
 whiff pending                     # what waits
@@ -329,7 +386,7 @@ Its state is in `~/.whiff/whiff.db`, committed before each reply. `add` is
 ```sh
 whiff history -f                  # every message as it happens
 whiff history | grep agent        # what agents did
-sniff                             # the same in a browser, a column per address
+sniff -open                       # Activity, Map and Board in a browser
 ```
 
 Every message is in history with its origin, sender, target, reply and time

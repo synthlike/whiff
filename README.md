@@ -219,6 +219,10 @@ v0.7. Services, resident agents, MCP access, durable state and message
 history, and the sniff UI are implemented. The project is small and
 evolving; the included services are used to develop whiff itself.
 
+- [Learn puff](docs/puff.md): values, patterns, errors and scripts
+- [Follow a message](docs/walkthrough.md): a service, its state, events and a background job
+- [Agents](docs/agents.md): MCP, resident agents, delegation and budgets
+- [Troubleshooting](docs/troubleshooting.md): diagnose failures and recover work
 - [Use cases](docs/use-cases.md): worked examples and writing your own service
 - [Design](docs/design.md): messages, persistence, supervision and the review gate
 - [Process management](docs/procs.md): dev servers and containers

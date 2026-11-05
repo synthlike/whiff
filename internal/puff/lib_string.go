@@ -262,7 +262,7 @@ var valueFns = []*Builtin{
 		}
 		return Ok(v)
 	})},
-	{Name: "value/type", Args: "v", Doc: "v's type: :bool, :int, :float, :string, :keyword, :duration, :vector, :map, :tag or :function.", Fn: func(_ *Call, args []Value) (Value, error) {
+	{Name: "value/type", Args: "v", Doc: "v's type: :bool, :int, :float, :string, :keyword, :duration, :time, :vector, :map, :tag or :function.", Fn: func(_ *Call, args []Value) (Value, error) {
 		return Keyword(typeName(args[0])), nil
 	}},
 	{Name: "keyword/name", Args: "k", Doc: "k's name, without its colon: \"ready\" for :ready.", Fn: func(_ *Call, args []Value) (Value, error) {

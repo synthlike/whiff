@@ -1,11 +1,17 @@
 # How whiff works
 
 whiff is one daemon per user. Services written in puff and clients (the CLI,
-hiss, sniff, agents) have addresses and talk by sending each other messages,
-Erlang-style; the daemon routes them and keeps a history of every one. This
-is how the pieces fit, and why they are the way they are. For what each
+sniff, agents and external clients such as hiss) have addresses and talk by
+sending each other messages, Erlang-style; the daemon routes them and keeps
+a history of every one. This is how the pieces fit, and why they are the
+way they are. For what each
 function does, see [stdlib.md](stdlib.md); for whiff in use,
 [use-cases.md](use-cases.md).
+
+New to the system? Start with [Learn puff](puff.md) and
+[Follow a message](walkthrough.md). [Agents](agents.md) covers running and
+controlling agents, and [Troubleshooting](troubleshooting.md) explains
+how to inspect and recover work.
 
 ## The shape
 
@@ -65,7 +71,8 @@ restart until it has handled it: the mark that it did commits with its
 state, so its state never sees a result twice, though a handler's other
 effects can happen twice. One it faults on isn't given again, and one for
 a service that isn't loaded waits until it is. A failure whiff gives says
-in `:outcome` what happened: `:not-started`, `:stopped` or `:unknown`.
+in `:outcome` what happened when a task is cancelled, expires or is interrupted:
+`:not-started`, `:stopped` or `:unknown`.
 `whiff cancel 12` ends one that hasn't: held or waiting, it leaves its
 inbox; a running job is killed. An agent cancels only what its session
 began. A task ends once: an answer after its end is dropped, and history
@@ -89,9 +96,10 @@ the ask's sender began: an agent's ask is still an agent's write. An
 cancelled while it waited (`whiff cancel`), so work begun for it can stop:
 pipeline cancels the run it started for a `build`.
 
-`:tasks` shows them all, whoever began them: `(call :tasks/list)` gives
-each one held, waiting or running, and each that ended in the last day,
-with its owner, where it is or who answered it, and how it ended;
+`:tasks` shows work whoever began it: `(call :tasks/list)` gives every
+task held, waiting or running, and up to 50 of the latest that ended in
+the last day, with its owner, where it is or who answered it, and how it
+ended;
 `:tasks/view` gives them as items, with a job's attempts and, after a
 crash, whether its process may still run, and what can be done with each: Accept
 or Reject one held, Cancel one that hasn't ended, see one's whole result,
@@ -319,7 +327,9 @@ Asks and `whiff/done`s aren't gated: a person answers an ask anyway, and a
 
 Rules that keep the gate honest:
 
-- Marks are inferred, not declared, so the gate can rely on a target's mark.
+- Marks are inferred, with explicit `:read` overrides listed by
+  `whiff ls`. A `:write` declaration can only raise a mark; a `:read`
+  override is a trust decision, as described under puff above.
 - Only your connections review or set modes; an agent's connection can't,
   and `whiff mcp` always connects as an agent. `:review`'s functions
   (`pending`, a view; `accept`; `reject`; `trust`) review for any client
@@ -364,8 +374,8 @@ different binary of the same name earlier on `PATH` can still write, and
 `whiff mcp` is an MCP server on stdin and stdout. Each session claims
 `:agent/<n>` and gets every other address's functions as tools, their docs
 and marks in the descriptions, plus `eval`, `wait` (by id, so it works after
-a reconnect) and `inbox`. Tool arguments are puff values written as strings,
-as on the command line. A `:write` tool answers pending, like any gated
+a reconnect), `cancel` and `inbox`. Tool arguments are puff values written
+as strings, as on the command line. A `:write` tool answers pending, like any gated
 message; `wait` gives the result once you accept it.
 
 An agent with `:can` gets those functions as its turns' tools. Its turn's
@@ -485,4 +495,4 @@ nothing missed between the snapshot and the stream.
   sender already has.
 - A call waits 5s; anything longer is a job or an ask.
 - No calendar maths in puff: `1d` is 24 hours.
-- One machine. Peers over SSH are planned for v0.8.
+- One machine; there is no cross-machine routing.

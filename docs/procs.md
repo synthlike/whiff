@@ -12,12 +12,16 @@ worked example, [`examples/shop`](../examples/shop): a Go API on postgres
 and redis, a web UI, and two tests of it, one a whiff service and one a
 plain puff script.
 
+For interrupted jobs and stray processes, see
+[Troubleshooting](troubleshooting.md#work-was-interrupted-by-a-stop-or-crash).
+
 ## Setting it up
 
 Copy the service, as you'll edit it, and name your processes in its
 `procs`, per project, in the order they start:
 
 ```sh
+mkdir -p ~/.whiff/services
 cp services/procs.puff ~/.whiff/services/
 ```
 
@@ -317,9 +321,9 @@ Each process is a `:jobs/run` job, so the job tools work on them too:
 - `:timeout :none` runs a job until it ends or is stopped; other jobs time
   out after 1h unless their `:timeout` says otherwise.
 - `:jobs/output id` is a running job's output so far: the last 64KiB of
-  stdout and of stderr. `procs/logs` reads it. A stopped job's result
-  doesn't carry its output, so procs keeps the end of it just before it
-  stops one.
+  stdout and of stderr. `procs/logs` reads it. A stopped job's error
+  also carries `:stdout` and `:stderr`, including its shutdown output;
+  procs keeps that output for its logs after the job ends.
 - Cancelling a job, its timeout, or `whiff stop` sends its process group
   SIGTERM, then SIGKILL after 3s.
 - `:jobs/process id` says whether a job's process group may still run,

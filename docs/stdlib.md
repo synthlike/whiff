@@ -89,7 +89,7 @@ In `puff` and in whiff alike. Names without a namespace are under core.
 
 - `(value/to-string v)`: v printed as puff reads it.
 - `(value/from-string s)`: (ok v): s read as a value.
-- `(value/type v)`: v's type: :bool, :int, :float, :string, :keyword, :duration, :vector, :map, :tag or :function.
+- `(value/type v)`: v's type: :bool, :int, :float, :string, :keyword, :duration, :time, :vector, :map, :tag or :function.
 
 ### keyword
 
