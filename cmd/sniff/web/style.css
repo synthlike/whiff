@@ -821,7 +821,8 @@ aside h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; co
 /* A board: columns side by side, scrolled sideways, each item a card. */
 .view.board { display: flex; gap: 12px; align-items: flex-start; overflow-x: auto; padding-bottom: 8px; }
 .view .column {
-  flex: 0 0 280px;
+  flex: 1 0 190px;
+  max-width: 320px;
   display: flex;
   flex-direction: column;
   gap: 8px;
