@@ -1,11 +1,14 @@
 ; board: the work of each project as tickets in columns, Todo, Doing,
 ; Review, Done and Failed, for you to look at in sniff or the CLI. A lead
 ; agent puts its plan here, a ticket a task, and moves each as its
-; developer works; plans' tasks and pipeline runs show on it too, each in
+; developer works, a ticket following the pipeline run it started, at
+; most 4 at once in a project; plans' tasks and pipeline runs show on it too, each in
 ; the project of the repository it is built in, so the board is all of
 ; what is being built, and by whom. Its own tickets are its state; plans'
 ; and runs' are asked of :plan and :pipeline each time it is shown.
 ;   whiff call board/add tally "store todos in a map"   ; (ok 1)
+;   whiff call board/plan ~/src/tally "Scaffold" "Build the module ..."
+;   whiff call board/build 2 main '["go" "test" "./..."]' haiku   ; its run
 ;   whiff call board/assign 1 agent/7
 ;   whiff call board/move 1 :doing        ; :todo :doing :review :done :failed
 ;   whiff call board/note 1 "waits for the scaffold"
@@ -47,22 +50,53 @@
   (test "a ticket's label is its first line, cut short"
     (= [(first-line "fix it\nmore" 20) (first-line "abcdef" 4) (first-line "" 4)] ["fix it" "abc…" ""]))
 
-  ; own is the board's ticket id, t, as one of the board's: {:project :step :item}.
-  (def (own id t)
+  ; running are a run's steps while it runs.
+  (def running [:dev :check :review])
+
+  ; run-of is the newest of runs, as :pipeline/runs gives them, that ticket
+  ; t started, the one whose task is t's: (some run) or (none).
+  (def (run-of t runs)
+    (match (map/get t :task)
+      [(some task) (vector/find (vector/reverse runs) (fn ({:task x}) (= x task)))]
+      [_ (none)]))
+
+  (test "a ticket's run is the newest with its task"
+    (= [(run-of {:task "b"} [{:run 1 :task "b"} {:run 2 :task "a"} {:run 3 :task "b"}]) (run-of {} [{:run 1 :task "b"}])]
+      [(some {:run 3 :task "b"}) (none)]))
+
+  ; own is the board's ticket id, t, as one of the board's: {:project :step
+  ; :item}; once it started a run, r, (some run), at that run's step, its
+  ; actions the run's.
+  (def (own id t r)
     (let [{:project p :title title :step s} t
           who (map/get-or t :who "")
           note (map/get-or t :note "")
-          next (match s [:todo :doing] [:doing :review] [:review :done] [_ :none])]
-      {:project p :step s
-       :item {:label title
-              :detail (string/join (vector/filter [(str "#" id) who note] (fn (x) (not (= x "")))) " · ")
-              :actions (vector/concat
-                         (if (= next :none) [] [{:label (str "Move to " (keyword/name next)) :action [:board/move id next]}])
-                         [{:label "Assign" :action [:board/assign id] :ask "Who works on it, as agent/7"}
-                          {:label "Remove" :action [:board/remove id]}])}}))
+          next (match s [:todo :doing] [:doing :review] [:review :done] [_ :none])
+          detail (fn (more) (string/join (vector/filter (vector/concat [(str "#" id) who] more [note]) (fn (x) (not (= x "")))) " · "))
+          remove {:label "Remove" :action [:board/remove id]}]
+      (match r
+        [(some {:run n :step rs :round rd :branch b})
+         (let [show {:label "Show review and diff" :action [:pipeline/show n]}]
+           {:project p :step rs
+            :item {:label title :detail (detail [(str "run " n ", round " rd ", " b)])
+                   :actions (if (vector/contains? running rs)
+                              [show {:label "Cancel the run" :action [:pipeline/cancel n]}]
+                              [show remove])}})]
+        [_ {:project p :step s
+            :item {:label title :detail (detail [])
+                   :actions (vector/concat
+                              (if (= next :none) [] [{:label (str "Move to " (keyword/name next)) :action [:board/move id next]}])
+                              [{:label "Assign" :action [:board/assign id] :ask "Who works on it, as agent/7"} remove])}}])))
+
+  (test "a ticket at its run's step, saying which run"
+    (= (own 4 {:project "tally" :title "a" :step :todo :who "haiku" :note ""} (some {:run 9 :step :review :round 2 :branch "whiff/9"}))
+      {:project "tally" :step :review
+       :item {:label "a" :detail "#4 · haiku · run 9, round 2, whiff/9"
+              :actions [{:label "Show review and diff" :action [:pipeline/show 9]}
+                        {:label "Cancel the run" :action [:pipeline/cancel 9]}]}}))
 
   (test "a ticket moves on to the next column, and says who has it"
-    (= (own 3 {:project "tally" :title "a" :step :doing :who "agent/7" :note ""})
+    (= (own 3 {:project "tally" :title "a" :step :doing :who "agent/7" :note ""} (none))
       {:project "tally" :step :doing
        :item {:label "a" :detail "#3 · agent/7"
               :actions [{:label "Move to review" :action [:board/move 3 :review]}
@@ -88,10 +122,10 @@
   ; running one, and the kept newest that ended.
   (def (shown runs planned)
     (let [rs (vector/filter runs (fn ({:run n :step s}) (not (or (vector/contains? planned n) (vector/contains? [:merged :discarded] s)))))
-          running (vector/filter rs (fn ({:step s}) (vector/contains? [:dev :check :review] s)))
-          ended (vector/filter rs (fn ({:step s}) (not (vector/contains? [:dev :check :review] s))))
+          going (vector/filter rs (fn ({:step s}) (vector/contains? running s)))
+          ended (vector/filter rs (fn ({:step s}) (not (vector/contains? running s))))
           n (vector/length ended)]
-      (vector/concat running (vector/slice ended (max 0 (- n kept)) n))))
+      (vector/concat going (vector/slice ended (max 0 (- n kept)) n))))
 
   (test "runs a plan built show as its tasks, and only the newest that ended"
     (= (vector/map (shown (vector/concat [{:run 1 :step :dev} {:run 2 :step :ready} {:run 3 :step :merged}]
@@ -100,13 +134,24 @@
          (fn ({:run n}) n))
       [1 6 7 8 9 10 11 12 13 14 15]))
 
-  ; all is every ticket: the board's own, then plans', then runs.
+  ; all is every ticket: the board's own, each at its run's step once it
+  ; started one, then plans', then the other runs.
   (def (all state)
-    (let [{:tickets ps :runs planned} (or-else (call :plan/board-tickets) {:tickets [] :runs []})]
+    (let [{:tickets ps :runs planned} (or-else (call :plan/board-tickets) {:tickets [] :runs []})
+          runs (or-else (call :pipeline/runs) [])
+          own-runs (vector/map (map/entries (map/get-or state :tickets {})) (fn ([id t]) [id t (run-of t runs)]))
+          started (vector/reduce own-runs [] (fn (acc [_ _ r]) (match r [(some {:run n}) (vector/append acc n)] [_ acc])))]
       (vector/concat
-        (vector/map (map/entries (map/get-or state :tickets {})) (fn ([id t]) (own id t)))
+        (vector/map own-runs (fn ([id t r]) (own id t r)))
         ps
-        (vector/map (shown (or-else (call :pipeline/runs) []) planned) run))))
+        (vector/map (shown runs (vector/concat planned started)) run))))
+
+  (def most 4) ; runs a project may have going at once
+
+  ; going is how many of runs, as :pipeline/runs gives them, are going in
+  ; project, as project/name names them from their worktrees.
+  (def (going runs project)
+    (vector/length (vector/filter runs (fn ({:step s :dir d}) (and (vector/contains? running s) (= (or-else (project/name d) "") project))))))
 
   ; view is ts as a board, each label a line, and each item tagged with
   ; its project if many projects are shown.
@@ -136,6 +181,31 @@
                    (map/set :next (+ id 1))
                    (map/set-in [:tickets id] {:project project :title title :step :todo :who "" :note ""}))
           project id id))))
+
+  (on (plan state repo title task) :write :update
+    "Adds a ticket to the Todo column of the project of the repository at repo for a pipeline run of task, a developer's whole task, titled title, a line: (ok id). build starts its run, and from then on the ticket shows the run's step. How a lead puts its whole plan on the board before it builds it."
+    (let [id (map/get-or state :next 1)
+          project (or-else (project/name repo) (path/base repo))]
+      (if (or (= (string/trim title) "") (= (string/trim task) ""))
+        (err {:kind :bad-title :message "a ticket needs a title and a task"})
+        (changed (-> state
+                   (map/set :next (+ id 1))
+                   (map/set-in [:tickets id] {:project project :title (string/trim title) :task task :repo repo :step :todo :who "" :note ""}))
+          project id id))))
+
+  (on (build state id base check model)
+    "Starts ticket id's run, as :pipeline/build does, from base, a branch or a vector of them merged, with check, a command, and the developer on model (\"\" for the default): pending at once, and the run's result once it ends, as :pipeline/build gives it. A project has at most 4 runs going at once: (err {:kind :busy}) past that, so start it once one ends. (err {:kind :no-ticket}) for a ticket with no task, as one add made."
+    (let [t (try (ticket-of state id))
+          {:project p} t]
+      (match [(map/get t :task) (map/get t :repo)]
+        [[(some task) (some repo)]
+         (let [n (going (try (call :pipeline/runs)) p)]
+           (if (>= n most)
+             (err {:kind :busy :message (str p " has " n " runs going, at most " most ": start this one once one ends")})
+             (let [r (call :pipeline/build repo base task check model)]
+               (do (send :board/assign id (if (= model "") "dev" (str model " dev")))
+                 (hand-on r)))))]
+        [_ (err {:kind :no-ticket :message (str "ticket " id " has no task to build: plan it with board/plan")})])))
 
   (on (move state id step) :write :update
     "Moves ticket id to step, one of :todo, :doing, :review, :done or :failed: (ok :done); (err {:kind :no-ticket}) if there is none."

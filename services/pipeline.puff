@@ -47,6 +47,18 @@
       [(some m) (map/get-or m :from :you)]
       [(none) :you]))
 
+  ; agent-of is the agent whose build id is, still in the inbox: its
+  ; sender, or the session it is the work of, as when :board/build asks
+  ; for a lead; else from-of's.
+  (def (agent-of id)
+    (match (vector/find (inbox :build) (fn ({:id i}) (= i id)))
+      [(some m)
+       (let [from (map/get-or m :from :you)]
+         (match (map/get m :session)
+           [(some s) when (not (string/starts-with? (value/to-string from) ":agent/")) s]
+           [_ from]))]
+      [(none) :you]))
+
   ; asks? is whether service name has an ask function, as an agent does.
   (def (asks? name)
     (match (keyword/from-string name)
@@ -509,7 +521,7 @@
           ; An agent's turn asks from :agent/<name>: its devs may ask it.
           (match (begin state repo base task check #t
                    (map/merge {:model model :asker id}
-                     (match (string/split (value/to-string (from-of id)) "/")
+                     (match (string/split (value/to-string (agent-of id)) "/")
                        [[":agent" name] when (asks? name) {:lead name}]
                        [_ {}])))
             [(ok [_ s]) (ok s)]

@@ -31,17 +31,21 @@ Or try one without installing it: `whiff try services/git.puff status`.
   diff; until both pass, the review goes back to the dev, up to 3 rounds,
   then it is committed on the branch and you hear in your inbox. `runs`,
   `view`, `cancel n`; `:pipeline/done` as each run ends. Needs the claude CLI.
-- `lead`: a Sonnet agent that builds software with `pipeline/build`, an ask
-  that answers when a run ends: a scaffold run, a few parts at once on a
+- `lead`: a Sonnet agent that builds software with `board/build`, which
+  hands it `pipeline/build`, an ask that answers when a run ends: a scaffold run, a few parts at once on a
   model you name (haiku), then one run from all their branches merged. Its
   workers may ask it questions with `:lead/ask`, their only whiff tool, and
-  you hear only what matters. `whiff trust agent/lead pipeline` first.
+  you hear only what matters. Its plan is on `board`, a ticket a run, at
+  most 4 running at once in a project. `whiff trust agent/lead board
+  pipeline` first.
 - `plan`: `start goal check` has a planner Claude split goal into a few
   tasks and builds them one after another as `pipeline` runs, each from the
   last one's branch. `plans` says where each is. Needs `pipeline`.
 - `board`: what is being built, by project, as tickets in Todo, Doing,
   Review, Done and Failed: its own (`add project title`, `move id step`,
-  `assign id who`), plans' tasks and pipeline runs, each in the project
+  `assign id who`; `plan repo title task` for a run, which `build id base
+  check model` starts, at most 4 at once in a project, the ticket then
+  following its run), plans' tasks and pipeline runs, each in the project
   of its repository. `show` is every project's, `for project` one's;
   sniff's sidebar opens it, for the project shown if one is.
 - `assistant`: a resident agent, one `(agent assistant :prompt "...")`

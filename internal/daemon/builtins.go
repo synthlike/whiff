@@ -95,7 +95,7 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 				return d.stateOf(addr)
 			}},
 		{Name: "inbox", Args: "[fn]", Mark: puff.MarkRead,
-			Doc: "This service's messages waiting for a reply, oldest first, each {:id :fn :args :from :cwd :at}; only fn's, a keyword, if given.",
+			Doc: "This service's messages waiting for a reply, oldest first, each {:id :fn :args :from :cwd :at}, and :session, the agent session whose work it is, if one's; only fn's, a keyword, if given.",
 			Fn: func(_ *puff.Call, args []puff.Value) (puff.Value, error) {
 				if cur.addr == "" {
 					return nil, errors.New("only a service has an inbox")

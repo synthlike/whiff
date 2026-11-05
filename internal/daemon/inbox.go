@@ -450,6 +450,11 @@ func (a *asked) value() puff.Value {
 	if a.held != nil {
 		es = append(es, puff.Key("to", puff.Keyword(a.to)))
 	}
+	// The agent session whose work it is, as a service that asks on an
+	// agent's behalf, as :board/build for a lead, leaves it.
+	if a.session != "" {
+		es = append(es, puff.Key("session", puff.Keyword(a.session)))
+	}
 	m, _ := puff.NewMap(es...)
 	return m
 }
