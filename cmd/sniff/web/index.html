@@ -11,13 +11,15 @@
 <header>
   <h1>sniff</h1>
   <span id="status" class="status">connecting…</span>
-  <button type="button" id="goto" class="goto" aria-haspopup="dialog">
+  <span id="pills" class="pills" aria-label="What needs you"></span>
+  <span id="agent-dots" class="agent-dots" aria-label="Agents"></span>
+  <span class="grow"></span>
+  <span id="spend" class="spend" hidden></span>
+  <button type="button" id="goto" class="goto" aria-haspopup="dialog" title="Go to an agent, service, view or function, or call one">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-4-4"></path></svg>
-    <span class="grow">Go to an address, view or function, or call one…</span>
+    <span>Go to…</span>
     <kbd class="mod-k">⌘K</kbd>
   </button>
-  <span class="grow"></span>
-  <label class="follow"><input type="checkbox" id="follow" checked> follow</label>
 </header>
 <div class="window">
   <nav class="side" aria-label="Sidebar">
@@ -25,53 +27,41 @@
       <h2>Needs you</h2>
       <a class="queue review" href="/view/review/pending" title="what waits for your review; while sniff is open, agents' writes wait here for you"><span class="name">Review</span></a>
       <a class="queue inbox" href="/view/me/inbox" title="questions and reports sent to you, :me"><span class="name">Inbox</span></a>
-      <a class="queue tasks" href="/view/tasks/view" title="what was held, is waiting or running, and what ended in the last day: who it's for, how it ended, and what you can do about it"><span class="name">Tasks</span></a>
       <a class="queue failed" href="/view/tasks/failed" data-quiet title="the tasks that failed in the last day, with what you can do about each"><span class="name">Failed</span></a>
-      <a class="queue timers" href="/view/timers/view" title="every send-after waiting for its time, as an agent's next wake: what it sends to whom, when, and Cancel"><span class="name">Timers</span></a>
     </div>
+    <hr>
     <div class="group">
-      <h2>Views</h2>
-      <div id="pins"></div>
+      <button type="button" id="side-activity" class="side-activity" title="a card a request, newest first"><span class="name">Activity</span></button>
+      <button type="button" id="side-map" class="side-map" title="who talks to whom: an address a box, an arrow a pair that talked"><span class="name">Map</span></button>
     </div>
-    <div class="group" id="agents-group" hidden>
-      <h2>Agents</h2>
-      <div id="agents"></div>
-    </div>
-    <div class="group">
-      <h2>Services</h2>
-      <div id="addresses"></div>
-    </div>
+    <p class="hint side-note">Agents, services, tasks, timers and pinned views live under <kbd class="mod-k">⌘K</kbd></p>
+    <p class="hint side-keys"><kbd>j</kbd> <kbd>k</kbd> move · <kbd>enter</kbd> open · <kbd>/</kbd> filter · <kbd>esc</kbd> close</p>
   </nav>
   <div class="work">
-    <div id="tabs" class="tabs" role="tablist" aria-label="Tabs">
+    <div id="tabs" class="tabs" role="tablist" aria-label="Tabs" hidden>
       <div class="tab"><button role="tab" id="tab-activity" aria-selected="true" aria-controls="activity">Activity</button></div>
     </div>
-    <section id="banner" class="banner" aria-label="Waiting for your review" hidden>
-      <span class="banner-title">Waits for your review</span>
-      <div id="banner-body" class="banner-body"></div>
-    </section>
-    <form id="filters" class="filters" role="search" aria-label="Filter messages">
-      <button type="button" id="only" class="chip" aria-pressed="true" title="Show every chain again" hidden>One chain ×</button>
-      <button type="button" class="chip" data-term="kind:err" aria-pressed="false" title="kind:err: what answered with an error or a fault">Errors</button>
-      <button type="button" class="chip" data-term="time:>500ms" aria-pressed="false" title="time:>500ms">Slow &gt; 500ms</button>
-      <button type="button" class="chip" data-term="mark:write" aria-pressed="false" title="mark:write: to :write functions">Writes</button>
-      <input id="query" type="search" aria-label="Filter" placeholder="Filter: to:plan kind:err -to:gh …  ( / )" autocomplete="off" spellcheck="false"
-        title="Each term must match; -term must not. to:address[/fn] from:address origin:user|agent kind:call|send|pub|done|eval|note|ok|err|fault|pending time:>500ms|<1ms mark:read|write gate:held|refused|accepted|trusted|free|for, or a word">
-      <span class="seg" role="group" aria-label="Show messages as">
-        <button type="button" data-show="chains" aria-pressed="true" title="Each message under the one whose handler sent it">Chains</button>
-        <button type="button" data-show="lanes" aria-pressed="false" title="A lane per address, an arrow per message">Lanes</button>
-      </span>
-      <span id="query-error" class="query-error" role="status"></span>
-    </form>
     <main id="activity" role="tabpanel" aria-labelledby="tab-activity">
-      <section id="trace" aria-label="Messages">
-        <div id="lanes" class="lanes"></div>
+      <section id="trace" aria-label="Activity">
+        <div class="activity-head">
+          <h2 id="activity-title">Activity</h2>
+          <button type="button" id="only" class="chip" aria-pressed="true" title="Show every chain again" hidden>One chain ×</button>
+          <form id="filters" class="filters" role="search" aria-label="Filter messages">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 5h18M6 12h12M10 19h4"></path></svg>
+            <input id="query" type="search" aria-label="Filter" placeholder="Filter — errors, slow, writes, to:lead…" autocomplete="off" spellcheck="false"
+              title="errors, slow and writes stand for kind:err, time:>500ms and mark:write. Each term must match; -term must not. to:address[/fn] from:address origin:user|agent kind:call|send|pub|done|eval|note|ok|err|fault|pending time:>500ms|<1ms mark:read|write gate:held|refused|accepted|trusted|free|for, or a word">
+          </form>
+          <button type="button" id="show-bg" class="toggle" aria-pressed="false" title="Show timer ticks, reads, settles and notes inline, rather than folded between requests">Show background</button>
+          <span id="query-error" class="query-error" role="status"></span>
+        </div>
+        <section id="banner" class="banner" aria-label="Waiting for your review" hidden>
+          <span class="banner-title">Waits for your review</span>
+          <div id="banner-body" class="banner-body"></div>
+        </section>
         <div id="rows"></div>
-        <p id="empty" class="empty">No messages yet. Call a service and it shows here.</p>
+        <p id="empty" class="empty">Nothing yet. Ask an agent or call a service and it shows here.</p>
       </section>
-      <aside id="detail" aria-label="Details">
-        <p class="hint">Click a message for its arguments and reply, or an address for its functions and state.</p>
-      </aside>
+      <aside id="detail" aria-label="Details" hidden></aside>
     </main>
   </div>
 </div>
@@ -80,7 +70,7 @@
     <div class="palette-input">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-4-4"></path></svg>
       <input id="palette-q" role="combobox" aria-label="Go to or call" aria-controls="palette-list" aria-expanded="true" aria-autocomplete="list"
-        placeholder="Go to an address, view or function, or call one…" autocomplete="off" spellcheck="false">
+        placeholder="Go to an agent, service, view or function, or call one…" autocomplete="off" spellcheck="false">
       <kbd>esc</kbd>
     </div>
     <div id="palette-list" class="palette-list" role="listbox" aria-label="Matches"></div>

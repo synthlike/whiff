@@ -213,10 +213,12 @@ open at once, or `:tasks`. Parents and children are in
   last 24 hours against `:day`, its `:every`, its session's mode, and
   its work: what its turns handed out today, each waiting, held for your
   review, or how it came back (`ready whiff/7, $0.31` for a pipeline
-  run, with what its dev turns cost). sniff's sidebar shows
-  the same: a service's dot and word only when it isn't `ok` or `idle`,
-  a file that failed to load among the addresses, and the details under
-  Status when you click one, an agent's work as a list under them.
+  run, with what its dev turns cost). sniff's ⌘K palette shows
+  the same, agents first: a service's dot and word only when it isn't
+  `ok` or `idle`, a file that failed to load among the addresses, and the
+  details under Status when you pick one, an agent's work as a list under
+  them. Its status strip adds up the agents' spend of the last 24 hours
+  against their `:day`.
 - **Shared code.** `(use "lib/http-check.puff")` brings another file's
   defs and tests in, as if they were written there: a handler's mark sees
   through them, a name defined twice is an error at both places, and
@@ -407,7 +409,14 @@ Every message is an entry: when, kind, origin, sender, target, arguments,
 reply, time taken, and for an agent's write how the gate treated it. Notes
 record whiff's own events: a service that failed to load or faulted, a mode
 set or run out. An entry names the one that led to it, which `whiff history
--c` and sniff show as chains; a timer's message begins a chain of its own,
+-c` shows as chains, and sniff as a card per request, from you or an
+agent, with how it stands and its steps, and the background between them
+(timers, reads, settles, notes) folded into one row. A card shows its
+chain as steps, as lanes (an address a lane, an arrow a message), or as
+every message; sniff's Map draws the same messages as boxes and arrows,
+who talks to whom and how often. What an agent's session sends is caused
+by the message that began the job it runs in, as an agent's turn's
+`jobs/run`, so it is in the chain it is work for. A timer's message begins a chain of its own,
 keeping its origin, or a service that schedules itself would be one endless
 chain. History is stored in whiff.db for 30 days; clients get the last
 1000 entries, and `whiff history -f` and sniff follow it live, with
@@ -444,7 +453,7 @@ nothing missed between the snapshot and the stream.
   has a `:start`, which sets the ones it needs, so a loop doesn't double. A
   one-off timer a service with a `:start` set for itself goes too, and
   history says how many. `:timers`, whiff's own address, lists the timers
-  waiting (`list`, and `view` with Cancel, beside Tasks in sniff), and
+  waiting (`list`, and `view` with Cancel, under ⌘K in sniff), and
   `cancel id`, yours, deletes one: a timer fires only while it is stored.
 - A message that waited through a restart keeps its origin, sender,
   session and chain, as ids, message ids in history and agent numbers are

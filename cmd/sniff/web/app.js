@@ -45,9 +45,26 @@ function drawn(t, as) {
   return box;
 }
 
+// What sniff keeps in this browser, as conveniences: losing it loses
+// nothing else.
+const store = {
+  get(k, none) {
+    try { return JSON.parse(localStorage.getItem("sniff." + k)) ?? none; } catch { return none; }
+  },
+  set(k, v) {
+    try { localStorage.setItem("sniff." + k, JSON.stringify(v)); } catch {}
+  },
+};
+
 // marks is each function's mark, "read" or "write", by its target,
-// "plan/board", from sniff's addresses.
+// "plan/board", from sniff's addresses; params its parameters' names.
 let marks = new Map();
+let params = new Map();
+let asks = new Set(); // the targets of ask functions, answered later
+
+// isRead says whether target only reads: a :read function that answers at
+// once. An ask is :read too, but what it asks for is work.
+const isRead = (target) => marks.get(target) === "read" && !asks.has(target);
 
 // pageOf is the page that shows what target answers to args, a tree of a
 // vector, as a view: /view/pipeline/show?args=[2].
@@ -56,12 +73,17 @@ function pageOf(target, args) {
 }
 
 let entries = []; // history, oldest first
-let lanes = []; // addresses, in the order they first appear; "client" first
-let selected = null; // the row selected
-let bulk = false; // taking a snapshot: lanes are drawn once, after it
-let shown = "chains"; // how history is drawn: "chains" or "lanes"
-const folded = new Set(); // the ids of the chains folded to their heading
+let selected = null; // the index of the entry the detail pane shows
 let only = null; // the id of the one chain shown, or null for every one
+const opened = new Set(); // the keys of the cards opened
+const cardView = new Map(); // how each open card shows its chain, by key: "steps" (the default), "lanes" or "all"
+let layout = store.get("layout", "cards") === "map" ? "map" : "cards"; // Activity as cards, or as a map of who talks to whom
+const openBg = new Set(); // the keys of the runs of background events opened
+let showBg = store.get("background", false) === true; // every background event shown
+
+// counts is what the status strip says: what waits in each queue, and
+// how many requests are running.
+const counts = { review: 0, inbox: 0, failed: 0, running: 0 };
 
 // Addresses of an entry: where it comes from and where it goes. A client has
 // no address; to is address/fn, or address on :topic.
@@ -69,7 +91,10 @@ function from(e) { return e.from || "client"; }
 function to(e) {
   let t = e.to;
   if (!t) return "client";
-  if (t.endsWith("/whiff/done")) return t.slice(0, -"/whiff/done".length);
+  // whiff's notices to a service, whiff/done, whiff/result, whiff/asked,
+  // go to the service.
+  const w = t.indexOf("/whiff/");
+  if (w >= 0) return t.slice(0, w);
   const on = t.indexOf(" on :");
   if (on >= 0) return t.slice(0, on);
   return t.slice(0, t.lastIndexOf("/"));
@@ -77,7 +102,8 @@ function to(e) {
 function fn(e) {
   if (e.kind === "pub") return ":" + e.to.slice(e.to.indexOf(" on :") + 5);
   if (e.kind === "done") return "done";
-  return e.to.slice(e.to.lastIndexOf("/") + 1);
+  const w = e.to.indexOf("/whiff/");
+  return w >= 0 ? e.to.slice(w + 1) : e.to.slice(e.to.lastIndexOf("/") + 1);
 }
 
 // kindOf is the reply's mark: "ok", "err", "fault" or "pending".
@@ -96,30 +122,11 @@ function kindOf(reply) {
   return "err";
 }
 
-function laneOf(addr) {
-  let i = lanes.indexOf(addr);
-  if (i < 0) {
-    lanes.push(addr);
-    i = lanes.length - 1;
-    // A new address shows in the sidebar too.
-    if (addr !== "client" && !addresses.some((a) => a.address === addr)) reloadSoon();
-    if (!bulk) {
-      drawLanes();
-      redraw(); // every arrow moves
-    }
-  }
-  return i;
-}
-
-function drawLanes() {
-  const head = $("lanes");
-  head.replaceChildren(el("span"), el("div", "names"), el("span"));
-  head.style.setProperty("--lanes", lanes.length);
-  for (const a of lanes) {
-    const b = el("button", a === "client" ? "client" : "", a === "client" ? "client" : ":" + a);
-    if (a !== "client") b.onclick = () => showAddress(a);
-    head.children[1].append(b);
-  }
+// errText is what an err or fault says: its :message, or itself printed.
+function errText(r) {
+  const v = r?.v?.[0];
+  if (v?.t === "str") return v.v;
+  return field(v, "message")?.v ?? print(r);
 }
 
 // time is when at was to the second, as rows show it; fullTime to the
@@ -139,142 +146,306 @@ function took(ms) {
   return (ms / 1000).toFixed(1) + "s";
 }
 
-function row(e, i) {
-  const r = el("div", "row " + e.kind);
-  r.dataset.i = i;
-  r.append(el("span", "time", time(e.at)));
-  if (e.kind === "note") {
-    r.classList.add("noted");
-    r.append(el("div", "note-text", e.note));
-    return r;
-  }
-  if (e.origin === "agent") r.classList.add("agent");
-  const k = kindOf(e.reply);
-  if (k) r.classList.add(k);
-  const a = laneOf(from(e)), b = laneOf(to(e)), n = lanes.length;
-  const track = el("div", "track");
-  track.style.setProperty("--lanes", n);
-  const arrow = el("div", "arrow");
-  const label = el("div", "label");
-  let args = e.args ? print(e.args).slice(1, -1) : "";
-  if (e.kind === "done" && e.args && e.args.v.length) args = print(e.args.v[0]);
-  label.textContent = fn(e) + (args ? " " + args : "");
-  if (e.gate) label.append(" ", el("span", "gate", "[" + e.gate + "]"));
-  label.title = label.textContent;
-  if (a === b) {
-    arrow.classList.add("self");
-    arrow.style.left = `calc(${(a + 0.5) / n * 100}%)`;
-    arrow.style.width = `calc(${0.3 / n * 100}%)`;
-    label.style.left = `calc(${(a + 0.5 + 0.32) / n * 100}%)`;
-    label.style.maxWidth = `calc(${(n - a - 0.85) / n * 100}%)`;
-  } else {
-    const lo = Math.min(a, b), hi = Math.max(a, b);
-    arrow.classList.add(b > a ? "right" : "left");
-    arrow.style.left = `${(lo + 0.5) / n * 100}%`;
-    arrow.style.width = `${(hi - lo) / n * 100}%`;
-    label.style.left = `${(lo + 0.5) / n * 100}%`;
-    label.style.width = `${(hi - lo) / n * 100}%`;
-  }
-  track.append(arrow, label);
-  r.append(track, el("span", "took", took(e.took)));
-  return r;
-}
+const home = (s) => s.replace(/\/(Users|home)\/[^/\s"]+\//g, "~/");
+const plural = (n, what) => `${n} ${what}${n === 1 ? "" : "s"}`;
 
-// Chains: each entry that began one, then what it led to, as each began,
-// indented under what led to it. One whose cause isn't here, gone from
-// history or left out by the filter, begins a chain of its own. A chain of
-// more than one message is headed by the message that began it, whose
-// fold hides the rest.
-function drawChains(frag) {
-  const ids = new Set(entries.map((e) => e.id).filter(Boolean));
-  const led = new Map(); // the indexes of what each id led to, as they began
-  const roots = [];
+// isDone says whether e answers a pending, [id result]: a done, or the
+// whiff/result an agent hears of what its turn started.
+const isDone = (e) => (e.kind === "done" || !!e.to?.endsWith("/whiff/result")) && e.args?.v?.length === 2;
+
+// chains is history as causal chains, oldest first: each the entry that
+// began it, whose cause isn't here, gone from history or left out by the
+// filter, then what it led to, depth first, as [index, depth]. What an
+// agent's session sends has no cause: it goes under the last message to
+// the agent before it, the one its turn is for.
+function chains() {
+  const at = new Map();
+  entries.forEach((e, i) => { if (e.id) at.set(e.id, i); });
+  const led = new Map(), roots = [], lastTo = new Map();
   entries.forEach((e, i) => {
-    if (!ids.has(e.cause)) return roots.push(i);
-    if (!led.has(e.cause)) led.set(e.cause, []);
-    led.get(e.cause).push(i);
+    let p = e.cause ? at.get(e.cause) : undefined;
+    if (p === undefined && e.from?.startsWith("agent/")) p = lastTo.get(e.from.slice("agent/".length));
+    if ((e.kind === "call" || e.kind === "send") && e.to && !e.to.endsWith("/whiff/asked") && !isRead(e.to)) lastTo.set(to(e), i);
+    if (p === undefined || p >= i) return roots.push(i);
+    if (!led.has(p)) led.set(p, []);
+    led.get(p).push(i);
   });
-  const walk = (i, depth, chain) => {
-    chain.push([i, depth]);
-    for (const j of led.get(entries[i].id) || []) walk(j, depth + 1, chain);
+  return roots.map((r) => {
+    const chain = [];
+    const walk = (i, depth) => {
+      chain.push([i, depth]);
+      for (const j of led.get(i) || []) walk(j, depth + 1);
+    };
+    walk(r, 0);
     return chain;
-  };
-  // Reads a client made one after another, as a page's polling does, fold
-  // into one row, "client: 6 reads", that opens to show them. Another
-  // message alone that repeats the one alone before it, the same call with
-  // the same arguments and kind of reply, folds into it: the latest is
-  // drawn, with how many times.
-  let last = null; // {key, row, n}
-  let reads = []; // the indexes of the reads in a row so far
-  const flush = () => {
-    if (reads.length === 1) frag.append(chainRow(entries[reads[0]], reads[0], 0));
-    else if (reads.length) frag.append(readsBox(reads));
-    reads = [];
-  };
-  for (const i of roots) {
-    if (only && entries[i].id !== only) continue;
-    const chain = walk(i, 0, []);
-    const e = entries[i];
-    if (chain.length === 1 && !e.from && e.kind === "call" && marks.get(e.to) === "read" && kindOf(e.reply) === "ok") {
-      reads.push(i);
-      last = null;
-      continue;
-    }
-    flush();
-    if (chain.length === 1) {
-      const r = chainRow(e, i, 0);
-      const key = e.kind === "note" ? "note " + e.note : [e.kind, e.from, e.to, e.args ? print(e.args) : "", kindOf(e.reply)].join(" ");
-      if (key && last?.key === key) {
-        last.n++;
-        (r.querySelector(".args") || r.querySelector(".note-text")).append(" ", el("span", "times", "×" + last.n));
-        last.row.replaceWith(r);
-        last.row = r;
-      } else {
-        frag.append(r);
-        last = { key, row: r, n: 1 };
-      }
-      continue;
-    }
-    last = null;
-    // The message that began it heads it, with a fold for the rest.
-    const box = el("div", "chain"), id = entries[i].id, shut = folded.has(id);
-    const head = chainRow(e, i, 0);
-    head.classList.add("chain-root");
-    const fold = el("button", "fold", shut ? "▸" : "▾");
-    fold.type = "button";
-    fold.dataset.id = id;
-    fold.title = (shut ? "open" : "fold") + ` what it led to: ${chain.length - 1} more`;
-    fold.setAttribute("aria-expanded", String(!shut));
-    // In the arrow's place, as what it began is under it.
-    head.querySelector(".glyph").replaceWith(fold);
-    if (shut) head.querySelector(".args").append(" ", el("span", "times", `+${chain.length - 1}`));
-    box.append(head);
-    if (!shut) for (const [j, depth] of chain.slice(1)) box.append(chainRow(entries[j], j, depth, true));
-    frag.append(box);
-  }
-  flush();
+  });
 }
 
-// readsBox is a client's reads in a row, the entries at is: "client: 6
-// reads", and what they read, which opens to show them.
-const openReads = new Set(); // the ids of the first of the runs of reads opened
-function readsBox(is) {
-  const first = entries[is[0]].id, open = openReads.has(first);
-  const box = el("div", "reads");
-  const h = el("button", "reads-head");
+// keyOf is what a chain is known by across redraws: its first entry's id.
+const keyOf = (e) => String(e.id || "@" + e.us);
+
+const isAgent = (a) => !!a && (a.startsWith("agent/") || !!services.get(a)?.agent);
+
+// isBackground says whether a chain is bookkeeping rather than a request:
+// a service's own ticks and settles, an agent waking itself, your page's
+// reads, and whiff's notes. A chain with a fault in it is never one.
+function isBackground(chain) {
+  const e = entries[chain[0][0]];
+  if (chain.some(([i]) => kindOf(entries[i].reply) === "fault")) return false;
+  if (e.kind === "note") return true;
+  // whiff's notice or an answer whose start is gone from history.
+  if (isDone(e) || e.to?.endsWith("/whiff/asked")) return true;
+  if (e.from) return !isAgent(e.from) || (chain.length === 1 && to(e) === e.from);
+  if (e.origin === "agent") return false;
+  return e.kind === "call" && isRead(e.to);
+}
+
+// cardOf is a request's chain as its card says it: who asked whom what,
+// how it stands, state "ok", "running", "waiting", "failed" or "quiet",
+// with label, and what it cost.
+function cardOf(chain) {
+  const is = chain.map(([i]) => i).sort((a, b) => a - b);
+  const root = entries[is[0]];
+  const dones = new Map(); // a pending's id → the done that answered it
+  for (const i of is) {
+    const e = entries[i];
+    if (isDone(e)) dones.set(String(e.args.v[0].v), e);
+  }
+  const c = { chain, is, root, dones, key: keyOf(root), state: "ok", label: "Done", run: null, rounds: 0, step: "", job: "", cost: 0, said: null };
+  let jobCost = 0, resultCost = 0, status = null, branch = "", note = "", fault = null, open = null;
+  for (const i of is) {
+    const e = entries[i], k = kindOf(e.reply);
+    if (k === "fault") fault ??= errText(e.reply);
+    if (k === "pending" && !dones.has(String(pendingOf(e.reply)))) {
+      open = e;
+      if (e.to === "jobs/run") c.job = jobName(e.args.v[0]);
+    }
+    if (e.kind === "pub") {
+      const v = e.args?.v?.[0], s = field(v, "step"), n = field(v, "run");
+      if (n) c.run = n.v;
+      if (s?.t === "kw") {
+        c.step = s.v;
+        if (s.v === "review") c.rounds++;
+      }
+    }
+    if (isDone(e)) {
+      const v = e.args.v[1]?.v?.[0];
+      const st = field(v, "status");
+      if (st?.t === "kw") {
+        status = st.v;
+        branch = field(v, "branch")?.v || "";
+        note = field(v, "note")?.v || "";
+      }
+      const n = field(v, "run");
+      if (n) c.run = n.v;
+      resultCost += parseFloat(field(v, "cost")?.v) || 0;
+      const out = v?.t === "str" ? v.v : field(v, "stdout")?.v || "";
+      jobCost += parseFloat(/"total_cost_usd":\s*([0-9.]+)/.exec(out)?.[1]) || 0;
+    }
+    if (to(e) === "me" && !isDone(e) && e.kind !== "pub" && e.args?.v?.[0]?.t === "str") c.said = e;
+  }
+  // A pipeline's :cost is its jobs': the larger is never counted twice.
+  c.cost = Math.max(jobCost, resultCost);
+  const set = (state, label) => { c.state = state; c.label = label; };
+  const rk = kindOf(root.reply);
+  const end = rk === "pending" ? dones.get(String(pendingOf(root.reply))) : null;
+  if (fault) set("failed", "Faulted: " + fault);
+  else if (open) {
+    if (open.gate?.startsWith("held")) set("waiting", "Held for your review");
+    else if (to(open) === "me") set("waiting", "Waits for your answer");
+    else set("running", "Running" + (c.step ? " · " + c.step : ""));
+  } else if (rk === "err") set("failed", "Failed: " + errText(root.reply));
+  else if (end && kindOf(end.args.v[1]) !== "ok") set("failed", "Failed: " + errText(end.args.v[1]));
+  else if (status) {
+    const word = status[0].toUpperCase() + status.slice(1).replace("-", " ");
+    if (status === "ready") set("ok", "Ready" + (branch ? " on " + branch : ""));
+    else if (status === "failed" || status === "gave-up") set("failed", word + (note ? ": " + note : ""));
+    else if (status === "cancelled" || status === "discarded") set("quiet", word);
+    else set("ok", word + (branch ? " " + branch : ""));
+  }
+  return c;
+}
+
+// askText is what a message asks, as words: its strings as they are, the
+// rest printed; a job as its command.
+function askText(e) {
+  if (e.kind === "note") return e.note;
+  if (e.kind === "eval") return e.args?.v[0]?.v ?? "";
+  if (e.to === "jobs/run" && e.args?.v?.length) return jobName(e.args.v[0]);
+  let vs = e.args?.v || [];
+  if (e.kind === "done" && vs.length === 2) vs = [vs[1]];
+  return home(vs.map((v) => (v.t === "str" ? v.v : print(v))).join(" "));
+}
+
+// whoOf is who sent e: you, an agent's session by the agent's name, or
+// the address.
+const whoOf = (e) => {
+  if (!e.from) return e.origin === "agent" ? "an agent" : "you";
+  const name = e.from.replace(/^agent\//, "");
+  return name !== e.from && services.get(name)?.agent ? name : e.from;
+};
+
+// resultText is a result in a few words: a run's status and branch, a
+// text's first line, or it printed.
+function resultText(r) {
+  const v = r?.v?.[0];
+  const st = field(v, "status");
+  if (st?.t === "kw") {
+    const cost = parseFloat(field(v, "cost")?.v);
+    return [st.v, field(v, "branch")?.v].filter(Boolean).join(" ") + (cost > 0 ? " · $" + cost.toFixed(2) : "");
+  }
+  if (kindOf(r) !== "ok") return errText(r);
+  // A job's: how it exited, or what a claude's turn cost.
+  const exit = field(v, "exit");
+  const out = v?.t === "str" ? v.v : field(v, "stdout")?.v || "";
+  const usd = /"total_cost_usd":\s*([0-9.]+)/.exec(out)?.[1];
+  if (usd) return "turn ended · $" + parseFloat(usd).toFixed(2);
+  if (exit) return exit.v === "0" ? "exit 0" : "exit " + exit.v;
+  if (v?.t === "str") return v.v.split("\n")[0];
+  return r ? print(r) : "";
+}
+
+// stepsOfCard is the messages a card's timeline shows, in the order they
+// began: what was asked, sent and run, not the reads, answers, notes or
+// publishes along the way. "Show all" shows those too.
+function stepsOfCard(c) {
+  return c.is.filter((i, n) => {
+    const e = entries[i];
+    if (n === 0) return true;
+    if (e.kind === "note" || e.kind === "pub" || isDone(e) || e.to?.endsWith("/whiff/asked")) return false;
+    return !(e.kind === "call" && isRead(e.to));
+  });
+}
+
+// stepRow is a message of a card's timeline: a dot for how it went, who
+// sent it where, what it asked or how it came back, and how long it took,
+// to its answer for one answered later.
+function stepRow(c, i) {
+  const e = entries[i];
+  let k = kindOf(e.reply), end = null;
+  if (k === "pending") {
+    end = c.dones.get(String(pendingOf(e.reply)));
+    k = end ? kindOf(end.args.v[1]) : e.gate?.startsWith("held") ? "held" : "running";
+  }
+  const r = end?.args.v[1];
+  const job = e.to === "jobs/run" && e.args?.v?.length;
+  const exit = field(r?.v?.[0], "exit");
+  if (job && k === "ok" && exit && exit.v !== "0") k = "err";
+  const li = el("li", "step " + (k || "ok"));
+  li.dataset.i = i;
+  const what = el("span", "step-what", whoOf(e) + " → ");
+  what.append(el("b", "", e.kind === "eval" ? "eval" : e.kind === "pub" ? fn(e) : ":" + e.to));
+  let sum = job ? jobName(e.args.v[0]) + (end ? (k === "ok" ? " passed" : " failed") : "") : end ? resultText(r) : askText(e);
+  if (!job && !end && k && k !== "ok" && k !== "running" && k !== "held") sum = errText(e.reply);
+  const how = el("span", "step-sum", sum);
+  // Only a gate that stopped it is worth a word here; the pane says the rest.
+  if (/^(held|refused)/.test(e.gate || "")) how.prepend(gateBadge(e.gate), " ");
+  const ms = end ? Date.parse(end.at) - Date.parse(e.at) : k === "running" ? null : e.took;
+  li.append(el("span", "dot"), what, how, el("span", "took", ms === null ? "running " + roughly(Date.now() - Date.parse(e.at)) : took(ms)));
+  li.title = fullTime(e.at) + "  " + what.textContent + "  " + sum;
+  return li;
+}
+
+// cardEl is a request's card: collapsed, when it began, who asked whom,
+// what, how it stands and what it cost; open, what was said back to you
+// and its steps.
+function cardEl(c) {
+  const open = opened.has(c.key) || only !== null;
+  const card = el("article", "card " + c.state + (open ? " is-open" : ""));
+  const head = el("button", "card-head");
+  head.type = "button";
+  head.dataset.id = c.key;
+  head.setAttribute("aria-expanded", String(open));
+  const r = c.root;
+  // An agent is asked as itself; a service by the function called.
+  const whom = r.kind === "eval" ? "eval" : r.kind === "pub" ? fn(r) : isAgent(to(r)) || !r.to ? to(r) : r.to;
+  const who = whoOf(r);
+  head.append(el("span", "time", time(r.at)), el("span", "who", who[0].toUpperCase() + who.slice(1) + " → " + whom),
+    el("span", "ask", askText(r) || fn(r)), el("span", "caret", open ? "▾" : "▸"));
+  const line = el("span", "outcome-line");
+  line.append(el("span", "outcome", c.label));
+  const meta = [c.run !== null && "run " + c.run, c.state === "running" && c.job, c.rounds && plural(c.rounds, "review round"),
+    c.cost > 0 && "$" + c.cost.toFixed(2), !c.run && !c.rounds && c.is.length > 1 && plural(c.is.length, "message")].filter(Boolean);
+  if (meta.length) line.append(el("span", "meta", meta.join(" · ")));
+  head.append(line);
+  head.title = fullTime(r.at) + "  " + c.label;
+  card.append(head);
+  if (!open) return card;
+  const body = el("div", "card-body");
+  // What was said back to you: a message to :me, or the answer itself.
+  let said = c.said ? [whoOf(c.said), c.said.args.v[0].v] : null;
+  const answer = c.dones.get(String(pendingOf(r.reply)))?.args.v[1] ?? r.reply;
+  if (!said && kindOf(answer) === "ok" && answer.v[0]?.t === "str" && answer.v[0].v) said = [whom, answer.v[0].v];
+  if (said) {
+    const box = el("div", "said-box");
+    box.append(el("div", "said-by", said[0] + " replied"), el("p", "", said[1]));
+    body.append(box);
+  }
+  // Its chain as steps, as lanes, an address each and an arrow a
+  // message, or as every message, indented under what led to it.
+  const view = cardView.get(c.key) || "steps";
+  const seg = el("div", "view-seg");
+  seg.setAttribute("role", "group");
+  seg.setAttribute("aria-label", "Show the chain as");
+  for (const [v, label, title] of [["steps", "Steps", "what was asked, sent and run"], ["lanes", "Lanes", "an address each, an arrow a message: who talks to whom, in order"],
+    ["all", `All ${c.is.length} messages`, "every message, reads, answers and notes too, under the one that led to it"]]) {
+    const b = el("button", "", label);
+    b.type = "button";
+    b.title = title;
+    b.dataset.view = v;
+    b.dataset.id = c.key;
+    b.setAttribute("aria-pressed", String(v === view));
+    seg.append(b);
+  }
+  body.append(seg);
+  if (view === "lanes") body.append(lanesEl(c));
+  else if (view === "all") {
+    const list = el("div", "every-list");
+    for (const [i, depth] of c.chain) list.append(chainRow(entries[i], i, depth, true));
+    body.append(list);
+  } else {
+    const list = el("ol", "steps");
+    for (const i of stepsOfCard(c)) list.append(stepRow(c, i));
+    body.append(list);
+  }
+  card.append(body);
+  return card;
+}
+
+// bgEl is background events in a row, between requests, folded to "4
+// background events" and what they were, newest first.
+function bgEl(run) {
+  const first = entries[run.at(-1)[0][0]];
+  const key = keyOf(first);
+  const open = showBg || openBg.has(key) || (selected !== null && run.some((ch) => ch[0][0] === selected));
+  const box = el("div", "bg" + (open ? " is-open" : ""));
+  const h = el("button", "bg-head");
   h.type = "button";
-  h.dataset.id = first;
+  h.dataset.id = key;
   h.setAttribute("aria-expanded", String(open));
-  const what = [...new Set(is.map((i) => entries[i].to))].join(", ");
-  h.title = time(entries[is[0]].at) + "–" + time(entries[is.at(-1)].at);
-  h.append(el("span", "time", time(entries[is.at(-1)].at)), el("span", "fold", open ? "▾" : "▸"), `${is.length} reads`, el("span", "what-read", what));
+  const what = new Map();
+  for (const ch of run) {
+    const e = entries[ch[0][0]];
+    const name = e.kind === "note" ? "notes" : e.kind === "pub" ? fn(e) : e.kind === "eval" ? "eval" : ":" + e.to;
+    what.set(name, (what.get(name) || 0) + 1);
+  }
+  h.append(el("span", "caret", open ? "▾" : "▸"), el("span", "n-bg", plural(run.length, "background event")),
+    el("span", "what-bg", [...what].map(([n, x]) => n + (x > 1 ? " ×" + x : "")).join(", ")));
+  h.title = time(first.at) + "–" + time(entries[run[0][0][0]].at);
   box.append(h);
-  if (open) for (const i of is) box.append(chainRow(entries[i], i, 0));
+  if (open) {
+    for (const ch of run) {
+      const i = ch[0][0], r = chainRow(entries[i], i, 0);
+      if (ch.length > 1) (r.querySelector(".args") || r.querySelector(".note-text"))?.append(" ", el("span", "times", "+" + (ch.length - 1)));
+      box.append(r);
+    }
+  }
   return box;
 }
 
-// In a chain, whose heading says when it began, a row's time is only in
-// its title.
+// chainRow is a message as one line: when, who sent it where, its
+// arguments, and how it came back if not ok. In a chain, whose heading says
+// when it began, a row's time is only in its title.
 function chainRow(e, i, depth, inChain = false) {
   const r = el("div", "row " + e.kind);
   r.dataset.i = i;
@@ -303,92 +474,391 @@ function chainRow(e, i, depth, inChain = false) {
   return r;
 }
 
+// Pictures of who talks to whom: a card's chain as lanes, and Activity as
+// a map. Both are SVG, in the page's colours.
+const SVG = "http://www.w3.org/2000/svg";
+function svgEl(tag, attrs = {}, text) {
+  const e = document.createElementNS(SVG, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+const pct = (x) => (x * 100).toFixed(3) + "%";
+
+// placeOf is where an address is drawn: an agent's session, agent/lead,
+// as the agent, lead, since it acts for it.
+function placeOf(a) {
+  const name = a.startsWith("agent/") ? a.slice("agent/".length) : "";
+  return name && services.get(name)?.agent ? name : a;
+}
+const placeName = (a) => (a === "client" ? "you" : ":" + a);
+
+// arrowLabel is a message on its arrow: what it asked, or for an answer
+// how it came back.
+function arrowLabel(e) {
+  if (isDone(e)) return "↩ " + resultText(e.args.v[1]);
+  if (e.kind === "eval") return "eval " + askText(e);
+  if (e.to === "jobs/run" && e.args?.v?.length) return "run " + jobName(e.args.v[0]);
+  return fn(e) + (askText(e) ? " " + askText(e) : "");
+}
+
+// lanesEl is a card's chain as lanes: an address a lane, you first, and an
+// arrow a message, in the order they began, answers back to who asked;
+// reads, notes and whiff's own notices left out. Each arrow is a message:
+// click it for its details.
+function lanesEl(c) {
+  const is = c.is.filter((i, n) => {
+    const e = entries[i];
+    if (e.kind === "note" || e.to?.endsWith("/whiff/asked")) return false;
+    return n === 0 || !(e.kind === "call" && isRead(e.to));
+  });
+  const lanes = [];
+  const lane = (a) => {
+    a = placeOf(a);
+    if (!lanes.includes(a)) lanes.push(a);
+    return lanes.indexOf(a);
+  };
+  lane("client");
+  const rows = is.map((i) => {
+    const e = entries[i];
+    return { i, e, a: lane(from(e)), b: e.kind === "eval" ? lane(from(e)) : lane(to(e)) };
+  });
+  const n = lanes.length, H = 28, top = 34, height = top + rows.length * H + 8;
+  const svg = svgEl("svg", { class: "lanes", width: "100%", height, role: "img", "aria-label": "The chain as lanes: who sent whom what, in order" });
+  lanes.forEach((a, k) => {
+    const x = pct((k + 0.5) / n);
+    const head = svgEl("text", { x, y: 14, "text-anchor": "middle", class: "lane-name" + (a === "client" ? " you" : "") }, placeName(a));
+    if (a !== "client") head.dataset.address = a;
+    svg.append(head, svgEl("line", { x1: x, y1: 22, x2: x, y2: height, class: "lifeline" }));
+  });
+  rows.forEach(({ i, e, a, b }, r) => {
+    const y = top + r * H + 14;
+    let k = kindOf(e.reply);
+    if (isDone(e)) k = kindOf(e.args.v[1]);
+    const g = svgEl("g", { class: "lane-row " + (isDone(e) ? "done" : e.kind) + " " + k });
+    g.dataset.i = i;
+    g.append(svgEl("rect", { x: 0, y: y - 15, width: "100%", height: H, class: "hit" }));
+    const xa = (a + 0.5) / n, xb = (b + 0.5) / n;
+    let span, lx, anchor;
+    if (a === b) {
+      const out = Math.min(0.04, 0.4 / n);
+      g.append(svgEl("line", { x1: pct(xa), y1: y - 6, x2: pct(xa + out), y2: y - 6 }),
+        svgEl("line", { x1: pct(xa + out), y1: y - 6, x2: pct(xa + out), y2: y + 4 }),
+        svgEl("line", { x1: pct(xa + out), y1: y + 4, x2: pct(xa), y2: y + 4, "marker-end": "url(#ah)" }));
+      span = 1 - xa - out;
+      lx = pct(xa + out + 0.008);
+      anchor = "start";
+    } else {
+      g.append(svgEl("line", { x1: pct(xa), y1: y, x2: pct(xb), y2: y, "marker-end": "url(#ah)" }));
+      span = Math.abs(xb - xa);
+      lx = pct((xa + xb) / 2);
+      anchor = "middle";
+    }
+    const full = arrowLabel(e);
+    const label = svgEl("text", { x: lx, y: a === b ? y + 1 : y - 5, "text-anchor": anchor, class: "arrow-label" }, full);
+    label.dataset.span = span; // of the drawing's width: fitLabels cuts it to fit
+    label.full = full;
+    g.append(label);
+    g.append(svgEl("title", {}, `${fullTime(e.at)}  ${placeName(placeOf(from(e)))} → ${placeName(lanes[b])}\n${full}`));
+    svg.append(g);
+  });
+  const box = el("div", "lanes-box");
+  box.append(svg);
+  fitting.observe(svg);
+  return box;
+}
+
+// fitLabels cuts each arrow's label in svg to the room it has, as wide as
+// its arrow, each time the drawing changes width, as the details open.
+function fitLabels(svg) {
+  const w = svg.getBoundingClientRect().width;
+  if (!w) return;
+  for (const t of svg.querySelectorAll(".arrow-label")) {
+    const full = t.full ?? t.textContent;
+    const max = Math.max(6, Math.floor((parseFloat(t.dataset.span) * w - 8) / 6.9));
+    t.textContent = full.length > max ? full.slice(0, max - 1) + "…" : full;
+  }
+}
+const fitting = new ResizeObserver((es) => { for (const e of es) fitLabels(e.target); });
+
+// mapEl is the messages at is as a map: an address a box, in columns by
+// how far they are from you, and an arrow for each pair that talked, as
+// thick as how often, amber or red if some failed. Answers and whiff's
+// notices go without saying. Click a box for the address, an arrow for
+// its messages.
+function mapEl(is) {
+  const edges = new Map(), first = new Map(), handled = new Map();
+  const answered = new Set(); // what answered something, as one that is gone once did
+  for (const i of is) {
+    const e = entries[i];
+    if (e.kind !== "note" && e.to && e.reply && field(e.reply.v?.[0], "kind")?.v !== "no-address") answered.add(placeOf(to(e)));
+    if (e.kind === "note" || isDone(e) || e.to?.endsWith("/whiff/asked")) continue;
+    const a = placeOf(from(e)), b = e.kind === "eval" ? a : placeOf(to(e));
+    for (const x of [a, b]) if (!first.has(x)) first.set(x, i);
+    const key = a + "\t" + b;
+    if (!edges.has(key)) edges.set(key, { a, b, from: from(e), to: e.kind === "eval" ? from(e) : to(e), n: 0, err: 0, fault: 0, pub: true, last: i });
+    const ed = edges.get(key), k = kindOf(e.reply);
+    ed.n++;
+    ed.last = i;
+    if (k === "err") ed.err++;
+    if (k === "fault") ed.fault++;
+    if (e.kind !== "pub") ed.pub = false;
+    handled.set(b, (handled.get(b) || 0) + 1);
+  }
+  if (!edges.size) return el("p", "empty", "Nothing to map yet: the requests shown, and the background once you show it, are drawn here.");
+  // Columns: you first, with :me, your inbox, and whoever else begins
+  // work, an agent's session or a service on its timer; then each address
+  // a column right of the furthest that sends it messages, so work flows
+  // left to right. An arrow that closes a loop goes back, under.
+  const out = new Map();
+  for (const ed of edges.values()) if (ed.a !== ed.b && ed.b !== "me") (out.get(ed.a) || out.set(ed.a, []).get(ed.a)).push(ed.b);
+  const into = new Set([...edges.values()].filter((ed) => ed.a !== ed.b).map((ed) => ed.b));
+  const roots = ["client", ...[...first.keys()].filter((x) => x !== "client" && !into.has(x)), ...first.keys()].filter((x) => first.has(x));
+  const seen = new Map(), back = new Set(), order = [];
+  const visit = (x) => {
+    seen.set(x, 1);
+    for (const y of out.get(x) || []) {
+      if (seen.get(y) === 1) back.add(x + "\t" + y);
+      else if (!seen.has(y)) visit(y);
+    }
+    seen.set(x, 2);
+    order.push(x);
+  };
+  for (const r of roots) if (!seen.has(r)) visit(r);
+  const depth = new Map();
+  for (const x of order.reverse()) {
+    if (!depth.has(x)) depth.set(x, 0);
+    for (const y of out.get(x) || []) if (!back.has(x + "\t" + y)) depth.set(y, Math.max(depth.get(y) ?? 0, depth.get(x) + 1));
+  }
+  if (first.has("me")) depth.set("me", 0);
+  const cols = [];
+  for (const [x, d] of depth) (cols[d] ||= []).push(x);
+  for (let d = 0; d < cols.length; d++) cols[d] ||= [];
+  // You on top, then in the order they first show; each further column in
+  // the order of who sends to it, so fewer arrows cross.
+  const row = new Map();
+  cols[0].sort((x, y) => (x === "client" ? -1 : y === "client" ? 1 : x === "me" ? -1 : y === "me" ? 1 : first.get(x) - first.get(y)));
+  cols[0].forEach((x, r) => row.set(x, r));
+  for (let d = 1; d < cols.length; d++) {
+    const at = (x) => {
+      const from = [...edges.values()].filter((ed) => ed.b === x && row.has(ed.a)).map((ed) => row.get(ed.a));
+      return from.length ? from.reduce((a, b) => a + b, 0) / from.length : 1e6 + first.get(x);
+    };
+    cols[d].sort((x, y) => at(x) - at(y) || first.get(x) - first.get(y));
+    cols[d].forEach((x, r) => row.set(x, r));
+  }
+  const NW = 168, NH = 44, CG = 120, RG = 30, PAD = 24;
+  const pos = new Map();
+  // Room on the left for what goes around a column.
+  cols.forEach((col, d) => (col || []).forEach((x, r) => pos.set(x, { x: PAD + 70 + d * (NW + CG), y: PAD + r * (NH + RG) })));
+  const W = PAD * 2 + 70 + cols.length * (NW + CG) - CG + 60;
+  const H = PAD * 2 + Math.max(...cols.map((c) => c?.length || 0)) * (NH + RG) - RG + 50;
+  const svg = svgEl("svg", { class: "map", viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": "Who talks to whom" });
+  const edgesG = svgEl("g"), nodesG = svgEl("g");
+  // Ports: a node's arrows on to the next columns leave its right side
+  // spread top to bottom in the order of where they go, and come into
+  // the left side so, rather than all from one point.
+  const fwd = [...edges.values()].filter((ed) => depth.get(ed.b) > depth.get(ed.a));
+  const port = new Map();
+  const spreadPorts = (side, key, other) => {
+    const by = new Map();
+    for (const ed of fwd) (by.get(ed[key]) || by.set(ed[key], []).get(ed[key])).push(ed);
+    for (const [, eds] of by) {
+      eds.sort((e1, e2) => pos.get(e1[other]).y - pos.get(e2[other]).y);
+      eds.forEach((ed, k) => port.set(side + (key === "a" ? ed.a + "\t" + ed.b : ed.a + "\t" + ed.b), 8 + (NH - 16) * (eds.length === 1 ? 0.5 : k / (eds.length - 1))));
+    }
+  };
+  spreadPorts("out", "a", "b");
+  spreadPorts("in", "b", "a");
+  for (const ed of edges.values()) {
+    const p = pos.get(ed.a), q = pos.get(ed.b);
+    let d, mid;
+    if (ed.a === ed.b) {
+      const x = p.x + NW, y = p.y + 10;
+      d = `M ${x} ${y} C ${x + 34} ${y - 16}, ${x + 34} ${y + 40}, ${x} ${y + 24}`;
+      mid = [x + 26, y + 12];
+    } else {
+      const da = depth.get(ed.a), db = depth.get(ed.b);
+      let x0, y0, x1, y1, x2, y2, x3, y3;
+      if (db > da) { // on, to the right: side to side
+        const k = ed.a + "\t" + ed.b;
+        [x0, y0, x3, y3] = [p.x + NW, p.y + port.get("out" + k), q.x, q.y + port.get("in" + k)];
+        [x1, y1, x2, y2] = [x0 + (x3 - x0) * 0.45, y0, x3 - (x3 - x0) * 0.45, y3];
+      } else if (db === da) { // in its column: around the left
+        [x0, y0, x3, y3] = [p.x, p.y + NH / 2 + 6, q.x, q.y + NH / 2 + 6];
+        [x1, y1, x2, y2] = [x0 - 70, y0, x3 - 70, y3];
+      } else { // back, to the left: under, from bottom to bottom
+        [x0, y0, x3, y3] = [p.x + NW / 2 - 20, p.y + NH, q.x + NW / 2 + 20, q.y + NH];
+        [x1, y1, x2, y2] = [x0, y0 + 50, x3, y3 + 50];
+      }
+      d = `M ${x0} ${y0} C ${x1} ${y1}, ${x2} ${y2}, ${x3} ${y3}`;
+      // Its count near where it arrives, where arrows part.
+      const t = db > da ? 0.78 : 0.5, u = 1 - t;
+      const bez = (a, b, c, e) => u * u * u * a + 3 * u * u * t * b + 3 * u * t * t * c + t * t * t * e;
+      mid = [bez(x0, x1, x2, x3), bez(y0, y1, y2, y3)];
+    }
+    const g = svgEl("g", { class: "edge" + (ed.fault ? " fault" : ed.err ? " err" : "") + (ed.pub ? " pub" : "") });
+    g.dataset.query = `from:${ed.from} to:${ed.to}`;
+    g.append(svgEl("path", { d, class: "hit" }), svgEl("path", { d, "stroke-width": 1.2 + Math.min(4, Math.log2(ed.n)), "marker-end": "url(#ah)" }));
+    const bad = ed.fault ? ` · ${ed.fault} faulted` : ed.err ? ` · ${ed.err} failed` : "";
+    g.append(svgEl("text", { x: mid[0], y: mid[1] - 4, "text-anchor": "middle", class: "edge-label" }, ed.n + bad));
+    g.append(svgEl("title", {}, `${placeName(ed.a)} → ${placeName(ed.b)}: ${plural(ed.n, ed.pub ? "publish" : "message")}${bad}\nlast: ${arrowLabel(entries[ed.last]).slice(0, 120)}\nclick to show them`));
+    edgesG.append(g);
+  }
+  for (const [x, p] of pos) {
+    const st = services.get(x), fault = faulted.has(x) && !st;
+    const cls = x === "client" ? "you" : fault ? "fault" : st ? statusClass(st.status) : "";
+    const g = svgEl("g", { class: "node " + (cls || "quiet") + (isAgent(x) ? " agent" : "") + (x === shownAddress ? " selected" : "") });
+    if (x !== "client") g.dataset.address = x;
+    // What it is: an agent, a puff service of yours, a client, one of
+    // whiff's own, as :jobs; or not there now: gone, if it answered
+    // something once, as a service whose file you removed, else no such
+    // address, as a mistyped name.
+    const a = addresses.find((y) => y.address === x);
+    const what = isAgent(x) ? "agent" : x === "me" ? "your inbox" : st ? "service" : a?.client ? "client" : a ? "built-in"
+      : answered.has(x) ? "gone" : "no such address";
+    if (x !== "client" && (what === "gone" || what === "no such address")) g.classList.add("unknown");
+    const sub = x === "client" ? "you" : [what,
+      st && st.status !== "ok" && st.status !== "idle" ? st.status.replace("-", " ") : "", handled.get(x) ? handled.get(x) + " in" : ""].filter(Boolean).join(" · ");
+    g.append(svgEl("rect", { x: p.x, y: p.y, width: NW, height: NH, rx: 8 }),
+      svgEl("circle", { cx: p.x + 14, cy: p.y + 16, r: 4, class: "dot" }),
+      svgEl("text", { x: p.x + 26, y: p.y + 20, class: "node-name" }, placeName(x).slice(0, 20)),
+      svgEl("text", { x: p.x + 26, y: p.y + 35, class: "node-sub" }, sub),
+      svgEl("title", {}, x === "client" ? "you, and sniff and the CLI"
+        : what === "gone" ? placeName(x) + " answered once, but isn't there now: its file was removed, or failed to load"
+        : what === "no such address" ? "nothing ever answered at " + placeName(x) + ": a mistyped name?"
+        : placeName(x) + (st?.note ? ": " + st.note : "") + "\nclick for its functions, status and state"));
+    nodesG.append(g);
+  }
+  svg.append(edgesG, nodesG);
+  const box = el("div", "map-box");
+  box.append(svg, el("p", "hint map-hint", (showBg ? "Every message shown" : "The requests shown, not the background") +
+    ": click an address for its details, an arrow for its messages. The filter narrows it too."));
+  return box;
+}
+
+// setLayout shows Activity as cards or as the map, and remembers it.
+function setLayout(v) {
+  layout = v;
+  store.set("layout", v);
+  $("activity-title").textContent = v === "map" ? "Map" : "Activity";
+  // On the map, details dock under it, so the map keeps its width.
+  $("activity").classList.toggle("dock-bottom", v === "map");
+  activate(null);
+  redraw();
+}
+
+// The arrowheads, once for the page, in each line's own colour.
+document.body.append((() => {
+  const s = svgEl("svg", { width: 0, height: 0, "aria-hidden": "true", style: "position:absolute" });
+  const defs = svgEl("defs"), m = svgEl("marker", { id: "ah", viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 8, markerHeight: 8, markerUnits: "userSpaceOnUse", orient: "auto-start-reverse" });
+  m.append(svgEl("path", { d: "M 0 0 L 10 5 L 0 10 z", fill: "context-stroke" }));
+  defs.append(m);
+  s.append(defs);
+  return s;
+})());
+
+// redraw draws Activity: a card a request, newest first, and the
+// background events between them folded into a row. A request to an agent
+// that is still thinking runs until it isn't.
 function redraw() {
   const rows = $("rows");
   // A heading you went to, by j and k or a click, stays where you are.
   const f = rows.contains(document.activeElement) ? document.activeElement : null;
-  const again = f?.dataset.id ? `.${f.classList[0]}[data-id="${f.dataset.id}"]` : null;
+  const again = f?.dataset.id ? `.${f.classList[0]}[data-id="${CSS.escape(f.dataset.id)}"]` : null;
+  const busy = new Set([...services.values()].filter((s) => s.agent && (s.status === "thinking" || s.status === "busy")).map((s) => s.service));
+  const all = chains();
   const frag = document.createDocumentFragment();
-  if (shown === "chains") drawChains(frag);
-  else entries.forEach((e, i) => frag.append(row(e, i)));
-  rows.replaceChildren(frag);
+  let run = null, running = 0;
+  const shown = []; // the entries the map draws: the requests', and the background's if shown
+  const flush = () => {
+    if (run) frag.append(bgEl(run));
+    run = null;
+  };
+  for (let n = all.length - 1; n >= 0; n--) {
+    const ch = all[n];
+    if (only !== null && !ch.some(([i]) => entries[i].id === only)) continue;
+    if (only === null && isBackground(ch)) {
+      (run ||= []).push(ch);
+      if (showBg) for (const [i] of ch) shown.push(i);
+      continue;
+    }
+    for (const [i] of ch) shown.push(i);
+    flush();
+    const c = cardOf(ch);
+    const agent = [to(c.root), c.root.from].find((a) => busy.has(a));
+    if (agent) {
+      busy.delete(agent);
+      if (c.state === "ok") { c.state = "running"; c.label = "Running"; }
+    }
+    if (c.state === "running") running++;
+    frag.append(cardEl(c));
+  }
+  flush();
+  if (layout === "map") rows.replaceChildren(mapEl(shown));
+  else rows.replaceChildren(frag);
   $("empty").hidden = entries.length > 0;
+  if (counts.running !== running) {
+    counts.running = running;
+    drawPills();
+  }
   if (selected !== null) mark(selected);
   if (again) rows.querySelector(again)?.focus({ preventScroll: true });
 }
 
-// redrawSoon redraws once for the entries that come in a frame, and keeps
-// the end in sight if stick was for any of them.
-let soon = null, sticking = false;
-function redrawSoon(stick) {
-  sticking ||= stick;
+// redrawSoon redraws once for the entries that come in a frame.
+let soon = null;
+function redrawSoon() {
   soon ??= requestAnimationFrame(() => {
     soon = null;
     redraw();
-    if (sticking) $("trace").scrollTop = $("trace").scrollHeight;
-    sticking = false;
   });
 }
 
-// showOnly shows only the chain that id began, as chains; or, for null,
-// every chain again.
+// showOnly shows only the chain with id in it, open; or, for null, every
+// chain again.
 function showOnly(id) {
   only = id;
-  $("only").hidden = !id;
-  if (id && shown !== "chains") showAs("chains");
-  else redraw();
-  if (selected !== null) showEntry(selected);
+  $("only").hidden = id === null;
+  activate(null);
+  redraw();
 }
 $("only").onclick = () => showOnly(null);
 
-// showAs draws history as chains or lanes, and remembers it.
-function showAs(how) {
-  shown = how;
-  store.set("activity", how);
-  if (how === "lanes") { // lanes show every message
-    only = null;
-    $("only").hidden = true;
-  }
-  for (const b of document.querySelectorAll("[data-show]")) b.setAttribute("aria-pressed", String(b.dataset.show === how));
-  $("lanes").hidden = how !== "lanes";
-  $("rows").classList.toggle("chains", how === "chains");
+// showBackground shows every background event, or folds them again.
+function showBackground(on) {
+  showBg = on;
+  store.set("background", on);
+  $("show-bg").setAttribute("aria-pressed", String(on));
+  $("show-bg").textContent = on ? "Hide background" : "Show background";
   redraw();
 }
+$("show-bg").onclick = () => showBackground(!showBg);
 
 // append adds e in order of when it began: history records a call when it
-// ends, after the calls it made.
+// ends, after the calls it made. A new address loads the addresses again.
+const seen = new Set();
 function append(e) {
-  const trace = $("trace");
-  const atEnd = trace.scrollHeight - trace.scrollTop - trace.clientHeight < 40;
   let i = entries.length;
   while (i > 0 && entries[i - 1].us > e.us) i--;
   entries.splice(i, 0, e);
-  if (noteFault(e)) drawAddresses();
+  noteFault(e);
   servicesSoon();
   if (selected !== null && selected >= i) selected++;
+  if (e.kind !== "note") {
+    for (const a of [from(e), to(e)]) {
+      if (a === "client" || seen.has(a)) continue;
+      seen.add(a);
+      if (!addresses.some((x) => x.address === a)) reloadSoon();
+    }
+  }
   $("empty").hidden = true;
-  // A chain can gain a message anywhere, or one that began it after the
-  // rest: it is drawn again.
-  if (shown === "chains") {
-    if (e.kind !== "note") { laneOf(from(e)); laneOf(to(e)); }
-    redrawSoon($("follow").checked && atEnd);
-    return;
-  }
-  const n = lanes.length;
-  const r = row(e, i);
-  if (lanes.length === n) { // else redraw drew it
-    // Only the rows after it move: renumber them rather than draw them all.
-    const rows = $("rows");
-    for (let j = i; j < rows.children.length; j++) rows.children[j].dataset.i = j + 1;
-    rows.insertBefore(r, rows.children[i] || null);
-  }
-  if ($("follow").checked && atEnd) trace.scrollTop = trace.scrollHeight;
+  redrawSoon();
 }
 
 function mark(i) {
-  document.querySelectorAll(".row.selected").forEach((r) => r.classList.remove("selected"));
-  const r = document.querySelector(`.row[data-i="${i}"]`);
-  if (r) r.classList.add("selected");
+  document.querySelectorAll("#rows .selected").forEach((r) => r.classList.remove("selected"));
+  document.querySelector(`#rows [data-i="${i}"]`)?.classList.add("selected");
 }
 
 function section(title, ...kids) {
@@ -397,33 +867,113 @@ function section(title, ...kids) {
   return f;
 }
 
+// pane fills the detail pane, shown, with a heading: a kicker, "CALL",
+// over its title, and a button that closes it.
+function pane(kicker, title) {
+  const d = $("detail");
+  const head = el("div", "pane-head");
+  const words = el("div");
+  words.append(el("div", "kicker", kicker), el("h2", "", title));
+  const close = el("button", "close-pane", "×");
+  close.type = "button";
+  close.title = "Close (esc)";
+  close.setAttribute("aria-label", "Close the details");
+  close.onclick = closeDetail;
+  head.append(words, close);
+  d.replaceChildren(head);
+  d.hidden = false;
+  return d;
+}
+
+// markAddress outlines on the map the address the details show, or none.
+let shownAddress = null;
+function markAddress(name) {
+  shownAddress = name;
+  for (const g of document.querySelectorAll(".map .node")) g.classList.toggle("selected", g.dataset.address === name);
+}
+
+function closeDetail() {
+  markAddress(null);
+  selected = null;
+  mark(-1);
+  $("detail").hidden = true;
+  history.replaceState(null, "", location.pathname + location.search);
+}
+
+// reveal opens what shows entry i: its card, and every message of it if
+// it isn't a step.
+function reveal(i) {
+  const at = () => $("rows").querySelector(`[data-i="${i}"]`);
+  if (at()) return;
+  const key = keyOf(entries[chainOf(i)[0]]);
+  opened.add(key);
+  redraw();
+  if (at()) return;
+  cardView.set(key, "all");
+  redraw();
+}
+
+// argsBox is a message's arguments: by name, as its function names them
+// or as the one map it sent has them, strings as text; else as puff.
+function argsBox(e) {
+  const vs = e.args.v;
+  if (!vs.length) return el("p", "hint", "None.");
+  const names = params.get(e.to);
+  let pairs = null;
+  if (vs.length === 1 && vs[0].t === "map" && vs[0].v.length && vs[0].v.every(([k]) => k.t === "kw")) pairs = vs[0].v.map(([k, v]) => [k.v, v]);
+  else if (names?.length === vs.length) pairs = vs.map((v, n) => [names[n], v]);
+  if (!pairs) return drawn(e.args);
+  const dl = el("dl", "kv");
+  for (const [k, v] of pairs) dl.append(el("dt", "", k), el("dd", "", v.t === "str" ? home(v.v) : print(v)));
+  return dl;
+}
+
+// rawText is a message as history keeps it, printed as puff.
+function rawText(e) {
+  const kv = [["kind", ":" + e.kind], ["id", e.id], ["cause", e.cause], ["origin", e.origin && ":" + e.origin],
+    ["from", e.from ? ":" + e.from : "client"], ["to", e.to ? ":" + e.to : "client"], ["at", JSON.stringify(e.at)],
+    ["took", e.took ? JSON.stringify(took(e.took)) : ""], ["gate", e.gate && JSON.stringify(e.gate)], ["note", e.note && JSON.stringify(e.note)],
+    ["args", e.args && print(e.args)], ["reply", e.reply && print(e.reply)]].filter(([, v]) => v);
+  return "{" + kv.map(([k, v]) => ":" + k + " " + v).join("\n ") + "}";
+}
+
 function showEntry(i) {
   history.replaceState(null, "", location.pathname + location.search);
   const e = entries[i];
   selected = i;
+  markAddress(null);
+  reveal(i);
   mark(i);
-  const d = $("detail");
   if (e.kind === "note") {
-    d.replaceChildren(el("h2", "", "note"), el("p", "", e.note), el("p", "meta", time(e.at)));
+    const d = pane("note", time(e.at));
+    d.append(el("p", "", e.note));
     return;
   }
-  const head = el("h2", "", `${e.kind}  ${e.from ? ":" + e.from : "client"} → ${e.to ? ":" + e.to : "client"}`);
+  const target = e.kind === "eval" ? "eval" : e.kind === "pub" ? fn(e) : e.to ? ":" + e.to : "client";
+  const d = pane(e.kind, `${e.from || (e.origin === "agent" ? "an agent" : "you")} → ${target}`);
   const meta = el("div", "meta");
-  meta.append(el("span", "", time(e.at)), el("span", "badge", e.origin), el("span", "", took(e.took)));
+  meta.append(el("span", "", fullTime(e.at)), el("span", "badge", e.origin || "whiff"));
+  if (e.took) meta.append(el("span", "", took(e.took)));
   if (e.gate) meta.append(gateBadge(e.gate));
-  d.replaceChildren(head, meta);
+  d.append(meta);
   const chain = chainOf(i);
-  if (chain.length > 1) d.prepend(crumbs(chain));
-  if (e.args) d.append(section("Arguments", drawn(e.args)));
-  if (!e.reply) d.append(section("Reply", el("p", "hint", "None: nobody handled it.")));
-  else d.append(section("Reply", drawn(e.reply, "reply")));
-  const view = viewOf(e);
-  if (view) {
-    const a = el("a", "open", "Open :" + e.to + " as a tab");
-    a.href = view;
-    d.append(a);
+  if (chain.length > 1) d.append(crumbs(chain));
+  if (e.args) d.append(section("Arguments", argsBox(e)));
+  // A pending's answer came later, as a done: that is its reply.
+  const done = kindOf(e.reply) === "pending" ? entries.find((x) => isDone(x) && String(x.args.v[0].v) === String(pendingOf(e.reply))) : null;
+  const reply = el("div", "reply-box");
+  if (done) {
+    reply.append(drawn(done.args.v[1], "reply"));
+    d.append(section("Reply", reply, el("p", "hint", `answered ${took(Date.parse(done.at) - Date.parse(e.at))} later; at once it said ${print(e.reply)}`)));
+  } else if (e.reply) {
+    reply.append(drawn(e.reply, "reply"));
+    d.append(section("Reply", reply));
+  } else if (e.kind !== "pub" && e.kind !== "done") {
+    d.append(section("Reply", el("p", "hint", "None: nobody handled it.")));
   }
-  d.append(entryActions(e, chain[0]), keysLine());
+  const raw = el("details", "raw");
+  raw.append(el("summary", "", "Show raw message"), el("pre", "", rawText(e)));
+  d.append(raw, entryActions(e));
 }
 
 // viewOf is the page of the view e answered, or null: a view a :read
@@ -433,23 +983,12 @@ function viewOf(e) {
   return view && e.kind === "call" && e.args && marks.get(e.to) === "read" ? pageOf(e.to, e.args) : null;
 }
 
-// keysLine is the keys that work over Activity.
-function keysLine() {
-  const p = el("p", "keys");
-  const keys = [["j", "/", "k", " next/previous"], ["enter", " open"], ["/", " filter"], ["c", " call again"], [modK, " go to or call"]];
-  keys.forEach((k, n) => {
-    if (n) p.append(" · ");
-    k.forEach((s, m) => p.append(m % 2 ? s : el("kbd", "", s)));
-  });
-  return p;
-}
-
 // chainOf is the indexes of what led to entry i, from the entry that began
 // its chain, and i last.
 function chainOf(i) {
   const at = new Map(entries.map((e, j) => [e.id, j]));
   const path = [i];
-  for (let e = entries[i]; e.cause && at.has(e.cause); e = entries[path[0]]) path.unshift(at.get(e.cause));
+  for (let e = entries[i]; e.cause && at.has(e.cause) && at.get(e.cause) < path[0]; e = entries[path[0]]) path.unshift(at.get(e.cause));
   return path;
 }
 
@@ -460,7 +999,7 @@ function crumbs(path) {
   const nav = el("nav", "crumbs");
   nav.setAttribute("aria-label", "Its chain");
   const root = entries[path[0]];
-  nav.append(root.from || (root.origin === "agent" ? "client" : "you"));
+  nav.append(whoOf(root));
   path.forEach((j, n) => {
     const e = entries[j];
     const name = e.kind === "eval" ? "eval" : e.kind === "pub" ? fn(e) : e.kind === "done" ? "done" : e.to;
@@ -488,10 +1027,30 @@ function asPuff(e) {
   return form("call :" + e.to);
 }
 
-// entryActions are what you can do with e, whose chain began with entry
-// root: copy it as puff, show only its chain, or call it again as you.
-function entryActions(e, root) {
+// entryActions are what you can do with e: call it again as you, open
+// the address it went to or the view it answered, or copy it as puff.
+function entryActions(e) {
   const box = el("div", "entry-actions");
+  if ((e.kind === "call" || e.kind === "send") && e.to) {
+    const again = el("details", "again");
+    again.append(el("summary", "", "Call again"), callBox("[:" + e.to + (e.args && e.args.v.length ? " " + print(e.args).slice(1, -1) : "") + "]"));
+    box.append(again);
+  }
+  const addr = e.kind === "eval" ? "" : to(e);
+  if (addr && addr !== "client") {
+    const b = el("button", "", "Open :" + addr);
+    b.type = "button";
+    b.title = "its functions, status and state";
+    b.onclick = () => showAddress(addr);
+    box.append(b);
+  }
+  const view = viewOf(e);
+  if (view) {
+    const a = el("a", "button", "Open as a tab");
+    a.href = view;
+    a.title = "what :" + e.to + " answers, as a tab where its actions work (enter)";
+    box.append(a);
+  }
   const copy = el("button", "", "Copy as puff");
   copy.type = "button";
   copy.onclick = async () => {
@@ -504,17 +1063,6 @@ function entryActions(e, root) {
     setTimeout(() => { copy.textContent = "Copy as puff"; }, 1500);
   };
   box.append(copy);
-  if (entries[root].id && only !== entries[root].id) {
-    const b = el("button", "", "Only this chain");
-    b.type = "button";
-    b.onclick = () => showOnly(entries[root].id);
-    box.append(b);
-  }
-  if ((e.kind === "call" || e.kind === "send") && e.to) {
-    const again = el("details", "again");
-    again.append(el("summary", "", "Call again…"), callBox("[:" + e.to + (e.args && e.args.v.length ? " " + print(e.args).slice(1, -1) : "") + "]"));
-    box.append(again);
-  }
   return box;
 }
 
@@ -600,7 +1148,7 @@ function showSession(d, name) {
       } else {
         b.onclick = () => {
           showEntry(i);
-          document.querySelector(`.row[data-i="${i}"]`)?.scrollIntoView({ block: "center" });
+          $("rows").querySelector(`[data-i="${i}"]`)?.scrollIntoView({ block: "center" });
         };
       }
       box.append(b);
@@ -620,13 +1168,19 @@ async function loadAddresses() {
     addressesErr = "";
   } catch (err) {
     addressesErr = err.message;
-    drawAddresses();
     return;
   }
   marks = new Map();
-  for (const a of addresses) for (const f of a.fns) marks.set(a.address + "/" + f.fn, f.mark);
-  if (shown === "chains") redraw(); // a client's reads fold, by their marks
-  drawAddresses();
+  params = new Map();
+  asks = new Set();
+  for (const a of addresses) {
+    for (const f of a.fns) {
+      marks.set(a.address + "/" + f.fn, f.mark);
+      params.set(a.address + "/" + f.fn, f.params);
+      if (f.form === "ask") asks.add(a.address + "/" + f.fn);
+    }
+  }
+  redraw(); // a client's reads go to the background, by their marks
   await loadServices();
   // After the statuses, so a link to an address shows its Status.
   if (!linked && location.hash.startsWith("#:")) showAddress(decodeURIComponent(location.hash.slice(2)));
@@ -644,8 +1198,80 @@ async function loadServices() {
   } catch {
     return; // the addresses say why
   }
-  drawAddresses();
+  redrawSoon(); // a request to an agent runs while it thinks
+  loadSpend();
+  drawAgentDots();
 }
+
+// drawAgentDots puts each agent in the status strip, as a dot and its
+// name: how it is, at a glance, and its details on a click.
+function drawAgentDots() {
+  const box = $("agent-dots");
+  box.replaceChildren();
+  for (const st of services.values()) {
+    if (!st.agent) continue;
+    const quiet = st.status === "ok" || st.status === "idle";
+    const b = el("button", "agent-dot " + (statusClass(st.status) || (quiet ? "quiet" : "")), st.service);
+    b.type = "button";
+    b.title = `:${st.service}: ${st.status.replace("-", " ")}${st.note ? ", " + st.note : ""}`;
+    b.setAttribute("aria-haspopup", "dialog");
+    b.onclick = () => (agentPop.dataset.for === st.service && !agentPop.hidden ? closeAgentPop() : openAgentPop(b, st.service));
+    box.append(b);
+  }
+}
+
+// The agent popover: a click on an agent's dot shows, under the dot, how
+// it is and what you can do from there: see its messages, or its full
+// details in the pane. Esc or a click elsewhere closes it.
+const agentPop = el("div", "pop");
+agentPop.hidden = true;
+agentPop.setAttribute("role", "dialog");
+document.body.append(agentPop);
+
+async function openAgentPop(anchor, name) {
+  agentPop.dataset.for = name;
+  const r = anchor.getBoundingClientRect();
+  agentPop.style.top = r.bottom + 6 + "px";
+  agentPop.style.left = Math.max(8, Math.min(r.left, innerWidth - 328)) + "px";
+  agentPop.setAttribute("aria-label", ":" + name);
+  agentPop.replaceChildren(el("p", "hint", "…"));
+  agentPop.hidden = false;
+  let st;
+  try {
+    st = await getJSON("api/service?address=" + encodeURIComponent(name));
+  } catch (err) {
+    if (agentPop.dataset.for === name) agentPop.replaceChildren(el("p", "hint", err.message));
+    return;
+  }
+  if (agentPop.dataset.for !== name || agentPop.hidden) return;
+  const head = el("p", "svc-head " + statusClass(st.status));
+  head.append(el("span", "dot"), el("strong", "", ":" + name), " ", el("span", "", st.status.replace("-", " ")));
+  const dl = el("dl");
+  if (st.note) dl.append(el("dt", "", "now"), el("dd", "", st.note));
+  for (const [k, v] of serviceLines(st)) if (k !== "file") dl.append(el("dt", "", k), el("dd", "", v));
+  const acts = el("div", "pop-actions");
+  const act = (label, title, f) => {
+    const b = el("button", "", label);
+    b.type = "button";
+    b.title = title;
+    b.onclick = () => { closeAgentPop(); f(); };
+    acts.append(b);
+  };
+  act("Its messages", `Activity filtered to what :${name} was sent`, () => { setLayout("cards"); setQuery("to:" + name); });
+  act("Details", "its functions, status, work and state, in the pane", () => { activate(null); showAddress(name); });
+  const box = el("div", "svc-status");
+  box.append(head, dl);
+  agentPop.replaceChildren(box, acts);
+}
+
+function closeAgentPop() {
+  agentPop.hidden = true;
+  delete agentPop.dataset.for;
+}
+document.addEventListener("click", (ev) => {
+  if (!agentPop.hidden && !agentPop.contains(ev.target) && !ev.target.closest(".agent-dot")) closeAgentPop();
+});
+addEventListener("resize", closeAgentPop);
 
 let servicesTimer = 0;
 function servicesSoon() {
@@ -965,35 +1591,6 @@ function noteFault(e) {
   return k === "ok" && faulted.delete(a);
 }
 
-// drawAddresses lists every address in the sidebar, with a dot: a
-// service, its status when that isn't idle or ok, or a client's. A file
-// that failed to load, so has no address, is there too.
-function drawAddresses() {
-  const box = $("addresses"), agents = $("agents");
-  box.replaceChildren();
-  agents.replaceChildren();
-  const failed = [...services.values()].filter((s) => !addresses.some((a) => a.address === s.service)).map((s) => ({ address: s.service, fns: [] }));
-  for (const a of [...addresses, ...failed]) {
-    const st = services.get(a.address);
-    const fault = faulted.has(a.address) && !st;
-    const quiet = !st || st.status === "ok" || st.status === "idle";
-    const cls = fault ? "fault" : st ? statusClass(st.status) : "";
-    const b = el("button", "addr" + (a.client ? " client" : "") + (cls ? " " + cls : quiet && !fault ? " quiet" : ""));
-    b.append(el("span", "dot"), el("span", "name", ":" + a.address));
-    if (fault || a.client || !quiet) b.append(el("span", "note", fault ? "fault" : a.client ? "client" : st.status.replace("-", " ")));
-    b.title = fault ? "a service whose last call faulted; whiff restarted it" : a.client ? "a client's address"
-      : st ? (st.agent ? "an agent: " : "a service: ") + st.status.replace("-", " ") + (st.note ? ", " + st.note : "") : "a service";
-    b.onclick = () => {
-      activate(null);
-      showAddress(a.address);
-    };
-    (st?.agent ? agents : box).append(b);
-  }
-  $("agents-group").hidden = !agents.childElementCount;
-  if (addressesErr) box.append(el("p", "hint", addressesErr));
-  else if (!addresses.length) box.append(el("p", "hint", "None while whiff isn't running."));
-}
-
 // showAddress shows an address's functions and state; #:name links to it.
 // talksWith is who sent name messages and whom it sent them, by how many,
 // in the history shown; each filters history to those messages.
@@ -1029,13 +1626,13 @@ async function showAddress(name) {
   history.replaceState(null, "", "#:" + encodeURIComponent(name));
   selected = null;
   mark(-1);
-  const d = $("detail");
+  markAddress(name);
   const a = addresses.find((x) => x.address === name);
-  d.replaceChildren(el("h2", "", ":" + name));
+  const d = pane(a?.client ? "client" : isAgent(name) ? "agent" : "service", ":" + name);
   const agent = name.startsWith("agent/");
   if (!a) {
     if (services.has(name)) d.append(section("Status", statusBox(name)));
-    else d.append(el("p", "hint", "Not loaded now."));
+    else d.append(el("p", "hint", addressesErr || "Not loaded now."));
     if (agent) showSession(d, name);
     return;
   }
@@ -1110,35 +1707,53 @@ async function showAddress(name) {
 
 function setStatus(s) {
   const st = $("status");
-  st.textContent = s.connected ? "following whiff" : s.why;
+  st.textContent = s.connected ? "whiff" : s.why;
+  st.title = s.connected ? "following whiff's history" : "";
   st.classList.toggle("on", s.connected);
   if (s.connected) loadAddresses();
 }
 
 $("rows").addEventListener("click", (ev) => {
-  const h = ev.target.closest(".fold[data-id]");
+  const h = ev.target.closest(".card-head");
   if (h) {
-    const id = Number(h.dataset.id);
-    if (!folded.delete(id)) folded.add(id);
+    const k = h.dataset.id;
+    if (opened.delete(k)) {
+      // Folding a card closes what you looked at in it.
+      if (selected !== null && keyOf(entries[chainOf(selected)[0]]) === k) closeDetail();
+    } else {
+      opened.add(k);
+    }
     redraw();
     return;
   }
-  const rh = ev.target.closest(".reads-head");
-  if (rh) {
-    const id = Number(rh.dataset.id);
-    if (!openReads.delete(id)) openReads.add(id);
+  const b = ev.target.closest(".bg-head");
+  if (b) {
+    if (showBg) return showBackground(false);
+    if (!openBg.delete(b.dataset.id)) openBg.add(b.dataset.id);
     redraw();
     return;
   }
-  const r = ev.target.closest(".row");
+  const v = ev.target.closest(".view-seg [data-view]");
+  if (v) {
+    cardView.set(v.dataset.id, v.dataset.view);
+    redraw();
+    return;
+  }
+  const node = ev.target.closest("svg [data-address]");
+  if (node) return showAddress(node.dataset.address);
+  const edge = ev.target.closest(".map [data-query]");
+  if (edge) return setLayout("cards"), setQuery(edge.dataset.query);
+  const r = ev.target.closest("[data-i]");
   if (r) showEntry(Number(r.dataset.i));
 });
 
 // The filter: a query, as whiff history takes it, that sniff matches
 // history against, so only what it matches comes; kept in the URL, ?q=,
-// so a filter is a link. Its chips add or take out a term of it.
+// so a filter is a link. errors, slow and writes stand for the terms
+// they name, and become them.
 let query = new URLSearchParams(location.search).get("q") || "";
 let events = null;
+const aliases = { errors: "kind:err", faults: "kind:fault", slow: "time:>500ms", writes: "mark:write", held: "gate:held" };
 
 // follow opens history's events for the query, again each time it changes.
 function follow() {
@@ -1147,29 +1762,20 @@ function follow() {
   events.addEventListener("snapshot", (ev) => {
     const snap = JSON.parse(ev.data);
     entries = [];
-    lanes = ["client"];
-    selected = null;
-    bulk = true;
+    if (selected !== null) closeDetail();
     // Faults are known from all of history; a filter shows only some.
     if (!query) faulted.clear();
-    for (const e of snap.entries) {
-      entries.push(e);
-      if (e.kind !== "note") { laneOf(from(e)); laneOf(to(e)); }
-    }
-    bulk = false;
+    for (const e of snap.entries) entries.push(e);
     entries.sort((a, b) => a.us - b.us);
     entries.forEach(noteFault);
-    drawAddresses();
-    drawLanes();
     redraw();
     $("query-error").textContent = snap.error || "";
-    $("query").classList.toggle("bad", !!snap.error);
+    $("filters").classList.toggle("bad", !!snap.error);
     $("empty").textContent = snap.error ? "Fix the filter to see messages."
       : query ? "Nothing matches this filter yet."
-      : "No messages yet. Call a service and it shows here.";
+      : "Nothing yet. Ask an agent or call a service and it shows here.";
     setStatus(snap.status);
-    const trace = $("trace");
-    trace.scrollTop = trace.scrollHeight;
+    $("trace").scrollTop = 0;
   });
   events.addEventListener("entry", (ev) => append(JSON.parse(ev.data)));
   events.addEventListener("status", (ev) => setStatus(JSON.parse(ev.data)));
@@ -1178,32 +1784,19 @@ function follow() {
 
 // setQuery filters history by q, if it changed.
 function setQuery(q) {
-  q = q.trim().split(/\s+/).filter(Boolean).join(" ");
+  q = q.trim().split(/\s+/).filter(Boolean).map((w) => {
+    const not = w.startsWith("-") ? "-" : "";
+    return not + (aliases[w.slice(not.length).toLowerCase()] || w.slice(not.length));
+  }).join(" ");
   const box = $("query");
   if (box.value.trim() !== q) box.value = q;
-  drawChips(q);
   if (q === query) return;
   query = q;
   history.replaceState(null, "", location.pathname + (q ? "?q=" + encodeURIComponent(q) : "") + location.hash);
+  activate(null);
   follow();
 }
 
-function drawChips(q) {
-  const terms = q.split(" ");
-  for (const c of document.querySelectorAll(".filters .chip[data-term]")) {
-    c.setAttribute("aria-pressed", String(terms.includes(c.dataset.term)));
-  }
-}
-
-for (const c of document.querySelectorAll(".filters .chip[data-term]")) {
-  c.onclick = () => {
-    const terms = query.split(" ").filter(Boolean);
-    const i = terms.indexOf(c.dataset.term);
-    if (i >= 0) terms.splice(i, 1);
-    else terms.push(c.dataset.term);
-    setQuery(terms.join(" "));
-  };
-}
 let typed = 0;
 $("query").addEventListener("input", (ev) => {
   clearTimeout(typed);
@@ -1226,24 +1819,73 @@ document.addEventListener("keydown", (ev) => {
   $("query").select();
 });
 $("query").value = query;
-drawChips(query);
 follow();
 
-// waiting is how many wait for you in each queue the sidebar links to: the
-// review queue and your inbox. The browser tab's title shows them all.
-const waiting = {};
+// drawPills draws the status strip: only what isn't zero, each a way to
+// it. The browser tab's title counts what waits for you.
+function drawPills() {
+  const box = $("pills");
+  box.replaceChildren();
+  const pill = (n, cls, text, title, href) => {
+    if (!n) return;
+    const p = el(href ? "a" : "button", "pill " + cls, `${n} ${text}`);
+    p.title = title;
+    if (href) p.href = href;
+    else {
+      p.type = "button";
+      p.onclick = showRunning;
+    }
+    box.append(p);
+  };
+  pill(counts.failed, "failed", "failed", "tasks that failed in the last day", "/view/tasks/failed");
+  pill(counts.running, "running", "running", "requests still running: show the newest", null);
+  pill(counts.review, "review", "to review", "agents' writes that wait for your review", "/view/review/pending");
+  pill(counts.inbox, "inbox", "in your inbox", "questions and reports sent to you", "/view/me/inbox");
+  const all = counts.review + counts.inbox;
+  document.title = (all ? `(${all}) ` : "") + "sniff";
+}
+
+// showRunning opens the newest running request's card, in Activity.
+function showRunning() {
+  activate(null);
+  const head = $("rows").querySelector(".card.running .card-head");
+  if (!head) return;
+  if (!opened.has(head.dataset.id)) head.click();
+  const again = $("rows").querySelector(`.card-head[data-id="${CSS.escape(head.dataset.id)}"]`);
+  again?.focus({ preventScroll: true });
+  again?.scrollIntoView({ block: "nearest" });
+}
+
+// loadSpend shows what the agents spent in the last 24 hours, of what
+// they may spend a day, from each one's status.
+async function loadSpend() {
+  const agents = [...services.values()].filter((s) => s.agent);
+  const box = $("spend");
+  if (!agents.length) return void (box.hidden = true);
+  let sts;
+  try {
+    sts = await Promise.all(agents.map((a) => getJSON("api/service?address=" + encodeURIComponent(a.service))));
+  } catch {
+    return;
+  }
+  const usd = (x) => "$" + (Number.isInteger(x) ? x : x.toFixed(2));
+  const sum = (k) => sts.reduce((n, st) => n + (parseFloat(st[k]) || 0), 0);
+  box.textContent = `${usd(sum("spent"))} of ${usd(sum("day"))} today`;
+  box.title = "what agents spent in the last 24 hours, of their budgets a day: " +
+    sts.map((st, n) => `:${agents[n].service} ${usd(parseFloat(st.spent) || 0)}`).join(", ");
+  box.hidden = false;
+}
 
 // followQueue keeps how many items target's view has beside the sidebar's
-// link of class name, and, unless the link is data-quiet, as Failed is,
-// whose tasks stay a day whatever you do, marks it and counts them in the
-// browser tab's title; fetching it, and
-// calling then if given, each time one of topics fires. Following :review/pending so, while sniff is
-// open, it reviews: agents' writes wait for you rather than failing with
+// link of class name, and in the status strip; unless the link is
+// data-quiet, as Failed is, whose tasks stay a day whatever you do, it
+// marks the link too. It fetches it, and calls then if given, each time
+// one of topics fires. Following :review/pending so, while sniff is open,
+// it reviews: agents' writes wait for you rather than failing with
 // :no-reviewer. A watch that sniff refuses, while whiff isn't running, is
 // tried again.
 function followQueue(name, target, topics, then) {
   const link = document.querySelector(".side ." + name);
-  const label = link.textContent;
   const count = async () => {
     let n = 0;
     try {
@@ -1254,13 +1896,11 @@ function followQueue(name, target, topics, then) {
     } catch {
       return;
     }
-    link.replaceChildren(el("span", "name", label));
+    link.querySelector(".count")?.remove();
     if (n) link.append(el("span", "count", String(n)));
-    if ("quiet" in link.dataset) return;
-    link.classList.toggle("waiting", n > 0);
-    waiting[name] = n;
-    const all = Object.values(waiting).reduce((a, b) => a + b, 0);
-    document.title = (all ? `(${all}) ` : "") + "sniff";
+    link.classList.toggle("waiting", n > 0 && !("quiet" in link.dataset));
+    counts[name] = n;
+    drawPills();
   };
   const changed = () => {
     count();
@@ -1276,25 +1916,18 @@ function followQueue(name, target, topics, then) {
 followQueue("review", "review/pending", ["review/pending", "review/done"], () => loadBanner());
 followQueue("inbox", "me/inbox", ["me/changed"]);
 followQueue("failed", "tasks/failed", ["tasks/changed"]);
+$("side-activity").onclick = () => setLayout("cards");
+$("side-map").onclick = () => setLayout("map");
+$("activity-title").textContent = layout === "map" ? "Map" : "Activity";
+$("activity").classList.toggle("dock-bottom", layout === "map");
+$("show-bg").setAttribute("aria-pressed", String(showBg));
+$("show-bg").textContent = showBg ? "Hide background" : "Show background";
 
 // Tabs: Activity, then a view per tab, each its /view page's href, drawn
 // in this page as that page draws it. Only the tab shown follows its
 // topics, so a browser's few connections to sniff go further; one shown
-// again fetches its view then. Open tabs and pinned views are kept in this
-// browser, as conveniences: losing them loses nothing else.
-const store = {
-  get(k, none) {
-    try { return JSON.parse(localStorage.getItem("sniff." + k)) ?? none; } catch { return none; }
-  },
-  set(k, v) {
-    try { localStorage.setItem("sniff." + k, JSON.stringify(v)); } catch {}
-  },
-};
-
-// Activity draws history as you last chose, chains or lanes, kept too.
-for (const b of document.querySelectorAll("[data-show]")) b.onclick = () => showAs(b.dataset.show);
-showAs(store.get("activity", "chains") === "lanes" ? "lanes" : "chains");
-
+// again fetches its view then. The tab bar shows once a view is open.
+// Open tabs and pinned views are kept in this browser.
 let tabs = []; // the view tabs, in order
 let active = null; // the view tab shown, or null for Activity
 let pins = store.get("pins", []);
@@ -1392,10 +2025,10 @@ function activate(t) {
     x.panel.hidden = x !== t;
     x.button.setAttribute("aria-selected", String(x === t));
   }
+  $("tabs").hidden = !tabs.length;
   store.set("active", t ? t.href : "");
   markSide();
   showBanner();
-  $("filters").hidden = !!t;
   if (!t) return;
   if (t.topics.length) watch(t); // it loads when the watch opens
   else load(t);
@@ -1568,33 +2201,24 @@ document.addEventListener("keydown", (ev) => {
 function togglePin(href) {
   pins = pins.includes(href) ? pins.filter((p) => p !== href) : [...pins, href];
   store.set("pins", pins);
-  drawPins();
   for (const t of tabs) drawPin(t);
 }
 
 function drawPin(t) {
   const on = pins.includes(t.href);
   t.pin.textContent = on ? "Unpin" : "Pin";
-  t.pin.title = on ? "take it off the sidebar" : "keep it in the sidebar";
+  t.pin.title = on ? "take it out of ⌘K's views" : "keep it among ⌘K's views";
 }
 
-function drawPins() {
-  const box = $("pins");
-  box.replaceChildren();
-  for (const p of pins) {
-    const a = el("a", "view-link", titleOf(p));
-    a.href = p;
-    box.append(a);
-  }
-  if (!pins.length) box.append(el("p", "hint", "Pin a view from its tab."));
-  markSide();
-}
-
-// markSide marks the sidebar's link to the tab shown.
+// markSide marks the sidebar's link to the tab shown, or Activity.
 function markSide() {
   for (const a of document.querySelectorAll(".side a[href]")) {
     if (active && hrefOf(a.getAttribute("href")) === active.href) a.setAttribute("aria-current", "page");
     else a.removeAttribute("aria-current");
+  }
+  for (const [id, v] of [["side-activity", "cards"], ["side-map", "map"]]) {
+    if (!active && layout === v) $(id).setAttribute("aria-current", "page");
+    else $(id).removeAttribute("aria-current");
   }
 }
 
@@ -1618,11 +2242,11 @@ document.addEventListener("click", (ev) => {
   }, (err) => { b.title = err.message; });
 });
 
-// Keys over Activity: j and k go to the next and previous message or
-// chain heading, Enter opens it (a heading folds or unfolds, a message
-// answered with a view opens it as a tab), c opens Call again for the
-// message shown, and Esc there leaves it uncalled; never while you type,
-// or over a tab.
+// Keys over Activity: j and k go to the next and previous card, step or
+// background row, Enter opens it (a card or background row folds or
+// unfolds, a step answered with a view opens it as a tab), c opens Call
+// again for the step shown, and Esc there leaves it uncalled; Esc
+// elsewhere closes the details. Never while you type, or over a tab.
 document.addEventListener("keydown", (ev) => {
   if (active || palette.open || ev.metaKey || ev.ctrlKey || ev.altKey) return;
   const typing = ev.target.closest?.("input, textarea, select, [contenteditable]");
@@ -1633,7 +2257,13 @@ document.addEventListener("keydown", (ev) => {
     }
     return;
   }
-  if (ev.key === "j" || ev.key === "k") {
+  if (ev.key === "Escape" && !agentPop.hidden) {
+    ev.preventDefault();
+    closeAgentPop();
+  } else if (ev.key === "Escape" && !$("detail").hidden) {
+    ev.preventDefault();
+    closeDetail();
+  } else if (ev.key === "j" || ev.key === "k") {
     ev.preventDefault();
     step(ev.key === "j" ? 1 : -1);
   } else if (ev.key === "Enter" && selected !== null && !ev.target.closest?.("button, a, summary")) {
@@ -1651,15 +2281,15 @@ document.addEventListener("keydown", (ev) => {
   }
 });
 
-// step goes d messages or headings on from where you are, the heading
+// step goes d cards, steps or rows on from where you are, the heading
 // focused or the message selected; from neither, to the first or last.
 function step(d) {
-  const all = [...$("rows").querySelectorAll(".reads-head, .row")];
+  const all = [...$("rows").querySelectorAll(".card-head, .bg-head, [data-i]")];
   let at = all.indexOf(document.activeElement);
-  if (at < 0 && selected !== null) at = all.indexOf(document.querySelector(`.row[data-i="${selected}"]`));
+  if (at < 0 && selected !== null) at = all.indexOf($("rows").querySelector(`[data-i="${selected}"]`));
   const next = all[at < 0 ? (d > 0 ? 0 : all.length - 1) : Math.max(0, Math.min(all.length - 1, at + d))];
   if (!next) return;
-  if (next.classList.contains("row")) {
+  if ("i" in next.dataset) {
     if ($("rows").contains(document.activeElement)) document.activeElement.blur();
     showEntry(Number(next.dataset.i));
   } else {
@@ -1698,27 +2328,42 @@ function drawPicks() {
   if (text.startsWith("(")) {
     groups.push(["Call", [pick([el("code", "", text)], "↵ call as you", () => callForm(text), true)]]);
   } else {
-    const fns = first(addresses.flatMap((a) => a.fns.map((f) => ({ a, f, name: a.address + "/" + f.fn }))), (x) => x.name);
+    // Agents first, as what you'd most go to, then views, services and,
+    // once you type, functions. A service whose file failed to load, so
+    // has no address, is there too, with why.
+    const known = [...addresses, ...[...services.values()].filter((x) => !addresses.some((a) => a.address === x.service)).map((x) => ({ address: x.service, fns: [] }))];
+    // todo/ matches :todo too, as it begins its functions.
+    const addrs = first(known, (a) => a.address + "/");
+    const line = (a) => {
+      const st = services.get(a.address);
+      const fault = faulted.has(a.address) && !st;
+      const quiet = !st || st.status === "ok" || st.status === "idle";
+      const cls = fault ? "fault" : st ? statusClass(st.status) : "";
+      const what = el("span", "pick-line addr" + (a.client ? " client" : "") + (cls ? " " + cls : quiet ? " quiet" : ""));
+      what.append(el("span", "dot"), el("code", "", ":" + a.address), el("span", "doc",
+        [fault ? "fault" : !quiet && st.status.replace("-", " "), st?.note, a.fns.length && plural(a.fns.length, "function"), a.state && "state", a.client && "client"].filter(Boolean).join(" · ")));
+      return pick([what], "", () => go(() => { activate(null); showAddress(a.address); }), true);
+    };
+    groups.push(["Agents", addrs.filter((a) => isAgent(a.address)).map(line)]);
+    const viewLine = (href) => {
+      const what = el("span", "pick-line");
+      what.append(el("code", "", titleOf(href)));
+      if (pins.includes(href)) what.append(el("span", "doc", "pinned"));
+      return what;
+    };
+    const views = [...new Set(["/view/review/pending", "/view/me/inbox", "/view/tasks/view", "/view/tasks/failed", "/view/timers/view", ...pins, ...tabs.map((t) => t.href)])];
+    groups.push(["Views", [
+      ...(hits("activity") ? [pick([el("span", "", "Activity")], "", () => go(() => activate(null)), true)] : []),
+      ...first(views, titleOf).map((href) => pick([viewLine(href)], "opens a tab", () => go(() => openTab(href)), true)),
+    ]]);
+    groups.push(["Services", addrs.filter((a) => !isAgent(a.address)).map(line)]);
+    const fns = words.length ? first(addresses.flatMap((a) => a.fns.map((f) => ({ a, f, name: a.address + "/" + f.fn }))), (x) => x.name) : [];
     groups.push(["Functions", fns.map(({ f, name }) => {
       const tab = f.mark === "read" && !f.params.length && f.form !== "ask";
       return pick([el("code", "", name), el("span", "badge " + f.mark, f.mark), el("span", "doc", f.doc)],
         tab ? "opens a tab" : "↵ fill in args",
         tab ? () => go(() => openTab(pageOf(name, { t: "vec", v: [] }))) : () => fillIn(name, f.params));
     })]);
-    // todo/ matches :todo too, as it begins its functions.
-    const addrs = first(addresses, (a) => a.address + "/");
-    groups.push(["Addresses", addrs.map((a) => {
-      const fault = faulted.has(a.address);
-      const what = el("span", "pick-line addr" + (a.client ? " client" : "") + (fault ? " fault" : ""));
-      what.append(el("span", "dot"), el("code", "", ":" + a.address), el("span", "doc",
-        [`${a.fns.length} function${a.fns.length === 1 ? "" : "s"}`, a.state && "state", a.client && "client", fault && "fault"].filter(Boolean).join(" · ")));
-      return pick([what], "", () => go(() => { activate(null); showAddress(a.address); }), true);
-    })]);
-    const views = [...new Set(["/view/review/pending", "/view/me/inbox", "/view/tasks/view", "/view/tasks/failed", "/view/timers/view", ...pins, ...tabs.map((t) => t.href)])];
-    groups.push(["Views", [
-      ...(hits("activity") ? [pick([el("span", "", "Activity")], "", () => go(() => activate(null)), true)] : []),
-      ...first(views, titleOf).map((href) => pick([el("code", "", titleOf(href))], "opens a tab", () => go(() => openTab(href)), true)),
-    ]]);
     // The filters for the address or function matched first, and for
     // what you typed, if it reads as a query.
     const show = [];
@@ -1825,7 +2470,7 @@ paletteQ.addEventListener("keydown", (ev) => {
 // A click outside it closes it.
 palette.addEventListener("click", (ev) => { if (ev.target === palette) palette.close(); });
 $("goto").onclick = openPalette;
-document.querySelector("#goto .mod-k").textContent = modK;
+for (const k of document.querySelectorAll(".mod-k")) k.textContent = modK;
 // ⌘K, or Ctrl K, opens it from anywhere, and closes it again.
 document.addEventListener("keydown", (ev) => {
   if (!(ev.metaKey || ev.ctrlKey) || ev.altKey || ev.shiftKey || ev.key?.toLowerCase() !== "k") return;
@@ -1834,7 +2479,5 @@ document.addEventListener("keydown", (ev) => {
   else openPalette();
 });
 
-$("detail").append(keysLine());
-drawPins();
 for (const href of store.get("tabs", [])) openTab(href, false);
 activate(tabs.find((t) => t.href === store.get("active", "")) || null);
