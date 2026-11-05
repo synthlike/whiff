@@ -1,14 +1,22 @@
 ; board: the work of each project as tickets in columns, Todo, Doing,
 ; Review, Done and Failed, for you to look at in sniff or the CLI. A lead
 ; agent puts its plan here, a ticket a task, and moves each as its
-; developer works, a ticket following the pipeline run it started, at
-; most 4 at once in a project; plans' tasks and pipeline runs show on it too, each in
-; the project of the repository it is built in, so the board is all of
-; what is being built, and by whom. Its own tickets are its state; plans'
-; and runs' are asked of :plan and :pipeline each time it is shown.
+; developer works, a ticket following the pipeline run it started; plans'
+; tasks and pipeline runs show on it too, each in the project of the
+; repository it is built in, so the board is all of what is being built,
+; and by whom. Each project has a team: the lead agent you tell, the
+; developers' and reviewers' models, the check, how many runs may go at
+; once and what they may spend a day. Its own tickets and the teams are
+; its state; plans' and runs' are asked of :plan and :pipeline each time
+; it is shown.
+;   whiff call board/set-team tally '{:dev "haiku" :reviewer "sonnet" :most 3 :day 5.0}'
+;   whiff call board/set-team tally '{:dev :default}'   ; back to the default
+;   whiff call board/reset-team tally
+;   whiff call board/team tally           ; tally's team, and what it runs and spent today
+;   whiff call board/tell tally "build a CLI that ..."   ; to tally's lead, in its repo
 ;   whiff call board/add tally "store todos in a map"   ; (ok 1)
 ;   whiff call board/plan ~/src/tally "Scaffold" "Build the module ..."
-;   whiff call board/build 2 main '["go" "test" "./..."]' haiku   ; its run
+;   whiff call board/build 2 main '[]' ""   ; its run, on the team's models and check
 ;   whiff call board/assign 1 agent/7
 ;   whiff call board/move 1 :doing        ; :todo :doing :review :done :failed
 ;   whiff call board/note 1 "waits for the scaffold"
@@ -17,7 +25,7 @@
 ;   whiff call board/tickets              ; its own tickets as data
 ;   whiff sub board/changed               ; {:project p :id n} when one moves
 
-(service board :state {:next 1 :tickets {}}
+(service board :state {:next 1 :tickets {} :teams {}}
   (def steps [:todo :doing :review :done :failed])
 
   ; columns are the board's, each the steps of the tickets in it: its
@@ -155,21 +163,123 @@
 
   ; view is ts as a board, each label a line, and each item tagged with
   ; its project if many projects are shown.
-  (def (view ts many)
-    (view/board (vector/map columns
-                  (fn ([title in])
-                    {:title title
-                     :items (vector/map (vector/filter ts (fn ({:step s}) (vector/contains? in s)))
-                              (fn ({:project p :item it})
-                                (let [it (map/update it :label (fn (l) (first-line l 120)))]
-                                  (if (and many (not (= p ""))) (map/set it :tag p) it))))}))
+  (def (view ts many teams)
+    (view/board (vector/concat
+                  (if (vector/empty? teams) [] [{:title "Team" :items teams}])
+                  (vector/map columns
+                    (fn ([title in])
+                      {:title title
+                       :items (vector/map (vector/filter ts (fn ({:step s}) (vector/contains? in s)))
+                                (fn ({:project p :item it})
+                                  (let [it (map/update it :label (fn (l) (first-line l 120)))]
+                                    (if (and many (not (= p ""))) (map/set it :tag p) it))))})))
       {:changed [:board/changed :plan/changed :pipeline/step :pipeline/done]}))
 
   (test "a ticket in the column of its step, tagged with its project when many are shown"
-    (= (view [{:project "tally" :step :review :item {:label "a" :detail "#1"}}] #t)
+    (= (view [{:project "tally" :step :review :item {:label "a" :detail "#1"}}] #t [])
       (view/board [{:title "Todo" :items []} {:title "Doing" :items []} {:title "Review" :items [{:label "a" :detail "#1" :tag "tally"}]}
                    {:title "Done" :items []} {:title "Failed" :items []}]
         {:changed [:board/changed :plan/changed :pipeline/step :pipeline/done]})))
+
+  ; A project's team, what isn't set of it: the lead agent, :lead/tell
+  ; told; the dev's and reviewer's models, "" for the default; the check,
+  ; [] for the one the lead names; at most :most runs going; :day dollars
+  ; a day, 0.0 for no limit; :models those a run may use, [] for any; and
+  ; :repo, the repository tell names, "" for none.
+  (def team-defaults {:lead "lead" :dev "" :reviewer "" :check [] :most 4 :day 0.0 :models [] :repo ""})
+
+  (def (team-of state project) (map/merge team-defaults (map/get-or (map/get-or state :teams {}) project {})))
+
+  ; spent is what runs in project, as :pipeline/runs gives them, cost in
+  ; the 24 hours before now.
+  (def (spent runs project now)
+    (vector/reduce runs 0.0
+      (fn (sum r)
+        (match (map/get-or r :started (none))
+          [(some at) when (and (> at (- now 24h)) (= (or-else (project/name (map/get-or r :dir "")) "") project))
+           (+ sum (map/get-or r :cost 0.0))]
+          [_ sum]))))
+
+  ; choose is what a run of team's starts with, given the model and check
+  ; the lead named, "" and [] for the team's: (ok {:dev :reviewer :check}),
+  ; or why not, as a model the team doesn't allow.
+  (def (choose team model check)
+    (let [{:dev dev :reviewer reviewer :models allowed} team
+          dev (if (= model "") dev model)
+          check (if (vector/empty? check) (map/get-or team :check []) check)
+          off (vector/filter [dev reviewer] (fn (m) (and (not (= m "")) (not (vector/empty? allowed)) (not (vector/contains? allowed m)))))]
+      (cond
+        [(not (vector/empty? off))
+         (err {:kind :not-allowed :message (str "this project's runs may use " (string/join allowed ", ") ", not " (string/join off ", "))})]
+        [(vector/empty? check) (err {:kind :no-check :message "name a check, as [\"go\" \"test\" \"./...\"], or set the team's"})]
+        [_ (ok {:dev dev :reviewer reviewer :check check})])))
+
+  (test "a run takes the team's models and check unless the lead names them, and only those allowed"
+    (= [(choose (map/merge team-defaults {:dev "haiku" :reviewer "sonnet" :check ["make"]}) "" [])
+        (choose (map/merge team-defaults {:dev "haiku" :check ["make"]}) "opus" ["go" "test"])
+        (match (choose (map/merge team-defaults {:models ["haiku"] :reviewer "opus"}) "haiku" ["make"]) [(err {:kind k}) k])
+        (match (choose team-defaults "" []) [(err {:kind k}) k])]
+      [(ok {:dev "haiku" :reviewer "sonnet" :check ["make"]})
+       (ok {:dev "opus" :reviewer "" :check ["go" "test"]})
+       :not-allowed :no-check]))
+
+  ; set-role is team with role k set to v, as set-team takes them, or
+  ; why it can't be: :default for its default, a string for :lead, :dev,
+  ; :reviewer and :repo, strings for :check and :models, a count for
+  ; :most and dollars for :day.
+  (def (set-role team k v)
+    (let [strings? (fn (x) (and (= (value/type x) :vector) (vector/all? x (fn (y) (= (value/type y) :string)))))
+          bad (fn (want) (err {:kind :bad-team :message (str k " wants " want ", got " (value/to-string v))}))]
+      (cond
+        [(not (vector/contains? (map/keys team-defaults) k))
+         (err {:kind :bad-team :message (str "a team has :lead :dev :reviewer :repo :check :models :most and :day, not " (value/to-string k))})]
+        [(= v :default) (ok (map/set team k (unwrap (map/get team-defaults k))))]
+        [(vector/contains? [:lead :dev :reviewer :repo] k) (if (= (value/type v) :string) (ok (map/set team k v)) (bad "a string"))]
+        [(vector/contains? [:check :models] k) (if (strings? v) (ok (map/set team k v)) (bad "a vector of strings"))]
+        [(= k :most) (if (and (= (value/type v) :int) (> v 0)) (ok (map/set team k v)) (bad "a count"))]
+        [_ (match (value/type v)
+             [:int when (>= v 0) (ok (map/set team k (float/from-int v)))]
+             [:float when (>= v 0.0) (ok (map/set team k v))]
+             [_ (bad "dollars")])])))
+
+  ; set-roles is team with each of changes, a map, set, as set-role does.
+  (def (set-roles team changes)
+    (vector/reduce (map/entries changes) (ok team)
+      (fn (r [k v]) (match r [(ok t) (set-role t k v)] [e e]))))
+
+  (test "a team takes the roles given, :default for a role's default, and only roles it has"
+    (= [(set-roles team-defaults {:dev "haiku" :most 3 :day 5 :check ["make"]})
+        (set-roles (map/set team-defaults :most 2) {:most :default})
+        (match (set-roles team-defaults {:most "3"}) [(err {:kind k}) k])
+        (match (set-roles team-defaults {:boss "me"}) [(err {:kind k}) k])
+        (match (set-roles team-defaults {:models "haiku"}) [(err {:kind k}) k])]
+      [(ok (map/merge team-defaults {:dev "haiku" :most 3 :day 5.0 :check ["make"]})) (ok team-defaults) :bad-team :bad-team :bad-team]))
+
+  ; usd is dollars, x, as "$1.20".
+  (def (usd x)
+    (let [c (or-else (int/from-float (float/round (* x 100.0))) 0)
+          cents (int/rem c 100)]
+      (str "$" (int/div c 100) "." (if (< cents 10) "0" "") cents)))
+
+  (test "dollars to the cent"
+    (= [(usd 1.2) (usd 5.0) (usd 0.054)] ["$1.20" "$5.00" "$0.05"]))
+
+  ; team-item is project's team, as the board's Team column shows it, with
+  ; n runs going and cost spent today.
+  (def (team-item project team n cost)
+    (let [{:lead lead :dev dev :reviewer reviewer :most most :day day :models models :check check} team
+          name (fn (m) (if (= m "") "default" m))]
+      {:label (str "lead :" lead " · dev " (name dev) " · review " (name reviewer))
+       :detail (string/join (vector/filter [(str n " of " most " running")
+                                            (if (> day 0.0) (str (usd cost) " of " (usd day) " today") (str (usd cost) " today"))
+                                            (if (vector/empty? check) "" (string/join check " "))
+                                            (if (vector/empty? models) "" (str "only " (string/join models ", ")))]
+                              (fn (x) (not (= x "")))) " · ")
+       :actions [{:label "Change" :action [:board/set-team project] :ask "What to change, as {:dev \"haiku\" :reviewer \"sonnet\" :most 3 :day 5.0 :models [\"haiku\" \"sonnet\"] :check [\"go\" \"test\" \"./...\"]}; :default for a role's default"}]}))
+
+  (test "a team as the board shows it"
+    (= (map/get (team-item "tally" (map/merge team-defaults {:dev "haiku" :day 5.0}) 2 1.2) :detail)
+      (some "2 of 4 running · $1.20 of $5.00 today")))
 
   (on (add state project title) :write :update
     "Adds a ticket for title to project's Todo column, project the name of its repository, as (project/name) gives it: (ok id)."
@@ -194,17 +304,23 @@
           project id id))))
 
   (on (build state id base check model)
-    "Starts ticket id's run, as :pipeline/build does, from base, a branch or a vector of them merged, with check, a command, and the developer on model (\"\" for the default): pending at once, and the run's result once it ends, as :pipeline/build gives it. A project has at most 4 runs going at once: (err {:kind :busy}) past that, so start it once one ends. (err {:kind :no-ticket}) for a ticket with no task, as one add made."
+    "Starts ticket id's run, as :pipeline/build does, from base, a branch or a vector of them merged, with check, a command, and the developer on model, \"\" and [] for the project's team's, its reviewer on the team's: pending at once, and the run's result once it ends, as :pipeline/build gives it. A project has at most its team's :most runs going at once, 4 unless set: (err {:kind :busy}) past that, so start it once one ends; (err {:kind :over-budget}) once its runs cost the team's :day in the last 24 hours; (err {:kind :not-allowed}) for a model the team doesn't allow. (err {:kind :no-ticket}) for a ticket with no task, as one add made."
     (let [t (try (ticket-of state id))
-          {:project p} t]
+          {:project p} t
+          team (team-of state p)]
       (match [(map/get t :task) (map/get t :repo)]
         [[(some task) (some repo)]
-         (let [n (going (try (call :pipeline/runs)) p)]
-           (if (>= n most)
-             (err {:kind :busy :message (str p " has " n " runs going, at most " most ": start this one once one ends")})
-             (let [r (call :pipeline/build repo base task check model)]
-               (do (send :board/assign id (if (= model "") "dev" (str model " dev")))
-                 (hand-on r)))))]
+         (let [runs (try (call :pipeline/runs))
+               n (going runs p)
+               cost (spent runs p (time/now))
+               {:most most :day day} team]
+           (cond
+             [(>= n most) (err {:kind :busy :message (str p " has " n " runs going, at most " most ": start this one once one ends")})]
+             [(and (> day 0.0) (>= cost day)) (err {:kind :over-budget :message (str p "'s runs cost " (usd cost) " in the last 24 hours, of " (usd day) " a day")})]
+             [_ (let [{:dev dev :reviewer reviewer :check check} (try (choose team model check))
+                      r (call :pipeline/build repo base task check (if (= reviewer "") dev {:dev dev :reviewer reviewer}))]
+                  (do (send :board/assign id (if (= dev "") "dev" (str dev " dev")))
+                    (hand-on r)))]))]
         [_ (err {:kind :no-ticket :message (str "ticket " id " has no task to build: plan it with board/plan")})])))
 
   (on (move state id step) :write :update
@@ -230,10 +346,43 @@
     "The board's own tickets, oldest first: {:id :project :title :step :who :note}. Plans' tasks and runs are :plan's and :pipeline's."
     (ok (vector/map (map/entries (map/get-or state :tickets {})) (fn ([id t]) (map/set t :id id)))))
 
+  ; teams are the Team column's items for projects, each with what it
+  ; runs and spent, from runs, as :pipeline/runs gives them.
+  (def (teams state projects runs)
+    (let [now (time/now)]
+      (vector/map projects (fn (p) (let [it (team-item p (team-of state p) (going runs p) (spent runs p now))]
+                                     (if (> (vector/length projects) 1) (map/set it :tag p) it))))))
+
   (on (show state) :read
-    "Every project's tickets as a board, in columns Todo, Doing, Review, Done and Failed: the board's own, plans' tasks and pipeline runs, each saying its project. Picking one moves it on, or shows or cancels its run."
-    (ok (view (all state) #t)))
+    "Every project's tickets as a board, in columns Todo, Doing, Review, Done and Failed: the board's own, plans' tasks and pipeline runs, each saying its project; first, a Team column, each project's that has a team set. Picking one moves it on, or shows or cancels its run."
+    (ok (view (all state) #t (teams state (map/keys (map/get-or state :teams {})) (or-else (call :pipeline/runs) [])))))
 
   (on (for state project) :read
-    "Project's tickets as show gives them, only its own."
-    (ok (view (vector/filter (all state) (fn ({:project p}) (= p project))) #f))))
+    "Project's tickets as show gives them, only its own, after its team."
+    (ok (view (vector/filter (all state) (fn ({:project p}) (= p project))) #f (teams state [project] (or-else (call :pipeline/runs) [])))))
+
+  (on (team state project) :read
+    "Project's team, {:lead :dev :reviewer :check :most :day :models :repo}, defaults for what isn't set, and :going, its runs going now, and :spent, what its runs cost in the last 24 hours, in dollars."
+    (let [runs (or-else (call :pipeline/runs) [])]
+      (ok (map/merge (team-of state project) {:going (going runs project) :spent (spent runs project (time/now))}))))
+
+  (on (set-team state project changes) :write :update
+    "Sets the roles of project's team that changes, a map, names, keeping the rest: {:dev \"haiku\" :reviewer \"sonnet\"}, the developers' and reviewers' models; :models [\"haiku\" \"sonnet\"], those its runs may use, [] for any; :check [\"go\" \"test\" \"./...\"]; :most 3, runs going at once; :day 5.0, dollars a day for its runs, 0.0 for no limit; :lead \"lead\", the agent tell tells; :repo \"~/src/tally\", its repository. :default puts a role back to its default. changes may be that map printed, as sniff's Change sends it. (ok team)."
+    (let [changes (if (= (value/type changes) :string) (try (value/from-string changes)) changes)]
+      (if (not (= (value/type changes) :map))
+        (err {:kind :bad-team :message (str "want the roles to set, as {:dev \"haiku\" :most 3}, got " (value/to-string changes))})
+        (let [team (try (set-roles (team-of state project) changes))
+              set (vector/reduce (map/entries team) {} (fn (m [k v]) (if (= (map/get team-defaults k) (some v)) m (map/set m k v))))]
+          (do (publish :board/changed {:project project})
+            (ok [team (map/set-in state [:teams project] set)]))))))
+
+  (on (reset-team state project) :write :update
+    "Puts every role of project's team back to its default: (ok team)."
+    (do (publish :board/changed {:project project})
+      (ok [team-defaults (map/update state :teams (fn (ts) (map/delete ts project)))])))
+
+  (on (tell state project text)
+    "Tells project's lead, its team's :lead agent, text, a request, saying the project's repository if the team names one: pending at once, and the lead's answer once it has one, as its tell gives it."
+    (let [{:lead lead :repo repo} (team-of state project)
+          to (unwrap (keyword/from-string (str lead "/tell")))]
+      (hand-on (call to (str (if (= repo "") "" (str "In " repo " (project " project "): ")) text))))))

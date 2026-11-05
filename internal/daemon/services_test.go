@@ -667,7 +667,9 @@ echo "changed things"
 	if got := done(); !strings.Contains(got, ":status :gave-up") {
 		t.Errorf("done = %s", got)
 	}
-	if got := call("runs", "[]"); !strings.Contains(got, `{:branch "whiff/1" :dir "`+wt+`" :from :review :round 2 :run 1 :step :ready :task "add a feature"}`) ||
+	// runs, but when each started, which varies.
+	runs := func() string { return regexp.MustCompile(` :started \(some [^)]*\)`).ReplaceAllString(call("runs", "[]"), "") }
+	if got := runs(); !strings.Contains(got, `{:branch "whiff/1" :cost 0.0 :dir "`+wt+`" :from :review :round 2 :run 1 :step :ready :task "add a feature"}`) ||
 		!strings.Contains(got, ":round 3 :run 2 :step :gave-up") {
 		t.Errorf("runs = %s", got)
 	}
@@ -694,7 +696,7 @@ echo "changed things"
 	if b, _ := os.ReadFile(filepath.Join(fake, "log")); !strings.HasSuffix(string(b), "dev resume repo-2\nreview repo-2\n") {
 		t.Errorf("claude was run:\n%s", b)
 	}
-	if got := call("runs", "[]"); !strings.Contains(got, ":round 4 :run 2 :step :ready") {
+	if got := runs(); !strings.Contains(got, ":round 4 :run 2 :step :ready") {
 		t.Errorf("runs after a retry = %s", got)
 	}
 	if got := call("retry", `[2 ""]`); !strings.Contains(got, ":no-run") {
@@ -727,7 +729,7 @@ echo "changed things"
 		t.Errorf("discard = %s", got)
 	}
 	gone("1")
-	if got := call("runs", "[]"); !strings.Contains(got, ":run 1 :step :discarded") || !strings.Contains(got, ":run 2 :step :merged") {
+	if got := runs(); !strings.Contains(got, ":run 1 :step :discarded") || !strings.Contains(got, ":run 2 :step :merged") {
 		t.Errorf("runs after merge and discard = %s", got)
 	}
 	if got := call("discard", "[2]"); !strings.Contains(got, ":no-run") {

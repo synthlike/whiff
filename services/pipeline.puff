@@ -47,6 +47,16 @@
       [(some m) (map/get-or m :from :you)]
       [(none) :you]))
 
+  ; models are a build's run fields for its model: a string, the dev's,
+  ; or {:dev :reviewer}, each's; "" for the default.
+  (def (models model)
+    (if (= (value/type model) :map)
+      {:model (map/get-or model :dev "") :reviewer-model (map/get-or model :reviewer "")}
+      {:model model}))
+
+  (test "a build names the dev's model, or the dev's and reviewer's"
+    (= [(models "haiku") (models {:reviewer "sonnet"})] [{:model "haiku"} {:model "" :reviewer-model "sonnet"}]))
+
   ; agent-of is the agent whose build id is, still in the inbox: its
   ; sender, or the session it is the work of, as when :board/build asks
   ; for a lead; else from-of's.
@@ -194,12 +204,14 @@
 
   (def (review state n checked)
     (let [{:dir dir :base base :task task} (run-of state n)
+          model (map/get-or (run-of state n) :reviewer-model "")
           _ (try (git dir ["add" "-A"]))
           diff (try (git dir ["diff" "--cached" base]))]
       (if (= diff "")
         (finish state n :failed "The developer changed nothing.")
         (let [input (str review-prompt "\n\nTask: " task "\n\nThe check " (check-text checked) (files-text (named dir task)) "\n\nThe diff:\n" diff)
-              id (try (submitted (call :jobs/run ["claude" "-p" "--strict-mcp-config" "--tools" "" "--no-session-persistence" "--output-format" "json"]
+              id (try (submitted (call :jobs/run (vector/concat ["claude" "-p" "--strict-mcp-config" "--tools" "" "--no-session-persistence" "--output-format" "json"]
+                                                   (if (= model "") [] ["--model" model]))
                                    {:stdin input :dir dir :as :text :timeout 10m})))]
           (ok (waiting (set-run state n {:checked checked :diff diff}) n :review id))))))
 
@@ -490,7 +502,7 @@
                    (git dir (vector/concat ["-c" "user.name=whiff" "-c" "user.email=whiff@localhost" "merge" "-q" "--no-edit" "-m" (str "Merge " (string/join rest ", "))] rest)))
           ; Its base is where the dev starts: the merge, if there is one.
           base (match merged [(ok _) (string/trim (or-else (git dir ["rev-parse" "HEAD"]) base))] [_ base])
-          run (map/merge {:task task :repo repo :dir dir :branch branch :base base :check check :round 1 :session session :step :starting :quiet quiet} extra)
+          run (map/merge {:task task :repo repo :dir dir :branch branch :base base :check check :round 1 :session session :step :starting :quiet quiet :started (time/now)} extra)
           state (-> state (map/set :next (+ n 1)) (map/set-in [:runs n] run))]
       ; A run that can't start leaves no worktree or branch behind.
       (match (match merged [(ok _) (dev state n (str (match (map/get-or extra :lead "") ["" ""] [l (ask-text l n)]) "Task: " task))] [e e])
@@ -509,7 +521,7 @@
     (begin state repo base task check #t {}))
 
   (ask (build repo base task check model)
-    "Runs task as start-on does, in the repository at repo, from base (a commit or branch, or a vector of them, merged), with the dev Claude on model (\"\" for the default): pending at once, and once the run ends (ok {:run :status :branch :dir :note :cost :actions}), :status :ready, :gave-up or :failed, :cost what its dev and reviewer turns cost in dollars, :actions what you can do about it, as Merge or Retry. How an agent hands work to smaller ones and hears back.")
+    "Runs task as start-on does, in the repository at repo, from base (a commit or branch, or a vector of them, merged), with the dev Claude on model (\"\" for the default), or with {:dev :reviewer}, each's model: pending at once, and once the run ends (ok {:run :status :branch :dir :note :cost :actions}), :status :ready, :gave-up or :failed, :cost what its dev and reviewer turns cost in dollars, :actions what you can do about it, as Merge or Retry. How an agent hands work to smaller ones and hears back.")
 
   (on (whiff/asked state id) :update
     "A build waits in the inbox: its run starts now, unless it has. whiff's own; call build instead."
@@ -520,7 +532,7 @@
          [(some {:args [repo base task check model]})
           ; An agent's turn asks from :agent/<name>: its devs may ask it.
           (match (begin state repo base task check #t
-                   (map/merge {:model model :asker id}
+                   (map/merge (models model) {:asker id}
                      (match (string/split (value/to-string (agent-of id)) "/")
                        [[":agent" name] when (asks? name) {:lead name}]
                        [_ {}])))
@@ -542,11 +554,12 @@
       [_ (ok state)]))
 
   (on (runs state) :read
-    "Every run, oldest first: {:run :task :step :round :branch :dir :from}, with :step one of :dev, :check, :review, :ready, :gave-up, :failed, :cancelled, :merged or :discarded, and :from the step an ended run ended at (:none while it runs)."
+    "Every run, oldest first: {:run :task :step :round :branch :dir :from :cost :started}, with :step one of :dev, :check, :review, :ready, :gave-up, :failed, :cancelled, :merged or :discarded, :from the step an ended run ended at (:none while it runs), :cost what its turns cost so far in dollars, and :started when it started, (none) for one from before whiff kept it."
     (ok (vector/map (map/entries (map/get-or state :runs {}))
           (fn ([n run])
             (let [{:task t :step s :round r :branch b :dir d} run]
-              {:run n :task t :step s :round r :branch b :dir d :from (map/get-or run :from :none)})))))
+              {:run n :task t :step s :round r :branch b :dir d :from (map/get-or run :from :none)
+               :cost (map/get-or run :cost 0.0) :started (map/get run :started)})))))
 
   ; run-actions are what can be done about run n now: show it, and cancel
   ; it while it runs, or what actions offers once it ended, unless a

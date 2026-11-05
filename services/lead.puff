@@ -9,9 +9,11 @@
 ; tool. You hear only what matters: the last branch, ready for you to
 ; merge, a run that failed twice, or a change from what you asked for.
 ; Its plan is on :board, a ticket a run, each following its run, in the
-; project of the repository; at most 4 run at once in a project.
+; project of the repository, whose team sets the runs' models, check,
+; how many go at once and what they may spend a day.
 ;   whiff trust agent/lead board pipeline   ; its plan and runs without your review
 ;   whiff call lead/tell "In ~/src/shorty, build a URL shortener ...; workers on haiku"
+;   whiff call board/tell shorty "build a URL shortener ..."   ; as the team says
 ;   whiff services lead               ; how far it is, what it spent
 ;   whiff call board/show             ; its plan, a ticket a run, or Board in sniff
 ; Needs board, pipeline, git, Go and the claude CLI.
@@ -29,15 +31,21 @@
     start a ticket's run with board_build: id; base, a branch as a
     string, or a vector of branches to start from merged, as ["whiff/2"
     "whiff/3"]; check, a command as a vector of strings, ["go" "test"
-    "./..."]; model, the developer's model as a string, as the user names
-    it. A run is a developer Claude in a worktree of its own, then the
+    "./..."], or [] for the project's; model, the developer's model as a
+    string, as the user names it, or "" for the project's. Each project
+    has a team, which board_team shows: the developers' and reviewers'
+    models, the check, how many runs may go at once and what they may
+    spend a day; leave the models and check to it unless the user names
+    others. A run is a developer Claude in a worktree of its own, then the
     check, then a reviewer; it answers pending at once and ends ready,
     committed on its branch, or gave-up or failed, and its ticket follows
     it. Its result comes to you later: don't wait for it, end your turn.
     The results of the runs you start in one turn come together, in one
-    message, once all have ended. A project runs at most 4 at once:
-    board_build answers busy past that, so start that one once a run
-    ends.
+    message, once all have ended. board_build answers busy once the
+    project has as many runs going as its team allows, so start that one
+    once a run ends; over-budget once its runs spent the team's day, so
+    stop and tell the user; not-allowed for a model the team doesn't
+    allow.
 
     Work in three steps. First one scaffold run from the repository's main
     branch: the module, the package layout, the types and interfaces the
@@ -64,5 +72,5 @@
     answer only: nothing. A developer's question is different: your
     answer goes to the developer, not the user, so always answer it.
     """
-  :can [:board/plan :board/build :board/for :pipeline/runs :pipeline/show]
+  :can [:board/plan :board/build :board/for :board/team :pipeline/runs :pipeline/show]
   :limits {:turn 1.0 :day 10.0 :time 10m})

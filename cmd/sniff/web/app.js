@@ -832,6 +832,29 @@ function foldBand(b) {
   redraw();
 }
 
+// teams are each project's team, as :board/team gives it, a line to
+// show in its band's heading: fetched once a band shows, and again once
+// history says a team changed, a run was built or one moved on; not on
+// a read, as fetching a team is.
+const teams = new Map();
+function teamLine(b) {
+  if (!services.has("board")) return "";
+  if (!teams.has(b)) {
+    teams.set(b, "");
+    getJSON("api/view?target=board/team&args=" + encodeURIComponent(`[${JSON.stringify(b)}]`)).then((r) => {
+      const t = r.t === "tag" && r.n === "ok" ? r.v[0] : null;
+      if (!t) return;
+      const s = (k) => field(t, k)?.v ?? "";
+      const n = (k) => Number(field(t, k)?.v ?? 0);
+      const usd = (x) => "$" + x.toFixed(2);
+      teams.set(b, ["lead :" + s("lead"), "dev " + (s("dev") || "default"), "review " + (s("reviewer") || "default"),
+        `${n("going")} of ${n("most")} running`, n("day") > 0 ? `${usd(n("spent"))} of ${usd(n("day"))} today` : ""].filter(Boolean).join(" · "));
+      redrawSoon();
+    }, () => {});
+  }
+  return teams.get(b);
+}
+
 // bandEl draws a project's band behind its addresses, its heading saying
 // what of the requests shown are its and what they cost; for "", what the
 // projects share.
@@ -851,7 +874,7 @@ function bandEl(b, x, y, w, h, info, n) {
   const name = svgEl("text", { x: x + 30, y: y + 22, class: "band-name link" }, b);
   name.dataset.project = b;
   name.append(svgEl("title", {}, `show only ${b}'s requests`));
-  const sub = [info && plural(info.requests, "request"), plural(n, "address", "addresses"), info?.cost > 0 && "$" + info.cost.toFixed(2)].filter(Boolean).join(" · ");
+  const sub = [info && plural(info.requests, "request"), plural(n, "address", "addresses"), info?.cost > 0 && "$" + info.cost.toFixed(2), teamLine(b)].filter(Boolean).join(" · ");
   g.append(caret, name, svgEl("text", { x: x + 38 + b.length * 8.5, y: y + 22, class: "band-sub" }, sub));
   return g;
 }
@@ -997,6 +1020,7 @@ function append(e) {
   entries.splice(i, 0, e);
   noteFault(e);
   servicesSoon();
+  if (/^board\/(set-team|reset-team|build)$|:pipeline\/(step|done)$/.test(e.to || "")) teams.clear();
   if (selected !== null && selected >= i) selected++;
   if (e.kind !== "note") {
     for (const a of [from(e), to(e)]) {

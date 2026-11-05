@@ -33,7 +33,8 @@ func TestBoardBuild(t *testing.T) {
        (let [rs (map/get-or state :runs [])
              [repo base task check model] (map/get-or m :args [])]
          (ok (map/set state :runs (vector/append rs {:run (+ 1 (vector/length rs)) :task task :step :dev :round 1 :branch "b"
-                                                     :dir repo :from (map/get-or m :from :you) :session (map/get-or m :session :none)}))))]
+                                                     :dir repo :from (map/get-or m :from :you) :session (map/get-or m :session :none)
+                                                     :model model :cost 1.0 :started (some (time/now))}))))]
       [_ (ok state)]))
   (on (runs state) :read "Every run." (ok (map/get-or state :runs []))))`,
 	})
@@ -65,6 +66,17 @@ func TestBoardBuild(t *testing.T) {
 			t.Fatalf("plan %s = %s, want %s", title, got, want)
 		}
 	}
+	// tally's team: runs may use haiku or sonnet, reviewed on sonnet.
+	team := func(changes string) {
+		t.Helper()
+		if r, err := you.Eval(`(call :board/set-team "tally" `+changes+`)`, dir); err != nil || !strings.HasPrefix(r.Value, "(ok {") {
+			t.Fatalf("set-team %s = %+v %v", changes, r, err)
+		}
+	}
+	team(`{:models ["haiku" "sonnet"] :reviewer "sonnet"}`)
+	if got := call("board/build", `[1 "main" ["true"] "opus"]`); !strings.Contains(got, ":kind :not-allowed") {
+		t.Errorf("build on opus = %s, want not allowed", got)
+	}
 	if got := call("board/build", `[1 "main" ["true"] "haiku"]`); !strings.Contains(got, ":kind :pending") {
 		t.Fatalf("build = %s, want pending", got)
 	}
@@ -75,12 +87,13 @@ func TestBoardBuild(t *testing.T) {
 		}
 		return r.Value
 	}
-	eventually(t, "the run, the lead's", func() string {
-		if strings.Contains(runs(), ":session :agent/1") {
+	eventually(t, "the run, the lead's, on the team's reviewer", func() string {
+		if strings.Contains(runs(), ":session :agent/1") && strings.Contains(runs(), `:model {:dev "haiku" :reviewer "sonnet"}`) {
 			return "the lead's"
 		}
 		return runs()
 	}, "the lead's")
+	team(`{:reviewer :default}`)
 
 	// The ticket is at its run's step, with its run, and the run isn't
 	// shown again beside it.
@@ -107,6 +120,15 @@ func TestBoardBuild(t *testing.T) {
 	eventually(t, "4 runs going", func() string { return string(rune('0' + strings.Count(runs(), ":step :dev"))) }, "4")
 	if got := call("board/build", `[5 "b" ["true"] ""]`); !strings.Contains(got, ":kind :busy") || !strings.Contains(got, "tally has 4 runs going") {
 		t.Errorf("a 5th build = %s, want busy", got)
+	}
+	// More may go, but they cost $4 today, of $3 a day.
+	// As sniff's Change sends it, printed.
+	team(`"{:most 10 :day 3}"`)
+	if got := call("board/build", `[5 "b" ["true"] ""]`); !strings.Contains(got, ":kind :over-budget") {
+		t.Errorf("a build over budget = %s", got)
+	}
+	if r, _ := you.Eval(`(call :board/team "tally")`, dir); !strings.Contains(r.Value, ":going 4") || !strings.Contains(r.Value, ":spent 4.0") || !strings.Contains(r.Value, ":most 10") {
+		t.Errorf("tally's team = %s", r.Value)
 	}
 	// One add made has no task to build.
 	if got, _ := you.Eval(`[(call :board/add "tally" "by hand") (call :board/build 6 "b" ["true"] "")]`, dir); !strings.Contains(got.Value, ":kind :no-ticket") {
