@@ -115,7 +115,7 @@ func TestTasks(t *testing.T) {
 	for _, want := range []string{
 		`{:actions [{:action [:tasks/cancel ` + waiting + `] :label "Cancel"}] :detail "task ` + waiting + ` for you · just now · waits for :box to reply" :label "waiting  :box/q 1"}`,
 		`{:action [:review/accept ` + held + `] :label "Accept"}`,
-		`{:actions [{:action [:jobs/output ` + job + `] :label "Output"} {:action [:tasks/cancel ` + job + `] :label "Cancel"}]`,
+		`{:actions [{:action [:tasks/watch ` + job + `] :label "Watch"} {:action [:tasks/cancel ` + job + `] :label "Cancel"}]`,
 		`{:actions [{:action [:tasks/result ` + failing + `] :label "Result"} {:action [:box/q 2] :label "Again"}] :detail "task ` + failing + ` for you · just now · (err {:kind :boom})" :label "failed  :box/q 2"}`,
 		`{:changed :tasks/changed}`,
 	} {
@@ -231,5 +231,68 @@ func TestTaskTree(t *testing.T) {
 	}, "true")
 	if resp, _ := c.Message("call", "tasks/tree", "[99999]", dir); !strings.Contains(resp.Value, ":no-id") {
 		t.Errorf("tasks/tree of none = %s", resp.Value)
+	}
+}
+
+// TestTaskWatch watches a :stream job, as an agent's turn: each line it
+// prints is published on :jobs/<id>, and tasks/watch reads claude's
+// stream-json as steps; its result is the last line, and once it ends the
+// watch says how.
+func TestTaskWatch(t *testing.T) {
+	dir := tempDir(t)
+	start(t, dir)
+	c := dial(t, dir)
+	script := `printf '%s\n' '{"type":"system","subtype":"init","model":"haiku"}' '{"type":"assistant","message":{"content":[{"type":"text","text":"Let me look."},{"type":"tool_use","name":"mcp__whiff__todo_list","input":{}}]}}' '{"type":"user","message":{"content":[{"type":"tool_result","content":[{"type":"text","text":"(ok [])"}]}]}}' 'plain text'
+while [ ! -e go ]; do sleep 0.02; done
+printf '%s\n' '{"subtype":"success","is_error":false,"result":"Nothing to do.","total_cost_usd":0.25,"num_turns":2,"type":"result"}'`
+	r, _ := c.Message("call", "jobs/run", `[["sh" "-c" `+puff.Print(puff.String(script))+`] {:stream #t :as :text}]`, dir)
+	v, _ := puff.ReadValue(r.Value)
+	n, ok := pendingID(v)
+	if !ok {
+		t.Fatalf("jobs/run = %s", r.Value)
+	}
+	id := fmt.Sprint(n)
+	watch := dial(t, dir)
+	if _, err := watch.Sub("jobs/" + id); err != nil {
+		t.Fatal(err)
+	}
+	view := func() string {
+		t.Helper()
+		resp, _ := c.Message("call", "tasks/watch", "["+id+"]", dir)
+		return resp.Value
+	}
+	eventually(t, "the job's steps", func() string { return fmt.Sprint(strings.Contains(view(), "plain text")) }, "true")
+	got := view()
+	for _, want := range []string{
+		`(ok (items [{:label "began  haiku"} {:label "says  Let me look."} {:label "calls  todo_list {}"} {:label "answer  (ok [])"} {:label "plain text"}]`,
+		`{:changed [:jobs/` + id + ` :tasks/changed]}`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("tasks/watch lacks %s:\n%s", want, got)
+		}
+	}
+	// A line published after the watcher subscribed: the last, as the
+	// others may have come before.
+	os.WriteFile(filepath.Join(dir, "go"), nil, 0o600)
+	for deadline := time.After(2 * time.Second); ; {
+		select {
+		case e := <-watch.Events():
+			if e.Topic != "jobs/"+id || !strings.Contains(e.Value, "Nothing to do.") {
+				continue
+			}
+		case <-deadline:
+			t.Fatalf("no :jobs/%s event with the result", id)
+		}
+		break
+	}
+	res, _ := c.Message("wait", "", "["+id+"]", dir)
+	if want := `(ok "{\"subtype\":\"success\"`; !strings.HasPrefix(res.Value, want) {
+		t.Errorf("the result = %s, want only the last line", res.Value)
+	}
+	eventually(t, "the ended job's watch", func() string {
+		return fmt.Sprint(strings.HasPrefix(view(), `(ok (items [{:label "ended ($0.25, 2 turns)  Nothing to do."} {:actions [{:action [:tasks/result `+id+`] :label "Result"}]`))
+	}, "true")
+	if r, _ := c.Message("call", "tasks/watch", "[99999]", dir); !strings.Contains(r.Value, ":no-id") {
+		t.Errorf("tasks/watch of none = %s", r.Value)
 	}
 }

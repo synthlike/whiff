@@ -249,7 +249,11 @@ open at once, or `:tasks`. Parents and children are in
   at once, `{:exit :stdout :stderr}` as its `whiff/done`, the last 64KiB of
   each stream kept. `:as :text` answers stdout as text, or an err unless it
   exits 0. This is how services run `claude -p`, `gh` or a build.
-  `:jobs/output id` is a running job's output so far. A job times out
+  `:jobs/output id` is a running job's output so far. With `:stream #t`
+  each line it prints is published on `:jobs/<id>` as it comes, and its
+  result's stdout is the last line: an agent's turn runs `claude -p
+  --output-format stream-json` so, and `:tasks/watch id` shows the turn's
+  steps as they happen, what it says and calls and what answers. A job times out
   after 1h unless its `:timeout` says otherwise; `:timeout :none`, for a
   server, runs until it ends or is stopped.
 - **HTTP.** `(http/get url {:headers {...}})` answers the body of a 2xx, and

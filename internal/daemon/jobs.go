@@ -1,11 +1,13 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"os/exec"
@@ -57,6 +59,7 @@ type jobOpts struct {
 	agent      bool   // :origin :agent: a model writes its output
 	retry      int    // how many times it may run again
 	idempotent bool   // running it twice does what running it once does
+	stream     bool   // each line it prints is published on :jobs/<id>; its result's :stdout is the last
 	// can is, for :session, the functions the job's whiff mcp may call as
 	// its sender's agent session; nil without it. token is that session's,
 	// in the job's WHIFF_SESSION while it runs.
@@ -78,6 +81,7 @@ type proc struct {
 	ctx            context.Context // ends at the attempt's timeout, or with its job's
 	cancel         context.CancelFunc
 	stdout, stderr tail
+	stream         bool         // its job's :stream: out is stdout's last line
 	termed         atomic.Int64 // when its group got SIGTERM, in Unix nanoseconds; 0 until then
 }
 
@@ -88,7 +92,7 @@ func (d *daemon) jobsService() *service {
 	return &service{name: "jobs", d: d, cur: caller{addr: "jobs"},
 		fns: map[string]handler{
 			"run": {params: []string{"cmd", "opts"}, optional: 1, mark: puff.MarkWrite, marked: true, native: d.runJob, cmd: true,
-				doc: "Run cmd, [program args...], here; pending now, {:exit :stdout :stderr} when done. Options: :timeout (1h), or :none for a server; :stdin, a string; :dir, where it runs; :as :text answers (ok stdout), or (err {:kind :exit}) unless it exits 0; :origin :agent, for a job whose output a model writes, answers as :agent's; :retry n runs it again, up to n times, under its id, if a timeout or whiff stopped it, or whiff died while it ran, and only if it is :read or :idempotent #t says running it twice is safe; :session [:addr/fn ...], from a service: the job's whiff mcp acts as an agent session, :agent/<service> for an agent's turn or a new :agent/<n>, reaching only those functions, gated as any agent's. :read for a read-only command, as whiff ls lists them."},
+				doc: "Run cmd, [program args...], here; pending now, {:exit :stdout :stderr} when done. Options: :timeout (1h), or :none for a server; :stdin, a string; :dir, where it runs; :as :text answers (ok stdout), or (err {:kind :exit}) unless it exits 0; :origin :agent, for a job whose output a model writes, answers as :agent's; :retry n runs it again, up to n times, under its id, if a timeout or whiff stopped it, or whiff died while it ran, and only if it is :read or :idempotent #t says running it twice is safe; :stream #t publishes each line it prints on :jobs/<id> as it comes, and its result's :stdout is the last line, as claude -p --output-format stream-json's result, and tasks/watch shows them; :session [:addr/fn ...], from a service: the job's whiff mcp acts as an agent session, :agent/<service> for an agent's turn or a new :agent/<n>, reaching only those functions, gated as any agent's. :read for a read-only command, as whiff ls lists them."},
 			"list": {mark: puff.MarkRead, marked: true, native: d.listJobs,
 				doc: "The running jobs, each {:id :cmd :cwd :from}."},
 			"cancel": {params: []string{"id"}, mark: puff.MarkWrite, marked: true, native: d.cancelJob,
@@ -192,6 +196,8 @@ func jobArgs(m message, args []puff.Value) (puff.Vector, jobOpts, bool, error) {
 			o.retry = int(n)
 		case puff.Equal(e.Key, puff.Keyword("idempotent")) && isBool:
 			o.idempotent = bool(b)
+		case puff.Equal(e.Key, puff.Keyword("stream")) && isBool:
+			o.stream = bool(b)
 		case puff.Equal(e.Key, puff.Keyword("session")):
 			can, err := canSet(e.Val)
 			if err != nil {
@@ -199,7 +205,7 @@ func jobArgs(m message, args []puff.Value) (puff.Vector, jobOpts, bool, error) {
 			}
 			o.can = can
 		default:
-			return cmdv, o, user, fmt.Errorf("want {:timeout d :stdin s :dir path :as :text :origin :agent :retry n :idempotent b :session [:addr/fn ...]}, a positive duration or :none, a count and strings, got %s", puff.Print(opts))
+			return cmdv, o, user, fmt.Errorf("want {:timeout d :stdin s :dir path :as :text :origin :agent :retry n :idempotent b :stream b :session [:addr/fn ...]}, a positive duration or :none, a count and strings, got %s", puff.Print(opts))
 		}
 	}
 	return cmdv, o, user, nil
@@ -291,7 +297,7 @@ func (j *job) argv() []string {
 // timeout stops what it started too: SIGTERM, then SIGKILL for what's left
 // after stopGrace (see stop).
 func (d *daemon) spawn(j *job) (*proc, error) {
-	p := &proc{}
+	p := &proc{stream: j.opts.stream}
 	if j.opts.timeout > 0 {
 		p.ctx, p.cancel = context.WithTimeout(j.ctx, j.opts.timeout)
 	} else {
@@ -301,6 +307,17 @@ func (d *daemon) spawn(j *job) (*proc, error) {
 	cmd := exec.CommandContext(p.ctx, argv[0], argv[1:]...)
 	cmd.Dir = j.opts.dir
 	cmd.Stdout, cmd.Stderr = &p.stdout, &p.stderr
+	if p.stream {
+		// A first attempt has its id only once it has started, on the route
+		// goroutine: a line before that is in its output, not published.
+		cmd.Stdout = &lines{w: &p.stdout, emit: func(line string) {
+			d.do(func(st *state) {
+				if j.id != 0 {
+					st.publish(message{cause: j.msg, from: "jobs", topic: fmt.Sprintf("jobs/%d", j.id), args: puff.Print(puff.NewVector(puff.String(line))), dir: j.dir, lineage: lineage{user: j.user}})
+				}
+			})
+		}}
+	}
 	if j.opts.stdin != nil {
 		cmd.Stdin = strings.NewReader(*j.opts.stdin)
 	}
@@ -358,7 +375,7 @@ func (d *daemon) result(j *job, p *proc) puff.Value {
 	code := p.cmd.ProcessState.ExitCode()
 	switch {
 	case j.opts.text && code == 0:
-		return puff.Ok(puff.String(p.stdout.String()))
+		return puff.Ok(puff.String(p.out()))
 	case j.opts.text:
 		e := puff.Errorf("exit", "job %d exited %d", j.id, code).(puff.Tag).At(0).(puff.Map)
 		e, _ = e.With(puff.Keyword("exit"), puff.Int(code))
@@ -367,7 +384,7 @@ func (d *daemon) result(j *job, p *proc) puff.Value {
 	}
 	out, _ := puff.NewMap(
 		puff.Key("exit", puff.Int(code)),
-		puff.Key("stdout", puff.String(p.stdout.String())),
+		puff.Key("stdout", puff.String(p.out())),
 		puff.Key("stderr", puff.String(p.stderr.String())),
 	)
 	return puff.Ok(out)
@@ -376,7 +393,7 @@ func (d *daemon) result(j *job, p *proc) puff.Value {
 // withOutput is r, an (err e), with p's :stdout and :stderr in e.
 func (p *proc) withOutput(r puff.Value) puff.Value {
 	e := r.(puff.Tag).At(0).(puff.Map)
-	e, _ = e.With(puff.Keyword("stdout"), puff.String(p.stdout.String()))
+	e, _ = e.With(puff.Keyword("stdout"), puff.String(p.out()))
 	e, _ = e.With(puff.Keyword("stderr"), puff.String(p.stderr.String()))
 	return puff.NewTag("err", e)
 }
@@ -662,4 +679,41 @@ func (t *tail) String() string {
 		b = b[len(b)-tailSize:]
 	}
 	return strings.ToValidUTF8(string(b), "")
+}
+
+// out is what p printed, as its result has it: the tail of its stdout, or
+// for a :stream job its last line, as claude -p --output-format
+// stream-json's result is: the lines before it were progress.
+func (p *proc) out() string {
+	s := p.stdout.String()
+	if !p.stream {
+		return s
+	}
+	s = strings.TrimRight(s, "\n")
+	return s[strings.LastIndexByte(s, '\n')+1:]
+}
+
+// lines writes to w, and gives emit each whole line as it ends, without
+// its newline. One longer than tailSize is cut to its end.
+type lines struct {
+	w    io.Writer
+	emit func(string)
+	part []byte
+}
+
+func (l *lines) Write(p []byte) (int, error) {
+	n, err := l.w.Write(p)
+	l.part = append(l.part, p...)
+	for {
+		i := bytes.IndexByte(l.part, '\n')
+		if i < 0 {
+			break
+		}
+		l.emit(strings.ToValidUTF8(string(l.part[:i]), ""))
+		l.part = l.part[i+1:]
+	}
+	if len(l.part) > tailSize {
+		l.part = append([]byte(nil), l.part[len(l.part)-tailSize:]...)
+	}
+	return n, err
 }

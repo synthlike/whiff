@@ -70,7 +70,7 @@
 
 (def (claude id)
   (vector/concat ["claude" "-p" "--tools" "" "--append-system-prompt" system
-                  "--output-format" "json" "--max-budget-usd" (float/to-string turn-usd)]
+                  "--verbose" "--output-format" "stream-json" "--max-budget-usd" (float/to-string turn-usd)]
     (if (= model "") [] ["--model" model])
     ["--mcp-config" mcp "--strict-mcp-config" "--allowedTools" "mcp__whiff"]
     (if (= (read-file started) id) ["--resume" id] ["--session-id" id])))
@@ -136,7 +136,7 @@
 (def (start text)
   (let [_ (try (over-budget))
         _ (try (file/mkdir home))
-        opts {:stdin text :dir home :timeout (unwrap (map/get limits :time)) :origin :agent :session tools}
+        opts {:stdin text :dir home :timeout (unwrap (map/get limits :time)) :origin :agent :session tools :stream #t}
         id (int/to-string (try (submitted (call :jobs/run (claude (try (session))) opts))))]
     (do (try (file/append turns (str id "\n")))
       (ok id))))

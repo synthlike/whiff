@@ -707,6 +707,9 @@ func (j *job) stored() puff.Value {
 		if o.idempotent {
 			with("idempotent", puff.Bool(true))
 		}
+		if o.stream {
+			with("stream", puff.Bool(true))
+		}
 	}
 	return v
 }
@@ -737,7 +740,8 @@ func storedJob(id int64, p string) (*job, error) {
 	}
 	n, _ := get("retry").(puff.Int)
 	idem, _ := get("idempotent").(puff.Bool)
-	j.opts.retry, j.opts.text, j.opts.idempotent = int(n), puff.Equal(get("as"), puff.Keyword("text")), bool(idem)
+	stream, _ := get("stream").(puff.Bool)
+	j.opts.retry, j.opts.text, j.opts.idempotent, j.opts.stream = int(n), puff.Equal(get("as"), puff.Keyword("text")), bool(idem), bool(stream)
 	as, _ := get("attempts").(puff.Vector)
 	for i := range as.Len() {
 		m, _ := as.At(i).(puff.Map)

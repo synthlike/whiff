@@ -37,8 +37,12 @@ async function load() {
     const r = await fetch(part);
     const html = await r.text();
     if (!r.ok) throw new Error(html.trim());
-    // sniff drew it, escaping what it shows.
+    // sniff drew it, escaping what it shows. Read at its end, as a turn
+    // you watch grows, it stays there.
+    const s = document.scrollingElement;
+    const end = s.scrollHeight > s.clientHeight && s.scrollHeight - s.scrollTop - s.clientHeight < 40;
     view.innerHTML = html;
+    if (end) s.scrollTop = s.scrollHeight;
     setStatus("fetched again on " + named, true);
   } catch (err) {
     setStatus(err.message, false);

@@ -378,7 +378,8 @@ echo "reviewed:"; grep '^+[^+]'
 }
 
 // fakeClaude puts a fake claude on PATH, with HOME at dir. It answers in
-// --output-format json, at the cost in a file cost in its directory, or
+// --output-format stream-json, an init line and what it says before its
+// result, at the cost in a file cost in its directory, or
 // $0.01. It says whether it starts or resumes the session and echoes the
 // message; "slow" takes a second, "fail" exits 1 saying so on stderr,
 // "spend" reaches its --max-budget-usd, and "hold" waits for a file go in
@@ -396,9 +397,10 @@ func fakeClaude(t *testing.T, dir string) {
 case "$*" in *--session-id*) mode=new ;; *--resume*) mode=resume ;; esac
 model=default
 for a; do case "$prev" in --session-id|--resume) echo "$a" > last-id ;; --model) model=$a ;; --append-system-prompt) sys=$a ;; --max-budget-usd) budget=$a ;; esac; prev=$a; done
-case "$*" in *"--output-format json"*) ;; *) echo "want json, got $*" >&2; exit 9 ;; esac
+case "$*" in *"--verbose --output-format stream-json"*) ;; *) echo "want stream-json, got $*" >&2; exit 9 ;; esac
 cost=$(cat cost 2>/dev/null || echo 0.01)
-answer() { printf '{"type":"result","subtype":"success","is_error":false,"result":"%s","total_cost_usd":%s}\n' "$(printf '%s' "$1" | sed 's/["\\]/\\&/g')" "$cost"; }
+printf '{"type":"system","subtype":"init","model":"%s"}\n' "$model"
+answer() { printf '{"type":"assistant","message":{"content":[{"type":"text","text":"Thinking it over."}]}}\n'; printf '{"type":"result","subtype":"success","is_error":false,"result":"%s","total_cost_usd":%s}\n' "$(printf '%s' "$1" | sed 's/["\\]/\\&/g' | sed -e :a -e '$!N' -e '$!ba' -e 's/\n/\\n/g')" "$cost"; }
 msg=$(cat)
 case "$*" in *--mcp-config*)
   case "$*" in *"--strict-mcp-config --allowedTools mcp__whiff"*) ;; *) echo "want whiff mcp alone, got $*" >&2; exit 9 ;; esac

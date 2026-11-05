@@ -1424,7 +1424,9 @@ async function load(t) {
 // fill shows html, a panel sniff drew, in t, and follows the topics it
 // names while t shows.
 function fill(t, html) {
+  const end = atEnd(t.box);
   t.box.innerHTML = html; // sniff drew it, escaping what it shows
+  end();
   const said = t.box.querySelector(":scope > .said");
   if (said) t.said.replaceChildren(said); // it stays as the view changes
   const topics = (t.box.querySelector(".shown")?.dataset.topics || "").split(" ").filter(Boolean);
@@ -1433,6 +1435,17 @@ function fill(t, html) {
     t.topics = topics;
     watch(t);
   }
+}
+
+// atEnd is, for el about to be drawn again, what keeps it at its end if
+// you were reading there, as a turn you watch grows: a function to call
+// once it is drawn.
+function atEnd(el) {
+  let s = el.parentElement;
+  while (s && !(s.scrollHeight > s.clientHeight && /auto|scroll/.test(getComputedStyle(s).overflowY))) s = s.parentElement;
+  s = s || document.scrollingElement;
+  const was = s.scrollHeight > s.clientHeight && s.scrollHeight - s.scrollTop - s.clientHeight < 40;
+  return () => { if (was) s.scrollTop = s.scrollHeight; };
 }
 
 function setTabStatus(t, text, on) {

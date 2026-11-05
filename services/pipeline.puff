@@ -130,13 +130,13 @@
           "--allowedTools" (str "Bash(" (string/join check " ") ")") (str "Bash(" (check-prefix check) ":*)")
           "Bash(go vet:*)" "Bash(go build:*)" "Bash(gofmt:*)" "Bash(git status:*)" "Bash(git diff:*)" "Bash(git log:*)"]
          (match (map/get-or run :lead "") ["" []] [_ ["mcp__whiff"]])
-         ["--permission-mode" "acceptEdits" "--output-format" "json" "--append-system-prompt" dev-system]
+         ["--permission-mode" "acceptEdits" "--verbose" "--output-format" "stream-json" "--append-system-prompt" dev-system]
          (match (map/get-or run :model "") ["" []] [m ["--model" m]])
          (if (map/get-or run :resumable #f) ["--resume" s] ["--session-id" s]))]))
 
   (def (dev state n input)
     (let [run (run-of state n)
-          opts {:stdin input :dir (map/get-or run :dir "") :as :text :timeout 30m}
+          opts {:stdin input :dir (map/get-or run :dir "") :as :text :timeout 30m :stream #t}
           lead (map/get-or run :lead "")
           id (try (submitted (call :jobs/run (dev-cmd run)
                                (if (= lead "") opts (map/set opts :session [(unwrap (keyword/from-string (str lead "/ask")))])))))]

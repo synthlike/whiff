@@ -289,7 +289,7 @@ func (t task) value() puff.Value {
 // its id, owner, who answered, when, its attempts, whether it may still
 // run, and its result; and what can be done
 // with it. One held has :review's actions, one in your inbox :me's; one
-// waiting elsewhere or running can be cancelled, and a job's output read;
+// waiting elsewhere or running can be cancelled, and a job watched;
 // one that ended shows its result whole, and has the actions its result
 // offers, as {:actions [...]} in its (ok m) or (err m).
 func (t task) item(now time.Time) puff.Value {
@@ -346,7 +346,7 @@ func (t task) item(now time.Time) puff.Value {
 			actions = append(actions, action("Cancel", "tasks/cancel"))
 		}
 	case "running":
-		actions = append(actions, action("Output", "jobs/output"), action("Cancel", "tasks/cancel"))
+		actions = append(actions, action("Watch", "tasks/watch"), action("Cancel", "tasks/cancel"))
 	case "ended":
 		actions = append(actions, action("Result", "tasks/result"))
 		if tag, ok := t.result.(puff.Tag); ok && tag.Len() == 1 {
@@ -497,7 +497,7 @@ func (d *daemon) tasksService() *service {
 					return puff.Ok(puff.NewVector(vs...)), nil
 				}},
 			"view": {mark: puff.MarkRead, marked: true,
-				doc:    "(ok view): the tasks as list gives them, as items: one held has :review's actions, one in your inbox :me's, one waiting elsewhere or running Cancel, a job Output too, and one that ended Result, and the actions its result offers, as {:actions [...]} in its (ok m) or (err m).",
+				doc:    "(ok view): the tasks as list gives them, as items: one held has :review's actions, one in your inbox :me's, one waiting elsewhere or running Cancel, a job Watch too, and one that ended Result, and the actions its result offers, as {:actions [...]} in its (ok m) or (err m).",
 				native: view(all)},
 			"failed": {mark: puff.MarkRead, marked: true,
 				doc:    "(ok view): the tasks that failed in the last day, newest first, as view gives them: :failed, :interrupted, or a result's :status :failed or :gave-up; not those you cancelled or rejected.",
@@ -511,6 +511,8 @@ func (d *daemon) tasksService() *service {
 					}
 					return d.tree(int64(id)), nil
 				}},
+			"watch": {params: []string{"id"}, mark: puff.MarkRead, marked: true, native: d.watch,
+				doc: fmt.Sprintf("(ok view): running job id's output as items, its last %d lines, oldest first, claude -p's stream-json read as steps: began, says, thinks, calls, answer or error, and ended or failed with its cost; following :jobs/<id>, which a job with :stream #t publishes each line on, as an agent's turns and pipeline's devs do. One not running, its item as view gives it, after how its claude turn ended. (err {:kind :no-id}) if it isn't open and didn't end in the last day.", stepsShown)},
 			"result": {params: []string{"id"}, mark: puff.MarkRead, marked: true, native: d.taskResult,
 				doc: "(ok r), the result task id ended with, whole, while it is kept; (err {:kind :no-id}) if it hasn't ended, or isn't kept."},
 			"cancel": {params: []string{"id"}, mark: puff.MarkWrite, marked: true, yours: true,
