@@ -219,6 +219,24 @@ func TestTaskTree(t *testing.T) {
 	if m == nil || m[1] != m[2] {
 		t.Fatalf("tasks/tree %s = %s", build, tree)
 	}
+	// History puts the worker's ask under what began its job, boss's
+	// jobs/run, so it is in the build's chain, not one of its own.
+	es, err := c.History()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var run, ask int64 = -1, -2
+	for _, e := range es {
+		switch {
+		case e.Kind == "call" && e.From == "boss" && e.To == "jobs/run":
+			run = e.ID
+		case e.To == "helper/ask" && strings.HasPrefix(e.From, "agent/"):
+			ask = e.Cause
+		}
+	}
+	if ask != run {
+		t.Errorf("the worker's ask is caused by %d, not boss's jobs/run %d", ask, run)
+	}
 	// The build waits on its work, not on boss to reply.
 	if !strings.HasSuffix(tree, `:what ":boss/build \"x\"" :why "its work runs: 1 task open"})`) {
 		t.Errorf("the build's why: %s", tree)

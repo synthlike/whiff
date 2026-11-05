@@ -271,7 +271,8 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 			if req.Op == "eval" {
 				resp = d.eval(ectx, from, free, req)
 			} else {
-				cur.addr, cur.lineage = from, d.clientLineage(from, req, free)
+				c := d.clientCaller(from, req, free)
+				cur.addr, cur.id, cur.lineage = c.addr, c.id, c.lineage
 				if repl == nil {
 					repl = d.newEnv(&replOut, cur)
 				}
@@ -394,14 +395,15 @@ func (d *daemon) message(ctx context.Context, from string, req rpc.Request) rpc.
 		if topic == "" || vec.Len() != 1 {
 			return rpc.Response{Error: "pub wants a topic and one value"}
 		}
-		r := d.publishGated(message{from: from, topic: topic, args: puff.Print(vec), dir: req.Dir, lineage: d.clientLineage(from, req, false)})
+		cur := d.clientCaller(from, req, false)
+		r := d.publishGated(message{cause: cur.id, from: from, topic: topic, args: puff.Print(vec), dir: req.Dir, lineage: cur.lineage})
 		return rpc.Response{Value: puff.Print(r)}
 	}
 	vals := []puff.Value{puff.Keyword(strings.TrimPrefix(req.Target, ":"))}
 	for i := range vec.Len() {
 		vals = append(vals, vec.At(i))
 	}
-	cur := &caller{addr: from, lineage: d.clientLineage(from, req, false)}
+	cur := d.clientCaller(from, req, false)
 	m, addr, err := cur.message(req.Dir, vals)
 	if err != nil {
 		return rpc.Response{Error: err.Error()}
@@ -423,7 +425,7 @@ func (d *daemon) message(ctx context.Context, from string, req rpc.Request) rpc.
 // acting for its address (from, "" for none); as accepted if free.
 func (d *daemon) eval(ctx context.Context, from string, free bool, req rpc.Request) rpc.Response {
 	var out strings.Builder
-	cur := &caller{addr: from, lineage: d.clientLineage(from, req, free)}
+	cur := d.clientCaller(from, req, free)
 	return d.evalIn(ctx, d.newEnv(&out, cur), cur, &out, "eval", req)
 }
 
@@ -437,6 +439,27 @@ func (d *daemon) clientLineage(from string, req rpc.Request, free bool) lineage 
 	l := lineage{session: from, reviewed: free}
 	d.do(func(st *state) { l.task = st.sessionJob(from) })
 	return l
+}
+
+// clientCaller is who a client's request acts as: from, in the chain
+// clientLineage gives; for an agent's session, its messages are caused by
+// the message that began the job holding it, as the jobs/run of an
+// agent's turn, so history shows them in the chain they are work for.
+func (d *daemon) clientCaller(from string, req rpc.Request, free bool) *caller {
+	cur := &caller{addr: from, lineage: d.clientLineage(from, req, free)}
+	if req.Agent {
+		d.do(func(st *state) { cur.id = st.sessionCause(from) })
+	}
+	return cur
+}
+
+// sessionCause is the message that began the job holding session, the
+// cause of what the session sends; 0 if none holds it.
+func (st *state) sessionCause(session string) int64 {
+	if j := st.jobs[st.sessionJob(session)]; j != nil {
+		return j.msg
+	}
+	return 0
 }
 
 // sessionJob is the job holding session, agent/<n> or an agent's own,
@@ -486,9 +509,10 @@ func (d *daemon) evalIn(ctx context.Context, env *puff.Env, cur *caller, out *st
 			}
 		}
 	}
+	cause := cur.id // what began the session's job, if any
 	if freeWrite {
 		d.do(func(st *state) { cur.id = st.msgID() })
-		defer func() { cur.id = 0 }()
+		defer func() { cur.id = cause }()
 	}
 	begin := time.Now()
 	v, err := env.Load(ctx, file, req.Src)
@@ -501,7 +525,7 @@ func (d *daemon) evalIn(ctx context.Context, env *puff.Env, cur *caller, out *st
 			reply = puff.Print(v)
 		}
 		d.do(func(st *state) {
-			st.record(entry{at: begin, kind: "eval", id: cur.id, from: from, args: puff.Print(puff.NewVector(puff.String(req.Src))),
+			st.record(entry{at: begin, kind: "eval", id: cur.id, cause: cause, from: from, args: puff.Print(puff.NewVector(puff.String(req.Src))),
 				reply: reply, took: time.Since(begin), gate: "free"})
 		})
 	}
