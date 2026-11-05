@@ -418,7 +418,12 @@ who talks to whom and how often. What an agent's session sends is caused
 by the message that began the job it runs in, as an agent's turn's
 `jobs/run`, so it is in the chain it is work for. A timer's message begins a chain of its own,
 keeping its origin, or a service that schedules itself would be one endless
-chain. History is stored in whiff.db for 30 days; clients get the last
+chain. A chain is in a **project** once a job in it runs in a git
+repository: the repository's folder name, a worktree's being its
+repository's. Its messages from then on carry it, as does the session of
+an agent's turn run there, so `project:tally` finds them and sniff marks
+each card with its project, a click showing only that project's.
+History is stored in whiff.db for 30 days; clients get the last
 1000 entries, and `whiff history -f` and sniff follow it live, with
 nothing missed between the snapshot and the stream.
 

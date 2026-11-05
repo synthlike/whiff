@@ -75,6 +75,16 @@ function pageOf(target, args) {
 let entries = []; // history, oldest first
 let selected = null; // the index of the entry the detail pane shows
 let only = null; // the id of the one chain shown, or null for every one
+// The project shown, or "" for every one: in the URL, ?p=, so it's a link.
+let project = new URLSearchParams(location.search).get("p") || "";
+
+// projectIn is the project of chain's work: the first its messages name,
+// as the daemon tags a chain once a job in it runs in a repository, so
+// what came before, the request itself, has none yet.
+function projectIn(chain) {
+  for (const [i] of chain) if (entries[i].project) return entries[i].project;
+  return "";
+}
 const opened = new Set(); // the keys of the cards opened
 const cardView = new Map(); // how each open card shows its chain, by key: "steps" (the default), "lanes" or "all"
 let layout = store.get("layout", "cards") === "map" ? "map" : "cards"; // Activity as cards, or as a map of who talks to whom
@@ -211,7 +221,7 @@ function cardOf(chain) {
     const e = entries[i];
     if (isDone(e)) dones.set(String(e.args.v[0].v), e);
   }
-  const c = { chain, is, root, dones, key: keyOf(root), state: "ok", label: "Done", run: null, rounds: 0, step: "", job: "", cost: 0, said: null };
+  const c = { chain, is, root, dones, key: keyOf(root), project: projectIn(chain), state: "ok", label: "Done", run: null, rounds: 0, step: "", job: "", cost: 0, said: null };
   let jobCost = 0, resultCost = 0, status = null, branch = "", note = "", fault = null, open = null;
   for (const i of is) {
     const e = entries[i], k = kindOf(e.reply);
@@ -362,6 +372,12 @@ function cardEl(c) {
   const who = whoOf(r);
   head.append(el("span", "time", time(r.at)), el("span", "who", who[0].toUpperCase() + who.slice(1) + " → " + whom),
     el("span", "ask", askText(r) || fn(r)), el("span", "caret", open ? "▾" : "▸"));
+  if (c.project) {
+    const p = el("span", "project", c.project);
+    p.dataset.project = c.project;
+    p.title = `in ${c.project}: show only its requests`;
+    head.querySelector(".who").append(p);
+  }
   const line = el("span", "outcome-line");
   line.append(el("span", "outcome", c.label));
   const meta = [c.run !== null && "run " + c.run, c.state === "running" && c.job, c.rounds && plural(c.rounds, "review round"),
@@ -778,6 +794,7 @@ function redraw() {
   for (let n = all.length - 1; n >= 0; n--) {
     const ch = all[n];
     if (only !== null && !ch.some(([i]) => entries[i].id === only)) continue;
+    if (project && only === null && projectIn(ch) !== project) continue;
     if (only === null && isBackground(ch)) {
       (run ||= []).push(ch);
       if (showBg) for (const [i] of ch) shown.push(i);
@@ -824,6 +841,23 @@ function showOnly(id) {
   redraw();
 }
 $("only").onclick = () => showOnly(null);
+
+// showProject shows only the requests whose work is in name, or, for "",
+// every one again.
+function showProject(name) {
+  project = name;
+  const u = new URLSearchParams(location.search);
+  if (name) u.set("p", name);
+  else u.delete("p");
+  history.replaceState(null, "", location.pathname + (u.size ? "?" + u : "") + location.hash);
+  $("project").hidden = !name;
+  $("project").textContent = name + " ×";
+  activate(null);
+  redraw();
+}
+$("project").onclick = () => showProject("");
+$("project").hidden = !project;
+$("project").textContent = project + " ×";
 
 // showBackground shows every background event, or folds them again.
 function showBackground(on) {
@@ -1714,6 +1748,8 @@ function setStatus(s) {
 }
 
 $("rows").addEventListener("click", (ev) => {
+  const p = ev.target.closest(".card-head .project");
+  if (p) return showProject(p.dataset.project);
   const h = ev.target.closest(".card-head");
   if (h) {
     const k = h.dataset.id;
@@ -1792,7 +1828,10 @@ function setQuery(q) {
   if (box.value.trim() !== q) box.value = q;
   if (q === query) return;
   query = q;
-  history.replaceState(null, "", location.pathname + (q ? "?q=" + encodeURIComponent(q) : "") + location.hash);
+  const u = new URLSearchParams(location.search);
+  if (q) u.set("q", q);
+  else u.delete("q");
+  history.replaceState(null, "", location.pathname + (u.size ? "?" + u : "") + location.hash);
   activate(null);
   follow();
 }

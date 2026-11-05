@@ -99,20 +99,21 @@ func plain(v puff.Value) any {
 // microseconds since 1970, which a JavaScript number holds exactly.
 func entryJSON(e rpc.Entry) json.RawMessage {
 	out := struct {
-		At     time.Time `json:"at"`
-		Us     int64     `json:"us"`
-		Kind   string    `json:"kind"`
-		ID     int64     `json:"id,omitempty"`
-		Cause  int64     `json:"cause,omitempty"`
-		Origin string    `json:"origin,omitempty"`
-		From   string    `json:"from"`
-		To     string    `json:"to"`
-		Args   *tree     `json:"args,omitempty"`
-		Reply  *tree     `json:"reply,omitempty"`
-		Took   float64   `json:"took"`
-		Gate   string    `json:"gate,omitempty"`
-		Note   string    `json:"note,omitempty"`
-	}{At: e.At, Us: e.At.UnixMicro(), Kind: e.Kind, ID: e.ID, Cause: e.Cause, Origin: e.Origin, From: e.From, To: e.To, Took: float64(e.Took) / float64(time.Millisecond), Gate: e.Gate, Note: e.Note}
+		At      time.Time `json:"at"`
+		Us      int64     `json:"us"`
+		Kind    string    `json:"kind"`
+		ID      int64     `json:"id,omitempty"`
+		Cause   int64     `json:"cause,omitempty"`
+		Origin  string    `json:"origin,omitempty"`
+		From    string    `json:"from"`
+		To      string    `json:"to"`
+		Args    *tree     `json:"args,omitempty"`
+		Reply   *tree     `json:"reply,omitempty"`
+		Took    float64   `json:"took"`
+		Gate    string    `json:"gate,omitempty"`
+		Note    string    `json:"note,omitempty"`
+		Project string    `json:"project,omitempty"`
+	}{At: e.At, Us: e.At.UnixMicro(), Kind: e.Kind, ID: e.ID, Cause: e.Cause, Origin: e.Origin, From: e.From, To: e.To, Took: float64(e.Took) / float64(time.Millisecond), Gate: e.Gate, Note: e.Note, Project: e.Project}
 	if e.Args != "" {
 		out.Args = treeOf(e.Args)
 	}

@@ -54,7 +54,7 @@ func ParseQuery(s string) (Query, error) {
 			return Query{}, fmt.Errorf("%s: want something after %s:", f, key)
 		}
 		switch key {
-		case "to", "from", "gate":
+		case "to", "from", "gate", "project":
 		case "origin":
 			if t.val != "user" && t.val != "agent" {
 				return Query{}, fmt.Errorf("%s: want origin:user or origin:agent", f)
@@ -149,6 +149,8 @@ func (t term) match(e Entry, marks map[string]string) bool {
 	case "gate":
 		kind, _, _ := strings.Cut(e.Gate, " ")
 		return kind == t.val
+	case "project":
+		return e.Project == t.val
 	}
 	return false
 }

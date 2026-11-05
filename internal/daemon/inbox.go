@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -369,7 +370,7 @@ func (d *daemon) handOn(by string, id int64, m message) error {
 		}
 		if r != nil && was.from == by {
 			found = true
-			d.settle(st, ticket{id: id, msg: m.id, from: m.from, dir: m.dir, lineage: lineage{user: was.user && m.user, session: sameSession(was.session, m.session), task: was.task}}, answeredBy, r)
+			d.settle(st, ticket{id: id, msg: m.id, from: m.from, dir: m.dir, lineage: lineage{user: was.user && m.user, session: sameSession(was.session, m.session), task: was.task, project: cmp.Or(was.project, m.project)}}, answeredBy, r)
 		}
 	})
 	if !found {

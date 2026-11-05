@@ -50,6 +50,8 @@ type entry struct {
 	took  time.Duration
 	gate  string // how the review gate treated an agent's write: see rpc.Entry
 	note  string
+	// project is the chain's project, as the message's lineage has it.
+	project string
 }
 
 // rpc is e as clients get it.
@@ -58,7 +60,7 @@ func (e entry) rpc() rpc.Entry {
 		return rpc.Entry{At: e.at, Kind: "note", Note: e.note}
 	}
 	return rpc.Entry{At: e.at, Kind: e.kind, ID: e.id, Cause: e.cause, Origin: string(origin(e.user)), From: e.from, To: e.to,
-		Args: e.args, Reply: e.reply, Took: e.took, Gate: e.gate}
+		Args: e.args, Reply: e.reply, Took: e.took, Gate: e.gate, Project: e.project}
 }
 
 // stored is e as whiff.db holds it: a map of the fields it has. Args and
@@ -74,7 +76,7 @@ func (e entry) stored() puff.Value {
 		add("origin", origin(e.user))
 		add("took", puff.Duration(e.took))
 	}
-	for _, f := range []struct{ k, v string }{{"from", e.from}, {"to", e.to}, {"args", e.args}, {"reply", e.reply}, {"gate", e.gate}} {
+	for _, f := range []struct{ k, v string }{{"from", e.from}, {"to", e.to}, {"args", e.args}, {"reply", e.reply}, {"gate", e.gate}, {"project", e.project}} {
 		if f.v != "" {
 			add(f.k, puff.String(f.v))
 		}
@@ -100,7 +102,7 @@ func storedEntry(p string) (entry, error) {
 	num := func(k string) int64 { n, _ := get(k).(puff.Int); return int64(n) }
 	took, _ := get("took").(puff.Duration)
 	return entry{at: at.Go(), kind: str("kind"), id: num("id"), cause: num("cause"), user: get("origin") == puff.Keyword("user"),
-		from: str("from"), to: str("to"), args: str("args"), reply: str("reply"), took: time.Duration(took), gate: str("gate"), note: str("note")}, nil
+		from: str("from"), to: str("to"), args: str("args"), reply: str("reply"), took: time.Duration(took), gate: str("gate"), note: str("note"), project: str("project")}, nil
 }
 
 // batch is history on its way to whiff.db: entries, the last message id

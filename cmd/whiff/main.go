@@ -48,7 +48,7 @@ const usage = `usage:
   whiff history -f [query]        print the last 10, oldest first, then each new one until stopped
   whiff history -c [query]        print it as chains: each message that began one, newest first, then what it led to, indented
                                   query: to:plan from:agent origin:user kind:err 'time:>500ms' mark:write
-                                  gate:held, a word, -term for what must not match
+                                  gate:held project:tally, a word, -term for what must not match
   whiff services                  list the services, what needs you first: failed, faulting, waiting for you, busy, then the rest
   whiff services service          one service in full: its file, last message, faults, inbox and timers; an agent's turns and spend
   whiff ls                        list every address's functions and their marks, each agent session's mode, then the :read overrides

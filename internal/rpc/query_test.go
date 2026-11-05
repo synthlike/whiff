@@ -9,10 +9,10 @@ import (
 
 func TestQuery(t *testing.T) {
 	es := map[string]Entry{
-		"draft": {Kind: "call", Origin: "agent", From: "agent/3", To: "plan/draft", Args: `["fix the test"]`, Reply: `(ok 1)`, Took: 2 * time.Second, Gate: "accepted 4"},
+		"draft": {Kind: "call", Origin: "agent", From: "agent/3", To: "plan/draft", Args: `["fix the test"]`, Reply: `(ok 1)`, Took: 2 * time.Second, Gate: "accepted 4", Project: "tally"},
 		"board": {Kind: "call", Origin: "user", To: "plan/board", Args: `[]`, Reply: `(ok (items []))`, Took: 3 * time.Millisecond},
 		"fault": {Kind: "call", Origin: "agent", From: "plan", To: "gh/pr", Args: `["b"]`, Reply: `(err {:kind :fault :message "gh.puff:14:9"})`, Took: 31 * time.Millisecond, Gate: "for agent/3"},
-		"held":  {Kind: "call", Origin: "agent", From: "agent/3", To: "todo/add", Args: `["x"]`, Reply: `(err {:id 2 :kind :pending})`, Gate: "held 2"},
+		"held":  {Kind: "call", Origin: "agent", From: "agent/3", To: "todo/add", Args: `["x"]`, Reply: `(err {:id 2 :kind :pending})`, Gate: "held 2", Project: "tally"},
 		"err":   {Kind: "call", Origin: "user", To: "todo/done", Args: `[9]`, Reply: `(err {:kind :no-item})`, Took: time.Millisecond},
 		"step":  {Kind: "pub", Origin: "agent", From: "pipeline", To: "pipeline on :pipeline/step", Args: `[{:step :dev}]`},
 		"eval":  {Kind: "eval", Origin: "agent", From: "agent/3", Args: `["(file/write \"x\" \"y\")"]`, Reply: `(ok :done)`, Gate: "free"},
@@ -39,6 +39,9 @@ func TestQuery(t *testing.T) {
 		{"mark:write", "draft err eval fault held"},
 		{"mark:read", "board"},
 		{"gate:held", "held"},
+		{"project:tally", "draft held"},
+		{"project:tal", ""}, // a project is named whole
+		{"-project:tally kind:call", "board err fault"},
 		{"gate:for", "fault"},
 		{"-gate:for kind:err", "err"},
 		{"-to:gh -to:pipeline from:agent/3", "draft eval held"},

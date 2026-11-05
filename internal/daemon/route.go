@@ -74,6 +74,10 @@ type lineage struct {
 	// its ticket keeps task as its parent, so its whiff/done goes on in the
 	// parent's work.
 	task int64
+	// project is the project the chain's work is in, as projectOf names
+	// it: set by the first job run in a repository, or the session of one,
+	// and carried on from there; "" until then.
+	project string
 }
 
 // unreviewed is l without your acceptance: for a message the review gate
@@ -117,7 +121,7 @@ func (m message) notice() bool {
 // entry is m's entry in history, at at, delivered to, to, with its
 // reply and how the review gate let it through, if it did.
 func (m message) entry(at time.Time, to, reply, gate string) entry {
-	return entry{at: at, kind: m.kind(), id: m.id, cause: m.cause, user: m.user, from: m.from, to: to, args: m.args, reply: reply, gate: gate}
+	return entry{at: at, kind: m.kind(), id: m.id, cause: m.cause, user: m.user, from: m.from, to: to, args: m.args, reply: reply, gate: gate, project: m.project}
 }
 
 // to is what m is for at addr: addr/fn, or addr on :topic.

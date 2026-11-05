@@ -75,7 +75,7 @@ func (d *daemon) publishGated(m message) puff.Value {
 			case write:
 				m.id = st.msgID()
 				r = d.hold(st, "", m)
-				st.record(entry{at: time.Now(), kind: "pub", id: m.id, cause: m.cause, from: m.from, to: "review on :" + m.topic, args: m.args, reply: puff.Print(r), gate: heldGate(r)})
+				st.record(entry{at: time.Now(), kind: "pub", id: m.id, cause: m.cause, from: m.from, to: "review on :" + m.topic, args: m.args, reply: puff.Print(r), gate: heldGate(r), project: m.project})
 				return
 			}
 		}
@@ -106,7 +106,7 @@ func (d *daemon) holdEval(st *state, from string, req rpc.Request) puff.Value {
 	a := &asked{ticket: ticket{msg: st.msgID(), from: from, dir: req.Dir, lineage: lineage{session: from, task: st.sessionJob(from)}}, fn: "eval", args: puff.NewVector(puff.String(req.Src)), src: req.Src}
 	a.about = a.label()
 	r := st.queue(a, "the agent's eval")
-	st.record(entry{at: time.Now(), kind: "eval", id: a.msg, from: from, args: puff.Print(a.args), reply: puff.Print(r), gate: heldGate(r)})
+	st.record(entry{at: time.Now(), kind: "eval", id: a.msg, project: a.project, from: from, args: puff.Print(a.args), reply: puff.Print(r), gate: heldGate(r)})
 	return r
 }
 
@@ -166,7 +166,7 @@ func (d *daemon) accept(ctx context.Context, chain []string, id int64) (puff.Val
 	if a.held == nil {
 		r := d.runHeld(ctx, chain, a, next)
 		d.do(func(st *state) {
-			st.record(entry{at: a.at, kind: "eval", id: next, cause: a.msg, from: a.from, args: puff.Print(a.args), reply: puff.Print(r), gate: fmt.Sprintf("accepted %d", a.id)})
+			st.record(entry{at: a.at, kind: "eval", id: next, cause: a.msg, project: a.project, from: a.from, args: puff.Print(a.args), reply: puff.Print(r), gate: fmt.Sprintf("accepted %d", a.id)})
 		})
 		d.reviewed(a, r)
 		return r, ctx.Err()
@@ -195,7 +195,7 @@ func (d *daemon) accept(ctx context.Context, chain []string, id int64) (puff.Val
 // What it prints is dropped. chain is accept's; id is the eval's in
 // history.
 func (d *daemon) runHeld(ctx context.Context, chain []string, a *asked, id int64) puff.Value {
-	env := d.newEnv(io.Discard, &caller{addr: a.from, id: id, chain: chain, lineage: lineage{reviewed: true, session: a.session, task: a.task}})
+	env := d.newEnv(io.Discard, &caller{addr: a.from, id: id, chain: chain, lineage: lineage{reviewed: true, session: a.session, task: a.task, project: a.project}})
 	env.Dir = a.dir
 	ctx, cancel := context.WithTimeout(ctx, d.callTimeout)
 	defer cancel()

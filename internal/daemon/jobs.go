@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -124,6 +125,9 @@ func (d *daemon) runJob(m message, args []puff.Value) (puff.Value, error) {
 		d.revoke(j)
 		return puff.Errorf("start", "%v", err), nil
 	}
+	// A job run in a repository puts its chain in that project, unless
+	// it is in one already.
+	project := cmp.Or(m.project, projectOf(j.opts.dir))
 	d.do(func(st *state) {
 		// One you accepted is the task its sender already waits for.
 		id := m.held
@@ -133,7 +137,7 @@ func (d *daemon) runJob(m message, args []puff.Value) (puff.Value, error) {
 		// A job in a chain you accepted goes on in it, unless a model writes
 		// its output: what its sender does with that is the agent's.
 		j.ticket = ticket{id: id, msg: m.id, from: m.from, dir: m.dir,
-			lineage: lineage{user: user, session: m.session, reviewed: m.reviewed && !opts.agent, task: m.task}}
+			lineage: lineage{user: user, session: m.session, reviewed: m.reviewed && !opts.agent, task: m.task, project: project}}
 		j.began(p)
 		st.jobs[j.id] = j
 		if g, ok := st.grants[j.opts.token]; ok && j.opts.token != "" {

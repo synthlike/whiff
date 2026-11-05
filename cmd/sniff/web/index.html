@@ -46,10 +46,11 @@
         <div class="activity-head">
           <h2 id="activity-title">Activity</h2>
           <button type="button" id="only" class="chip" aria-pressed="true" title="Show every chain again" hidden>One chain ×</button>
+          <button type="button" id="project" class="chip" aria-pressed="true" title="Show every project's requests again" hidden></button>
           <form id="filters" class="filters" role="search" aria-label="Filter messages">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 5h18M6 12h12M10 19h4"></path></svg>
             <input id="query" type="search" aria-label="Filter" placeholder="Filter — errors, slow, writes, to:lead…" autocomplete="off" spellcheck="false"
-              title="errors, slow and writes stand for kind:err, time:>500ms and mark:write. Each term must match; -term must not. to:address[/fn] from:address origin:user|agent kind:call|send|pub|done|eval|note|ok|err|fault|pending time:>500ms|<1ms mark:read|write gate:held|refused|accepted|trusted|free|for, or a word">
+              title="errors, slow and writes stand for kind:err, time:>500ms and mark:write. Each term must match; -term must not. to:address[/fn] from:address origin:user|agent kind:call|send|pub|done|eval|note|ok|err|fault|pending time:>500ms|<1ms mark:read|write gate:held|refused|accepted|trusted|free|for project:name, or a word">
           </form>
           <button type="button" id="show-bg" class="toggle" aria-pressed="false" title="Show timer ticks, reads, settles and notes inline, rather than folded between requests">Show background</button>
           <span id="query-error" class="query-error" role="status"></span>

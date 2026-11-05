@@ -437,7 +437,17 @@ func (d *daemon) clientLineage(from string, req rpc.Request, free bool) lineage 
 		return lineage{user: true, reviewed: free}
 	}
 	l := lineage{session: from, reviewed: free}
-	d.do(func(st *state) { l.task = st.sessionJob(from) })
+	d.do(func(st *state) {
+		l.task = st.sessionJob(from)
+		if j := st.jobs[l.task]; j != nil {
+			l.project = j.project
+		}
+	})
+	// A session of its own, as Claude Code's in a repository, works in
+	// the project it was started in.
+	if l.project == "" && l.task == 0 {
+		l.project = projectOf(req.Dir)
+	}
 	return l
 }
 
@@ -525,7 +535,7 @@ func (d *daemon) evalIn(ctx context.Context, env *puff.Env, cur *caller, out *st
 			reply = puff.Print(v)
 		}
 		d.do(func(st *state) {
-			st.record(entry{at: begin, kind: "eval", id: cur.id, cause: cause, from: from, args: puff.Print(puff.NewVector(puff.String(req.Src))),
+			st.record(entry{at: begin, kind: "eval", id: cur.id, cause: cause, project: cur.project, from: from, args: puff.Print(puff.NewVector(puff.String(req.Src))),
 				reply: reply, took: time.Since(begin), gate: "free"})
 		})
 	}

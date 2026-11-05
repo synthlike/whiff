@@ -542,7 +542,7 @@ func (d *daemon) keepJob(j *job) error {
 }
 
 // endKeys are what endTask writes of a task, over what was stored of it.
-var endKeys = []string{"id", "from", "origin", "cwd", "session", "reviewed", "what", "parent", "status", "ended", "by", "result", "handled", "stdin"}
+var endKeys = []string{"id", "from", "origin", "cwd", "session", "reviewed", "what", "parent", "project", "status", "ended", "by", "result", "handled", "stdin"}
 
 // endTask stores r as the result of task t, answered by by, over what was
 // stored of it as it ran, such as a job's :cmd. handled is whether t's
@@ -634,6 +634,9 @@ func ticketEntries(t ticket) []puff.Entry {
 	if t.task != 0 {
 		es = append(es, puff.Key("parent", puff.Int(t.task)))
 	}
+	if t.project != "" {
+		es = append(es, puff.Key("project", puff.String(t.project)))
+	}
 	return es
 }
 
@@ -648,7 +651,8 @@ func storedTicket(id int64, get func(string) puff.Value) ticket {
 	reviewed, _ := get("reviewed").(puff.Bool)
 	about, _ := get("what").(puff.String)
 	parent, _ := get("parent").(puff.Int)
-	return ticket{id: id, from: string(from), dir: string(dir), about: string(about), lineage: lineage{user: org == origin(true), session: string(session), reviewed: bool(reviewed), task: int64(parent)}}
+	project, _ := get("project").(puff.String)
+	return ticket{id: id, from: string(from), dir: string(dir), about: string(about), lineage: lineage{user: org == origin(true), session: string(session), reviewed: bool(reviewed), task: int64(parent), project: string(project)}}
 }
 
 // fields is the printed map p as a lookup: nil for a key it hasn't.
@@ -679,6 +683,9 @@ func (j *job) stored() puff.Value {
 	}
 	if j.reviewed {
 		with("reviewed", puff.Bool(true))
+	}
+	if j.project != "" {
+		with("project", puff.String(j.project))
 	}
 	with("status", puff.Keyword("running"))
 	var as []puff.Value
@@ -860,6 +867,9 @@ func (t *timer) stored() puff.Value {
 	if t.m.session != "" {
 		es = append(es, puff.Key("session", puff.Keyword(t.m.session)))
 	}
+	if t.m.project != "" {
+		es = append(es, puff.Key("project", puff.String(t.m.project)))
+	}
 	m, _ := puff.NewMap(es...)
 	return m
 }
@@ -889,8 +899,9 @@ func storedTimer(key []byte, p string) (*timer, error) {
 	}
 	dir, _ := get("cwd").(puff.String)
 	reviewed, _ := get("reviewed").(puff.Bool)
+	project, _ := get("project").(puff.String)
 	return &timer{key: key, due: due.Go(), addr: to, m: message{from: name("from"), fn: fn, args: puff.Print(args), dir: string(dir),
-		lineage: lineage{user: name("origin") == string(origin(true)), reviewed: bool(reviewed), session: name("session")}}}, nil
+		lineage: lineage{user: name("origin") == string(origin(true)), reviewed: bool(reviewed), session: name("session"), project: string(project)}}}, nil
 }
 
 // stored is a as it is stored: as (inbox) shows it, with what a restart
@@ -910,6 +921,9 @@ func (a *asked) stored() puff.Value {
 	}
 	if a.task != 0 {
 		with("parent", puff.Int(a.task))
+	}
+	if a.project != "" {
+		with("project", puff.String(a.project))
 	}
 	if a.expires > 0 {
 		with("expires", puff.Duration(a.expires))
@@ -958,7 +972,8 @@ func storedAsked(id int64, p string) (*asked, error) {
 	expires, _ := get("expires").(puff.Duration)
 	msg, _ := get("msg").(puff.Int)
 	parent, _ := get("parent").(puff.Int)
-	a := &asked{ticket: ticket{id: id, msg: int64(msg), from: key("from"), dir: string(dir), lineage: lineage{user: key("origin") == string(origin(true)), session: key("session"), task: int64(parent)}},
+	project, _ := get("project").(puff.String)
+	a := &asked{ticket: ticket{id: id, msg: int64(msg), from: key("from"), dir: string(dir), lineage: lineage{user: key("origin") == string(origin(true)), session: key("session"), task: int64(parent), project: string(project)}},
 		addr: addr, fn: fn, args: args, at: at.Go(), expires: time.Duration(expires)}
 	switch addr {
 	case "me":

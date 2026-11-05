@@ -82,6 +82,10 @@ type Entry struct {
 	// anything else.
 	Gate string `json:"gate,omitempty"`
 	Note string `json:"note,omitempty"`
+	// Project is the project of the chain's work, the git repository a job
+	// in it ran in, as "tally"; "" until one did. What a message began
+	// before its chain had one has none: see whiff history's chains.
+	Project string `json:"project,omitempty"`
 }
 
 // String is e as a line of whiff history:
@@ -116,6 +120,9 @@ func (e Entry) String() string {
 	}
 	if e.Gate != "" {
 		line += "  [" + e.Gate + "]"
+	}
+	if e.Project != "" {
+		line += "  #" + e.Project
 	}
 	return line
 }
