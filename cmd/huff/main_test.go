@@ -98,3 +98,40 @@ func TestHuffErrors(t *testing.T) {
 		}
 	}
 }
+
+// With -tools, the model works on files in -dir, and Bash runs only what
+// -allow names: what it refused is in the result, as claude -p's.
+func TestHuffTools(t *testing.T) {
+	calls := []string{
+		`{"id":"a","type":"function","function":{"name":"Write","arguments":"{\"file_path\":\"notes.txt\",\"content\":\"hi\\n\"}"}}`,
+		`{"id":"b","type":"function","function":{"name":"Bash","arguments":"{\"command\":\"rm notes.txt\"}"}}`,
+	}
+	n := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct{ Tools []struct{ Function struct{ Name string } } }
+		json.NewDecoder(r.Body).Decode(&req)
+		if len(req.Tools) != 2 {
+			t.Errorf("tools offered: %+v", req.Tools)
+		}
+		if n < len(calls) {
+			io.WriteString(w, `{"choices":[{"message":{"role":"assistant","tool_calls":[`+calls[n]+`]},"finish_reason":"tool_calls"}]}`)
+		} else {
+			io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}]}`)
+		}
+		n++
+	}))
+	defer srv.Close()
+	dir := t.TempDir()
+	out, errs, code := runHuff(t, map[string]string{"WHIFF_LOCAL_URL": srv.URL}, "", "-json", "-m", "local/x",
+		"-dir", dir, "-tools", "Write,Bash", "-allow", "go test ./...", "write notes")
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if code != 0 || !strings.Contains(lines[len(lines)-1], `"permission_denials":[{"tool_input":{"command":"rm notes.txt"},"tool_name":"Bash"}]`) {
+		t.Errorf("result: %d %s\n%s", code, errs, out)
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, "notes.txt")); err != nil || string(b) != "hi\n" {
+		t.Errorf("notes.txt: %q %v", b, err)
+	}
+	if _, errs, code := runHuff(t, nil, "", "-m", "local/x", "-tools", "Read,Shell", "x"); code != 1 || !strings.Contains(errs, "there is no tool Shell") {
+		t.Errorf("an unknown tool: %d %s", code, errs)
+	}
+}

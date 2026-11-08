@@ -35,7 +35,7 @@
     for in this repository, keeping to its style, and add or update tests.
     You can read and edit files, run the check command with any arguments
     (as go test -race), and go vet, go build, gofmt and git status, diff
-    and log; Claude's permissions refuse other commands. Don't commit: the pipeline
+    and log; your permissions refuse other commands. Don't commit: the pipeline
     commits your work once its reviewer approves. End with a short summary
     of what you changed.
     """)
@@ -142,6 +142,7 @@
   ; A run an agent started has whiff mcp too, reaching only the agent's ask.
   (def (dev-cmd run)
     (match run
+      [_ when (huff? (map/get-or run :model "")) (huff-dev-cmd run)]
       [{:session s :check check}
        (vector/concat
          ["claude" "-p"]
@@ -155,6 +156,30 @@
          ["--permission-mode" "acceptEdits" "--verbose" "--output-format" "stream-json" "--append-system-prompt" dev-system]
          (match (map/get-or run :model "") ["" []] [m ["--model" m]])
          (if (map/get-or run :resumable #f) ["--resume" s] ["--session-id" s]))]))
+
+  ; huff? says whether model names a provider, as openrouter/moonshotai/
+  ; kimi-k2: huff runs it, not claude.
+  (def (huff? model) (string/contains? model "/"))
+
+  ; transcript is where huff keeps session s's conversation, so a retry
+  ; goes on from it, as claude's --resume does.
+  (def (transcript s) (path/join (os/home) ".whiff" "huff" (str s ".puff")))
+
+  ; huff-dev-cmd is the dev's huff, with the same tools and commands as
+  ; its claude: whiff's lead/ask comes with its job's session.
+  (def (huff-dev-cmd run)
+    (match run
+      [{:session s :check check :model model}
+       (vector/concat
+         ["huff" "-json" "-m" model "-s" dev-system "-t" (transcript s) "-calls" "60"
+          "-tools" "Read,Edit,Write,Glob,Grep,Bash"]
+         (vector/reduce [(string/join check " ") (str (check-prefix check) ":*") "go vet:*" "go build:*" "gofmt:*"
+                         "git status:*" "git diff:*" "git log:*"]
+           [] (fn (args c) (vector/concat args ["-allow" c]))))]))
+
+  (test "a dev on a provider's model runs on huff, with the tools and commands claude's has"
+    (= (vector/slice (dev-cmd {:session "s1" :check ["go" "test" "./..."] :model "openrouter/x/y"}) 0 4)
+      ["huff" "-json" "-m" "openrouter/x/y"]))
 
   (def (dev state n input)
     (let [run (run-of state n)
@@ -202,6 +227,14 @@
     (= [(files-text []) (files-text [["README.md" "# x"]]) (head "abcdef" 3)]
       ["" "\n\nThe files the task names, with the change:\n\n--- README.md\n# x" "abc\n[cut at 3 characters]"]))
 
+  ; reviewer-cmd is the reviewer, without tools, on model: claude's JSON
+  ; result, or huff's stream, whose last line is the same.
+  (def (reviewer-cmd model)
+    (cond
+      [(huff? model) ["huff" "-json" "-m" model "-calls" "2"]]
+      [(= model "") ["claude" "-p" "--strict-mcp-config" "--tools" "" "--no-session-persistence" "--output-format" "json"]]
+      [_ ["claude" "-p" "--strict-mcp-config" "--tools" "" "--no-session-persistence" "--output-format" "json" "--model" model]]))
+
   (def (review state n checked)
     (let [{:dir dir :base base :task task} (run-of state n)
           model (map/get-or (run-of state n) :reviewer-model "")
@@ -210,9 +243,8 @@
       (if (= diff "")
         (finish state n :failed "The developer changed nothing.")
         (let [input (str review-prompt "\n\nTask: " task "\n\nThe check " (check-text checked) (files-text (named dir task)) "\n\nThe diff:\n" diff)
-              id (try (submitted (call :jobs/run (vector/concat ["claude" "-p" "--strict-mcp-config" "--tools" "" "--no-session-persistence" "--output-format" "json"]
-                                                   (if (= model "") [] ["--model" model]))
-                                   {:stdin input :dir dir :as :text :timeout 10m})))]
+              id (try (submitted (call :jobs/run (reviewer-cmd model)
+                                   {:stdin input :dir dir :as :text :timeout 10m :stream (huff? model)})))]
           (ok (waiting (set-run state n {:checked checked :diff diff}) n :review id))))))
 
   ; subject is a commit's subject, at most 72 characters: the review's

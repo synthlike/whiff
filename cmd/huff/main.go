@@ -1,6 +1,7 @@
 // Command huff runs a model with tools, a turn at a time: on its own, a
-// question and its answer; in a whiff job that holds an agent's session,
-// a turn of that agent, whose tools are the whiff functions it may use.
+// question and its answer, with file tools as claude -p's if you name
+// them; in a whiff job that holds an agent's session, a turn of that
+// agent, whose tools are also the whiff functions it may use.
 package main
 
 import (
@@ -13,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 
@@ -30,9 +32,11 @@ The model names its provider, with its key from the environment:
   local/<model>        a server on this machine at WHIFF_LOCAL_URL,
                        Ollama's http://localhost:11434/v1 if unset
 
-It bills per token to those keys. In a whiff job that holds an agent's
-session (WHIFF_SESSION), its tools are the whiff functions the agent may
-use, called as its session: a :write waits for your review.
+It bills per token to those keys. Its tools: -tools names claude -p's
+file tools it may use, acting only in -dir, and -allow the commands Bash
+may run, as -allow "go test ./..." -allow "go vet:*". In a whiff job that
+holds an agent's session (WHIFF_SESSION), the whiff functions the agent
+may use, called as its session: a :write waits for your review.
 
 flags:
 `
@@ -59,7 +63,10 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	usd := fs.Float64("usd", 0, "the most dollars a turn spends, as the provider reports cost; 0 for no limit")
 	tokens := fs.Int("tokens", 0, "the most tokens a turn uses, in and out; 0 for no limit")
 	stream := fs.Bool("json", false, "print each step as a line of JSON, as claude -p --output-format stream-json does, the last saying how it ended")
-	dir := fs.String("dir", "", "where its whiff tools act; the working directory by default")
+	dir := fs.String("dir", "", "where its tools act; the working directory by default")
+	toolNames := fs.String("tools", "", "the file tools it may use, of "+strings.Join(huff.LocalTools, ",")+", as claude -p's --tools")
+	var allow list
+	fs.Var(&allow, "allow", "a command Bash may run, as \"go test ./...\", or what follows a prefix, as \"go vet:*\"; again for more")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -100,18 +107,36 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		out.Encode(map[string]any{"type": "system", "subtype": "init", "model": *model})
 		t.Step = func(m huff.Message, _ huff.Usage) { out.Encode(streamStep(m)) }
 	}
-	if token := getenv("WHIFF_SESSION"); token != "" {
-		wd := *dir
-		if wd == "" {
-			wd, _ = os.Getwd()
+	wd := *dir
+	if wd == "" {
+		wd, _ = os.Getwd()
+	}
+	var boxes huff.Toolboxes
+	var local *huff.Local
+	if *toolNames != "" {
+		local = &huff.Local{Dir: wd, Allow: allow}
+		for _, n := range strings.Split(*toolNames, ",") {
+			if n = strings.TrimSpace(n); n == "" {
+				continue
+			} else if !slices.Contains(huff.LocalTools, n) {
+				return fail("-tools: there is no tool %s: name some of %s", n, strings.Join(huff.LocalTools, ","))
+			}
+			local.Names = append(local.Names, n)
 		}
+		boxes = append(boxes, local)
+		t.System = strings.TrimSpace(fmt.Sprintf("You work in %s: your file tools act there, and only there.", wd) + "\n\n" + t.System)
+	}
+	if token := getenv("WHIFF_SESSION"); token != "" {
 		s, err := openSession(getenv("WHIFF_DIR"), token, wd)
 		if err != nil {
 			return fail("%v", err)
 		}
 		defer s.close()
-		t.Tools = s
+		boxes = append(boxes, s)
 		t.System = strings.TrimSpace(toolsNote + "\n\n" + t.System)
+	}
+	if len(boxes) > 0 {
+		t.Tools = boxes
 	}
 
 	r, err := huff.Run(ctx, t)
@@ -150,6 +175,14 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			"usage": map[string]int{"input_tokens": r.Usage.Input, "output_tokens": r.Usage.Output}}
 		if why != "" {
 			res["errors"] = []string{why}
+		}
+		if local != nil && len(local.Denied) > 0 {
+			// As claude -p says what its permissions refused.
+			var ds []map[string]any
+			for _, c := range local.Denied {
+				ds = append(ds, map[string]any{"tool_name": "Bash", "tool_input": map[string]string{"command": c}})
+			}
+			res["permission_denials"] = ds
 		}
 		out.Encode(res)
 	} else if r.Text != "" {
@@ -215,10 +248,14 @@ func readTranscript(path string) ([]huff.Message, error) {
 	return ms, nil
 }
 
-// writeTranscript keeps ms in path, whole or not at all, unless path is "".
+// writeTranscript keeps ms in path, whole or not at all, making its
+// directory, unless path is "".
 func writeTranscript(path string, ms []huff.Message) error {
 	if path == "" {
 		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".huff-*")
 	if err != nil {
@@ -234,3 +271,9 @@ func writeTranscript(path string, ms []huff.Message) error {
 	}
 	return os.Rename(tmp.Name(), path)
 }
+
+// list is a flag that may be given again, each value added.
+type list []string
+
+func (l *list) String() string     { return strings.Join(*l, ", ") }
+func (l *list) Set(s string) error { *l = append(*l, s); return nil }

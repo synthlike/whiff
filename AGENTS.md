@@ -29,11 +29,15 @@ One module, four binaries: `go install ./cmd/...` installs them all.
 - `cmd/huff`: runs a model with tools, a turn at a time: on its own, a
   prompt and its answer; in a whiff job holding an agent's session
   (`WHIFF_SESSION`), a turn of that agent whose tools are its `:can`
-  functions. An `(agent ...)` whose `:model` names a provider
-  (`openrouter/...`, `openai/...`, `local/...`) runs its turns on it.
+  functions; with `-tools`, also file tools as `claude -p`'s. whiff's
+  agent harness: an `(agent ...)`, or a pipeline developer or reviewer,
+  whose model names a provider (`openrouter/...`, `openai/...`,
+  `local/...`) runs on it instead of the Claude CLI.
 - `internal/huff`: huff's turn loop, a provider-neutral transcript (puff
-  data) and a `net/http` client for OpenAI's Chat Completions format, which
-  OpenRouter, OpenAI and local servers share. It knows nothing about whiff.
+  data), file tools confined to a directory (Read, Write, Edit, Glob, Grep,
+  and Bash for allowed commands, without a shell) and a `net/http` client
+  for OpenAI's Chat Completions format, which OpenRouter, OpenAI and local
+  servers share. It knows nothing about whiff.
 - `internal/tools`: whiff functions described as tools for a model, and
   reading a call's arguments and answer: shared by `whiff mcp` and huff.
 - `internal/rpc`: JSON lines over the per-user unix socket
