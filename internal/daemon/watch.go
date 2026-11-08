@@ -151,7 +151,7 @@ func step(line string) []puff.Value {
 		}
 		var how []string
 		if l.Cost != nil {
-			how = append(how, fmt.Sprintf("$%.2f", *l.Cost))
+			how = append(how, usd(*l.Cost))
 		}
 		switch {
 		case l.Turns == 1:

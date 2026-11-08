@@ -147,3 +147,13 @@ func TestAgentWaits(t *testing.T) {
 		}
 	}
 }
+
+// Dollars show to the cent, and a spend that rounds to nothing, as a
+// cheap model's turn, as under a cent rather than $0.00.
+func TestUSD(t *testing.T) {
+	for x, want := range map[float64]string{0: "$0.00", 0.003: "under $0.01", 0.005: "$0.01", 1.2: "$1.20"} {
+		if got := usd(x); got != want {
+			t.Errorf("usd(%v) = %q, want %q", x, got, want)
+		}
+	}
+}

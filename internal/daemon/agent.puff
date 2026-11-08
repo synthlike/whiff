@@ -105,11 +105,14 @@
        [[(none) (ok js)] (vector/any? js (fn ({:id i}) (= (int/to-string i) last)))]
        [_ #f])]))
 
-; dollars is usd for people, in cents: $0.42, $5.00.
+; dollars is usd for people, in cents: $0.42, $5.00; "under $0.01" for a
+; spend that rounds to nothing, as a cheap model's turn does.
 (def (dollars usd)
   (let [cents (unwrap (int/from-float (float/round (* usd 100.0))))
         c (int/rem cents 100)]
-    (str "$" (int/to-string (int/div cents 100)) "." (if (< c 10) "0" "") (int/to-string c))))
+    (if (and (> usd 0.0) (= cents 0))
+      "under $0.01"
+      (str "$" (int/to-string (int/div cents 100)) "." (if (< c 10) "0" "") (int/to-string c)))))
 
 ; spending are [time usd task project] for the last 24 hours: each
 ; turn's, task "", and each task's its result said it cost, task its id;

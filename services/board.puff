@@ -265,14 +265,17 @@
         (match (set-roles team-defaults {:models "haiku"}) [(err {:kind k}) k])]
       [(ok (map/merge team-defaults {:dev "haiku" :most 3 :day 5.0 :check ["make"]})) (ok team-defaults) :bad-team :bad-team :bad-team]))
 
-  ; usd is dollars, x, as "$1.20".
+  ; usd is dollars, x, as "$1.20"; "under $0.01" for a spend that rounds
+  ; to nothing, as a cheap model's turn does.
   (def (usd x)
     (let [c (or-else (int/from-float (float/round (* x 100.0))) 0)
           cents (int/rem c 100)]
-      (str "$" (int/div c 100) "." (if (< cents 10) "0" "") cents)))
+      (if (and (> x 0.0) (= c 0))
+        "under $0.01"
+        (str "$" (int/div c 100) "." (if (< cents 10) "0" "") cents))))
 
-  (test "dollars to the cent"
-    (= [(usd 1.2) (usd 5.0) (usd 0.054)] ["$1.20" "$5.00" "$0.05"]))
+  (test "dollars to the cent, and under a cent"
+    (= [(usd 1.2) (usd 5.0) (usd 0.054) (usd 0.003) (usd 0.0)] ["$1.20" "$5.00" "$0.05" "under $0.01" "$0.00"]))
 
   ; team-item is project's team, as the board's Team column shows it, with
   ; n runs going and cost spent today; asking its lead from there starts

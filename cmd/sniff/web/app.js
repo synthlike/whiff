@@ -311,14 +311,14 @@ function resultText(r) {
   const st = field(v, "status");
   if (st?.t === "kw") {
     const cost = parseFloat(field(v, "cost")?.v);
-    return [st.v, field(v, "branch")?.v].filter(Boolean).join(" ") + (cost > 0 ? " · $" + cost.toFixed(2) : "");
+    return [st.v, field(v, "branch")?.v].filter(Boolean).join(" ") + (cost > 0 ? " · " + usd(cost) : "");
   }
   if (kindOf(r) !== "ok") return errText(r);
   // A job's: how it exited, or what a claude's turn cost.
   const exit = field(v, "exit");
   const out = v?.t === "str" ? v.v : field(v, "stdout")?.v || "";
-  const usd = /"total_cost_usd":\s*([0-9.]+)/.exec(out)?.[1];
-  if (usd) return "turn ended · $" + parseFloat(usd).toFixed(2);
+  const cost = /"total_cost_usd":\s*([0-9.]+)/.exec(out)?.[1];
+  if (cost) return "turn ended · " + usd(cost);
   if (exit) return exit.v === "0" ? "exit 0" : "exit " + exit.v;
   if (v?.t === "str") return v.v.split("\n")[0];
   return r ? print(r) : "";
@@ -391,7 +391,7 @@ function cardEl(c) {
   const line = el("span", "outcome-line");
   line.append(el("span", "outcome", c.label));
   const meta = [c.run !== null && "run " + c.run, c.state === "running" && c.job, c.rounds && plural(c.rounds, "review round"),
-    c.cost > 0 && "$" + c.cost.toFixed(2), !c.run && !c.rounds && c.is.length > 1 && plural(c.is.length, "message")].filter(Boolean);
+    c.cost > 0 && usd(c.cost), !c.run && !c.rounds && c.is.length > 1 && plural(c.is.length, "message")].filter(Boolean);
   if (meta.length) line.append(el("span", "meta", meta.join(" · ")));
   head.append(line);
   head.title = fullTime(r.at) + "  " + c.label;
@@ -854,8 +854,12 @@ function teamOf(b) {
   return teams.get(b);
 }
 
-// usd is dollars to the cent, as "$0.40".
-const usd = (x) => "$" + x.toFixed(2);
+// usd is dollars to the cent, as "$0.40"; "under $0.01" for a spend that
+// rounds to nothing, as a cheap model's turn does.
+function usd(x) {
+  x = Number(x) || 0;
+  return x > 0 && x < 0.005 ? "under $0.01" : "$" + x.toFixed(2);
+}
 
 // teamSpend is what team t spent today, of its day if it has one.
 function teamSpend(t) {
@@ -894,7 +898,7 @@ function bandEl(b, x, y, w, h, info, n) {
   const name = svgEl("text", { x: x + 30, y: y + 22, class: "band-name link" }, b);
   name.dataset.project = b;
   name.append(svgEl("title", {}, `show only ${b}'s requests`));
-  const sub = [info && plural(info.requests, "request"), plural(n, "address", "addresses"), info?.cost > 0 && "$" + info.cost.toFixed(2), teamLine(b)].filter(Boolean).join(" · ");
+  const sub = [info && plural(info.requests, "request"), plural(n, "address", "addresses"), info?.cost > 0 && usd(info.cost), teamLine(b)].filter(Boolean).join(" · ");
   g.append(caret, name, svgEl("text", { x: x + 38 + b.length * 8.5, y: y + 22, class: "band-sub" }, sub));
   // Its lead is asked from its board, whose team says what it runs.
   if (services.has("board")) {
@@ -1520,7 +1524,6 @@ function serviceLines(st) {
   if (st.fault) add("faults", `${st.faults} today; the last ${ago(st.fault.at)}: ${st.fault.message}`);
   if (st.last) add("last", `${st.last.fn} ${ago(st.last.at)}`);
   if (st.turns !== undefined) {
-    const usd = (x) => "$" + parseFloat(x).toFixed(2);
     const tasks = parseFloat(st["tasks-spent"]) > 0 ? ` (${usd(st["tasks-spent"])} of it its tasks')` : "";
     add("turns", `${st.turns} in 24h, ${usd(st.spent)} of ${usd(st.day)} a day${tasks}` + (st["last-turn"] ? `; the last ${ago(st["last-turn"])}` : ""));
   }
@@ -1540,7 +1543,7 @@ function workText(w) {
   if (r && !r.ok) how = "failed: " + (v?.message ?? JSON.stringify(v));
   else if (v && typeof v === "object") {
     how = [v.status, v.branch].filter(Boolean).join(" ");
-    if (parseFloat(v.cost) > 0) how += ", $" + parseFloat(v.cost).toFixed(2);
+    if (parseFloat(v.cost) > 0) how += ", " + usd(v.cost);
   }
   return [`:${w.to}`, how];
 }
@@ -1632,7 +1635,7 @@ function stepList(steps) {
   for (const s of steps) {
     if (starts > 1 && key(s) === key(steps[0])) ol.append(el("li", "work-round hint", "round " + ++round));
     const li = el("li", s.kind === "running" ? "open" : s.kind === "ok" ? "ok" : "failed");
-    const how = (s.kind === "running" ? "running " : s.kind === "ok" ? "" : "failed, ") + roughly(s.ms) + (s.cost ? ", $" + parseFloat(s.cost).toFixed(2) : "");
+    const how = (s.kind === "running" ? "running " : s.kind === "ok" ? "" : "failed, ") + roughly(s.ms) + (s.cost ? ", " + usd(s.cost) : "");
     li.append(el("span", "work-to", ":" + s.from), el("span", "work-how", s.name), el("span", "hint", how));
     li.title = fullTime(s.at);
     ol.append(li);
@@ -2102,7 +2105,6 @@ async function loadSpend() {
   } catch {
     return;
   }
-  const usd = (x) => "$" + (Number.isInteger(x) ? x : x.toFixed(2));
   const sum = (k) => sts.reduce((n, st) => n + (parseFloat(st[k]) || 0), 0);
   box.textContent = `${usd(sum("spent"))} of ${usd(sum("day"))} today`;
   box.title = "what agents spent in the last 24 hours, of their budgets a day: " +

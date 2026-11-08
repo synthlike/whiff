@@ -142,9 +142,9 @@ func showService(dir, name string, stdout, stderr io.Writer) int {
 		line("last", fmt.Sprintf("%s %s", text(l, "fn"), ago(get(l, "at"))))
 	}
 	if turns, ok := get(m, "turns").(puff.Int); ok {
-		s := fmt.Sprintf("%d in 24h, $%.2f of $%.2f a day", turns, float64(get(m, "spent").(puff.Float)), float64(get(m, "day").(puff.Float)))
+		s := fmt.Sprintf("%d in 24h, %s of %s a day", turns, usd(float64(get(m, "spent").(puff.Float))), usd(float64(get(m, "day").(puff.Float))))
 		if tasks, ok := get(m, "tasks-spent").(puff.Float); ok && tasks > 0 {
-			s += fmt.Sprintf(" ($%.2f of it its tasks')", float64(tasks))
+			s += fmt.Sprintf(" (%s of it its tasks')", usd(float64(tasks)))
 		}
 		if t := ago(get(m, "last-turn")); t != "" {
 			s += "; the last " + t
@@ -258,7 +258,7 @@ func resultLine(r puff.Value) string {
 		line := strings.Join(parts, " ")
 		if c, ok := m.Get(puff.Keyword("cost")); ok {
 			if f, ok := c.(puff.Float); ok && f > 0 {
-				line += fmt.Sprintf(", $%.2f", float64(f))
+				line += ", " + usd(float64(f))
 			}
 		}
 		if line != "" {
@@ -270,4 +270,13 @@ func resultLine(r puff.Value) string {
 		}
 	}
 	return puff.Print(r)
+}
+
+// usd is dollars x to the cent, as $0.42; "under $0.01" for a spend that
+// rounds to nothing, as a cheap model's turn does.
+func usd(x float64) string {
+	if x > 0 && x < 0.005 {
+		return "under $0.01"
+	}
+	return fmt.Sprintf("$%.2f", x)
 }

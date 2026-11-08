@@ -197,7 +197,7 @@ func (st *state) statusOf(name string, now time.Time) status {
 	case recent > 0:
 		r.state, r.note = "faulting", fmt.Sprintf("restarted %s today", times(len(h.faults)))
 	case r.agent && s.dayUSD > 0 && agentSpent(name, now).usd >= s.dayUSD:
-		r.state, r.note = "over-budget", fmt.Sprintf("$%.2f of its $%.2f a day", agentSpent(name, now).usd, s.dayUSD)
+		r.state, r.note = "over-budget", fmt.Sprintf("%s of its %s a day", usd(agentSpent(name, now).usd), usd(s.dayUSD))
 	case r.agent && agentPaused(name):
 		r.state = "paused"
 		if q := len(st.inbox(name)); q > 0 {
@@ -438,4 +438,13 @@ func times(n int) string {
 		return "once"
 	}
 	return fmt.Sprintf("%d times", n)
+}
+
+// usd is dollars x to the cent, as $0.42; "under $0.01" for a spend that
+// rounds to nothing, as a cheap model's turn does.
+func usd(x float64) string {
+	if x > 0 && x < 0.005 {
+		return "under $0.01"
+	}
+	return fmt.Sprintf("$%.2f", x)
 }
