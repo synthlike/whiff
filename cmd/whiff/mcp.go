@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/synthlike/whiff/internal/puff"
 	"github.com/synthlike/whiff/internal/rpc"
+	"github.com/synthlike/whiff/internal/tools"
 )
 
 // mcpInstructions tells the agent what whiff is and how its tools behave.
@@ -88,48 +88,25 @@ type agent struct {
 	mode  string            // the session's mode as the tools describe it, printed
 }
 
-// sessionMode is the agent's mode, as (session/mode) gives it: what it lets
-// through without review.
-type sessionMode struct {
-	printed string
-	free    bool
-	trust   map[string]bool // trusted: the services whose messages go through
-	until   string          // when it runs out, or ""
-}
-
-func (m sessionMode) lets(addr string) bool { return m.free || m.trust[addr] }
-
 // sessionMode asks the daemon for the agent's mode.
-func (a *agent) sessionMode() (sessionMode, error) {
+func (a *agent) sessionMode() (tools.Mode, error) {
 	v, err := a.eval("(session/mode)")
 	if err != nil {
-		return sessionMode{}, err
+		return tools.Mode{}, err
 	}
-	v = puff.OkValue(v)
-	kind, _ := puff.Field(v, "mode").(puff.Keyword)
-	m := sessionMode{printed: puff.Print(v), free: kind == "free", trust: map[string]bool{}}
-	services, _ := puff.Field(v, "services").(puff.Vector)
-	for i := range services.Len() {
-		if k, ok := services.At(i).(puff.Keyword); ok {
-			m.trust[string(k)] = true
-		}
-	}
-	if t := puff.Field(v, "until"); t != nil {
-		m.until = puff.Print(t)
-	}
-	return m, nil
+	return tools.ModeOf(v), nil
 }
 
-// says is what m lets through, for the eval tool's description; "" if it
-// is gated.
-func (m sessionMode) says() string {
+// modeSays is what m lets through, for the eval tool's description; "" if
+// it is gated.
+func modeSays(m tools.Mode) string {
 	var s string
 	switch {
-	case m.free:
+	case m.Free:
 		s = "Your session is free: everything you send, publish and evaluate goes through without review"
-	case len(m.trust) > 0:
+	case len(m.Trust) > 0:
 		var names []string
-		for name := range m.trust {
+		for name := range m.Trust {
 			names = append(names, ":"+name)
 		}
 		slices.Sort(names)
@@ -137,8 +114,8 @@ func (m sessionMode) says() string {
 	default:
 		return ""
 	}
-	if m.until != "" {
-		s += ", until " + m.until
+	if m.Until != "" {
+		s += ", until " + m.Until
 	}
 	return s + "."
 }
@@ -219,17 +196,15 @@ func (a *agent) eval(src string) (puff.Value, error) {
 	return c.EvalValue(src, a.wd)
 }
 
-// fnTool is a service function as a tool.
+// fnTool is a service function as a tool, and its MCP tool.
 type fnTool struct {
-	tool   *mcp.Tool
-	target string // address/fn
-	params []string
-	waits  bool // a :write that waits for the user's review
+	tools.Fn
+	tool *mcp.Tool
 }
 
 // functions are every address's functions as tools, but the agent's own
 // and those only you may use, :yours, described as mode treats them.
-func (a *agent) functions(mode sessionMode) ([]fnTool, error) {
+func (a *agent) functions(mode tools.Mode) ([]fnTool, error) {
 	_, self, err := a.client()
 	if err != nil {
 		return nil, err
@@ -237,105 +212,16 @@ func (a *agent) functions(mode sessionMode) ([]fnTool, error) {
 	a.mu.Lock()
 	can := a.can
 	a.mu.Unlock()
-	var addrs puff.Vector
-	if can != nil {
-		// Only the addresses of its :can functions, which it may describe.
-		seen := map[string]bool{}
-		var vals []puff.Value
-		for _, fn := range slices.Sorted(maps.Keys(can)) {
-			addr := fn[:strings.LastIndex(fn, "/")]
-			if !seen[addr] {
-				seen[addr] = true
-				m, _ := puff.NewMap(puff.Key("address", puff.Keyword(addr)))
-				vals = append(vals, m)
-			}
-		}
-		addrs = puff.NewVector(vals...)
-	} else {
-		v, err := a.eval("(address/list)")
-		if err != nil {
-			return nil, err
-		}
-		addrs, _ = puff.OkValue(v).(puff.Vector)
+	fns, err := tools.Describe(a.eval, self, can, mode)
+	if err != nil {
+		return nil, err
 	}
-	var tools []fnTool
-	taken := map[string]bool{}
-	for i := range addrs.Len() {
-		addr, _ := puff.Field(addrs.At(i), "address").(puff.Keyword)
-		if addr == "" || string(addr) == self {
-			continue
-		}
-		v, err := a.eval("(address/describe " + puff.Print(addr) + ")")
-		if err != nil {
-			return nil, err
-		}
-		fns, _ := puff.OkValue(v).(puff.Vector)
-		for j := range fns.Len() {
-			f := fns.At(j)
-			if yours, _ := puff.Field(f, "yours").(puff.Bool); yours {
-				continue
-			}
-			fn, _ := puff.Field(f, "fn").(puff.Keyword)
-			doc, _ := puff.Field(f, "doc").(puff.String)
-			mark, _ := puff.Field(f, "mark").(puff.Keyword)
-			form, _ := puff.Field(f, "form").(puff.Keyword)
-			ps, _ := puff.Field(f, "params").(puff.Vector)
-			t := fnTool{target: string(addr) + "/" + string(fn)}
-			name := toolName(t.target)
-			if can != nil && !can[t.target] || taken[name] {
-				continue
-			}
-			taken[name] = true
-			props := map[string]any{}
-			for k := range ps.Len() {
-				p, _ := ps.At(k).(puff.Keyword)
-				t.params = append(t.params, string(p))
-				props[string(p)] = map[string]any{"type": "string", "description": "a puff value, or a JSON array or object; text that reads as neither is a string"}
-			}
-			how := "Answers at once."
-			switch {
-			case form == "ask":
-				how = "An ask: it waits for a person to answer, so you get a pending id; wait gives the answer."
-			case mark == "write" && mode.lets(string(addr)):
-				how = "Your session's mode lets it through without review: it runs at once."
-			case mark == "write":
-				how = "It waits for the user's review, so you get a pending id; wait gives the result."
-				t.waits = true
-			}
-			t.tool = &mcp.Tool{Name: name, Title: ":" + t.target,
-				Description: fmt.Sprintf("%s\n\n:%s, %s. %s", doc, t.target, puff.Print(mark), how),
-				InputSchema: map[string]any{"type": "object", "properties": props, "additionalProperties": false},
-				Annotations: &mcp.ToolAnnotations{ReadOnlyHint: mark == "read" && form != "ask"}}
-			tools = append(tools, t)
-		}
+	out := make([]fnTool, len(fns))
+	for i, f := range fns {
+		out[i] = fnTool{Fn: f, tool: &mcp.Tool{Name: f.Name, Title: f.Title, Description: f.Description, InputSchema: f.Schema,
+			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: f.ReadOnly}}}
 	}
-	return tools, nil
-}
-
-// toolArg is a tool's argument s as a puff value: as it reads, or, as
-// models write vectors and maps as JSON, ["go","test"], a JSON array or
-// object read as one; else s itself, a string.
-func toolArg(s string) puff.Value {
-	if v, err := puff.ReadValue(s); err == nil {
-		return v
-	}
-	if t := strings.TrimSpace(s); strings.HasPrefix(t, "[") || strings.HasPrefix(t, "{") {
-		if v, err := puff.ParseJSON(t); err == nil {
-			return v
-		}
-	}
-	return puff.String(s)
-}
-
-// toolName is address/fn as a tool's name: gh_prs, agent_2_tell; any
-// character a name can't have is _.
-func toolName(target string) string {
-	return strings.Map(func(r rune) rune {
-		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' {
-			return r
-		}
-		return '_'
-	}, target)
+	return out, nil
 }
 
 // refresh lists the functions as they are now, adding the tools that are
@@ -352,8 +238,8 @@ func (a *agent) refresh() error {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if mode.printed != a.mode {
-		a.mode = mode.printed
+	if mode.Printed != a.mode {
+		a.mode = mode.Printed
 		if a.token == "" {
 			a.addEval(mode)
 		}
@@ -362,7 +248,7 @@ func (a *agent) refresh() error {
 	a.fns = map[string]fnTool{}
 	for _, f := range fns {
 		now[f.tool.Name] = true
-		a.fns[f.target] = f
+		a.fns[f.Target] = f
 		js, _ := json.Marshal(f.tool)
 		if a.tools[f.tool.Name] == string(js) {
 			continue
@@ -383,29 +269,15 @@ func (a *agent) refresh() error {
 // the first left out.
 func (a *agent) callTool(f fnTool) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		var args map[string]json.RawMessage
-		if len(req.Params.Arguments) > 0 {
-			if err := json.Unmarshal(req.Params.Arguments, &args); err != nil {
-				return failed("want arguments as an object: %v", err), nil
-			}
-		}
-		var vals []puff.Value
-		for _, p := range f.params {
-			raw, ok := args[p]
-			if !ok {
-				break
-			}
-			var s string
-			if err := json.Unmarshal(raw, &s); err != nil {
-				return failed("%s: want a string holding a puff value, got %s", p, raw), nil
-			}
-			vals = append(vals, toolArg(s))
+		vals, err := tools.Args(f.Fn, req.Params.Arguments)
+		if err != nil {
+			return failed("%v", err), nil
 		}
 		c, _, err := a.client()
 		if err != nil {
 			return failed("%v", err), nil
 		}
-		resp, err := c.Message("call", f.target, puff.Print(puff.NewVector(vals...)), a.wd)
+		resp, err := c.Message("call", f.Target, puff.Print(vals), a.wd)
 		if err != nil {
 			return failed("%v", err), nil
 		}
@@ -422,7 +294,7 @@ func (a *agent) noticeMode() {
 		return
 	}
 	a.mu.Lock()
-	changed := mode.printed != a.mode
+	changed := mode.Printed != a.mode
 	a.mu.Unlock()
 	if changed {
 		a.refresh()
@@ -430,11 +302,11 @@ func (a *agent) noticeMode() {
 }
 
 // addEval adds eval, described for mode.
-func (a *agent) addEval(mode sessionMode) {
+func (a *agent) addEval(mode tools.Mode) {
 	how := "Code that reaches anything :write waits for the user's review as a whole: you get a pending id, and wait gives the result."
-	if s := mode.says(); s != "" {
+	if s := modeSays(mode); s != "" {
 		how = s + " Other code that reaches :write waits for the user's review as a whole: you get a pending id, and wait gives the result."
-		if mode.free {
+		if mode.Free {
 			how = s
 		}
 	}
@@ -564,110 +436,33 @@ func (a *agent) wait(ctx context.Context, id int64, d time.Duration) *mcp.CallTo
 	}
 }
 
-// resultOf is a printed Result as a tool's result: the value of (ok v), a
-// string as it is; a pending (err e) with how to wait for it; any other
-// (err e) as an error. A value that isn't a Result is printed as it is.
+// resultOf is a printed Result as a tool's result, as tools.Result
+// reads it.
 func resultOf(printed string) *mcp.CallToolResult {
-	v, err := puff.ReadValue(printed)
-	r, ok := v.(puff.Tag)
-	if err != nil || !ok || r.Len() != 1 || r.Name() != "ok" && r.Name() != "err" {
-		return toolText(printed)
-	}
-	if r.Name() == "ok" {
-		if s, ok := r.At(0).(puff.String); ok {
-			return toolText(string(s))
-		}
-		return toolText(puff.Print(r.At(0)))
-	}
-	if puff.Equal(puff.Field(r.At(0), "kind"), puff.Keyword("pending")) {
-		msg, _ := puff.Field(r.At(0), "message").(puff.String)
-		return toolText(fmt.Sprintf("pending %s: %s; call wait with this id for the result", puff.Print(puff.Field(r.At(0), "id")), msg))
-	}
-	res := toolText(puff.Print(r.At(0)))
-	res.IsError = true
-	return res
+	text, isErr := tools.Result(printed, "call wait with this id for the result")
+	r := toolText(text)
+	r.IsError = isErr
+	return r
 }
 
 // answer is resultOf(printed), and, if its value offers actions as a view's
 // items do, each as the tool call that sends it: what the agent can do from
-// here. An action is an offer, sent under the same rules as any call.
+// here.
 func (a *agent) answer(printed string) *mcp.CallToolResult {
 	r := resultOf(printed)
 	if r.IsError {
 		return r
 	}
-	v, _ := puff.ReadValue(printed)
-	var lines []string
 	a.mu.Lock()
-	for _, act := range actionsIn(puff.OkValue(v)) {
-		if line, ok := a.toolCall(act); ok {
-			lines = append(lines, line)
-		}
+	fns := map[string]tools.Fn{}
+	for k, f := range a.fns {
+		fns[k] = f.Fn
 	}
 	a.mu.Unlock()
-	if len(lines) > 0 {
+	if lines := tools.Offers(printed, fns); len(lines) > 0 {
 		r.Content = append(r.Content, &mcp.TextContent{Text: "What you can do from here, each as a tool call:\n" + strings.Join(lines, "\n")})
 	}
 	return r
-}
-
-// actionsIn is every action in v, a map with an :action message, in order.
-func actionsIn(v puff.Value) []puff.Map {
-	var acts []puff.Map
-	var walk func(puff.Value)
-	walk = func(v puff.Value) {
-		switch v := v.(type) {
-		case puff.Map:
-			if _, ok := puff.Field(v, "action").(puff.Vector); ok {
-				acts = append(acts, v)
-				return
-			}
-			for i := range v.Len() {
-				walk(v.Entry(i).Val)
-			}
-		case puff.Vector:
-			for i := range v.Len() {
-				walk(v.At(i))
-			}
-		case puff.Tag:
-			for i := range v.Len() {
-				walk(v.At(i))
-			}
-		}
-	}
-	walk(v)
-	return acts
-}
-
-// toolCall is action act as a line: its label, the tool that sends it and
-// the tool's arguments, with a placeholder for the answer an :ask action
-// wants; false if no tool sends it, as for a function only the user may
-// use.
-func (a *agent) toolCall(act puff.Map) (string, bool) {
-	label, _ := puff.Field(act, "label").(puff.String)
-	msg, _ := puff.Field(act, "action").(puff.Vector)
-	if msg.Len() == 0 {
-		return "", false
-	}
-	target, _ := msg.At(0).(puff.Keyword)
-	f, ok := a.fns[string(target)]
-	ask, asks := puff.Field(act, "ask").(puff.String)
-	n := msg.Len() - 1
-	if !ok || asks && n >= len(f.params) || n > len(f.params) {
-		return "", false
-	}
-	var args []string
-	for i := range n {
-		args = append(args, fmt.Sprintf("%q: %q", f.params[i], puff.Print(msg.At(i+1))))
-	}
-	if asks {
-		args = append(args, fmt.Sprintf("%q: <your answer to %s>", f.params[n], puff.Print(ask)))
-	}
-	line := fmt.Sprintf("- %s: %s {%s}", label, f.tool.Name, strings.Join(args, ", "))
-	if f.waits {
-		line += ", which waits for the user's review"
-	}
-	return line, true
 }
 
 func toolText(s string) *mcp.CallToolResult {
