@@ -15,7 +15,7 @@ that builds and reviews code in git worktrees.
 
 ## Get started
 
-From a checkout, install all three binaries with Go:
+From a checkout, install all four binaries with Go:
 
 ```sh
 go install ./cmd/...
@@ -28,6 +28,7 @@ Make sure Go's bin directory is on your `PATH`. The binaries are:
 | `whiff` | The daemon and CLI: call services, read your inbox, review agents' writes |
 | `sniff` | The web UI: follow messages, inspect state, answer questions and review work |
 | `puff` | Run puff on its own: a file, `-e` an expression, or a REPL |
+| `huff` | Run a model through OpenRouter, OpenAI or a local server: on its own, or as an agent's turn whose tools are whiff functions |
 
 There's no config file. whiff starts on first use and loads the files in
 `~/.whiff/services/`. Create your first service:

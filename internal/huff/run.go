@@ -1,0 +1,111 @@
+package huff
+
+import (
+	"context"
+	"fmt"
+)
+
+// A Toolbox is what a run's model may call: whiff functions, through a
+// session, or a test's.
+type Toolbox interface {
+	Tools() []Tool
+	// Call runs c, answering its result as text for the model, and
+	// whether the call failed: a failed call answers the model, it doesn't
+	// end the run.
+	Call(ctx context.Context, c Call) (text string, isError bool)
+}
+
+// Limits bound a run: how many model calls it makes (20 if 0), and, if
+// not 0, the dollars it may spend, as the provider reports cost, and the
+// tokens, in and out.
+type Limits struct {
+	Calls  int
+	USD    float64
+	Tokens int
+}
+
+// A Turn is one run: a model on a provider, a system prompt, the
+// transcript so far, the user's new input, the tools, nil for none, and
+// its limits. Step, if not nil, hears each message as the run adds it,
+// with what the model call that wrote it took.
+type Turn struct {
+	Provider Provider
+	Model    string
+	System   string
+	History  []Message
+	Input    string
+	Tools    Toolbox
+	Limits   Limits
+	Step     func(m Message, u Usage)
+}
+
+// A Result is how a run ended: the model's last text, the transcript with
+// the run's messages, what it took, how many model calls it made, and why
+// it stopped: "end", "length" or "filter" as the model's last reply said,
+// or "calls", "usd" or "tokens" for the limit it reached.
+type Result struct {
+	Text    string
+	History []Message
+	Usage   Usage
+	Calls   int
+	Stop    string
+}
+
+// Run runs t: it calls the model, runs the tools it asks for, gives it
+// their answers, and goes on until it answers without calling any, or
+// reaches a limit. An error from the provider ends it, with the result so
+// far, the transcript as far as it got.
+func Run(ctx context.Context, t Turn) (Result, error) {
+	maxCalls := t.Limits.Calls
+	if maxCalls <= 0 {
+		maxCalls = 20
+	}
+	step := t.Step
+	if step == nil {
+		step = func(Message, Usage) {}
+	}
+	r := Result{History: append(append([]Message(nil), t.History...), Message{Role: "user", Text: t.Input})}
+	var tools []Tool
+	if t.Tools != nil {
+		tools = t.Tools.Tools()
+	}
+	for {
+		if r.Calls >= maxCalls {
+			r.Stop = "calls"
+			return r, nil
+		}
+		reply, err := t.Provider.Complete(ctx, Request{Model: t.Model, System: t.System, Messages: r.History, Tools: tools})
+		if err != nil {
+			return r, err
+		}
+		r.Calls++
+		r.Usage = r.Usage.Add(reply.Usage)
+		r.History = append(r.History, reply.Message)
+		if reply.Message.Text != "" {
+			r.Text = reply.Message.Text
+		}
+		step(reply.Message, reply.Usage)
+		if reply.Stop != "tools" || len(reply.Message.Calls) == 0 {
+			r.Stop = reply.Stop
+			return r, nil
+		}
+		for _, c := range reply.Message.Calls {
+			m := Message{Role: "tool", ID: c.ID}
+			if t.Tools == nil {
+				m.Result, m.IsError = fmt.Sprintf("there are no tools: %s isn't one", c.Fn), true
+			} else {
+				m.Result, m.IsError = t.Tools.Call(ctx, c)
+			}
+			r.History = append(r.History, m)
+			step(m, Usage{})
+		}
+		switch {
+		case t.Limits.USD > 0 && r.Usage.Cost >= t.Limits.USD:
+			r.Stop = "usd"
+			return r, nil
+		case t.Limits.Tokens > 0 && r.Usage.Input+r.Usage.Output >= t.Limits.Tokens:
+			r.Stop = "tokens"
+			return r, nil
+		}
+	}
+}

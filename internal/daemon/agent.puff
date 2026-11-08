@@ -3,7 +3,9 @@
 ; "", an absolute path), limits ({:turn usd :day usd :time d :tasks n}) and every
 ; (or 0s) as defs before these forms, and leaves out wake when there's no
 ; :every. A turn's tools are the :can whiff functions and the agent's own
-; later, through whiff mcp acting as the agent's session, :agent/<name>.
+; later, through whiff mcp acting as the agent's session, :agent/<name>;
+; or, for a :model that names its provider, through huff, which runs the
+; turn itself and keeps the conversation in a transcript in its home.
 ;
 ; Each message wakes Claude for one turn of the same session, so the agent
 ; remembers the whole conversation, days apart. A tell's answer lands in
@@ -68,7 +70,21 @@
 ; tools are what a turn may call: :can, and the agent's own later.
 (def tools (vector/append can (unwrap (keyword/from-string (str name "/later")))))
 
+; huff? is whether the agent runs on huff: a :model that names its
+; provider, as openrouter/moonshotai/kimi-k2, rather than Claude's.
+(def huff? (string/contains? model "/"))
+
+; claude is a turn's command in session id: claude -p, whose tools are
+; whiff mcp's; or, on huff, huff, whose tools are the session's own, with
+; the conversation in a transcript file in its home.
 (def (claude id)
+  (if huff?
+    (vector/concat ["huff" "-json" "-m" model "-s" system "-t" (path/join home (str "huff-" id ".puff"))
+                    "-usd" (float/to-string turn-usd)]
+      (if (= dir "") [] ["-dir" dir]))
+    (claude-p id)))
+
+(def (claude-p id)
   (vector/concat ["claude" "-p" "--tools" "" "--append-system-prompt" system
                   "--verbose" "--output-format" "stream-json" "--max-budget-usd" (float/to-string turn-usd)]
     (if (= model "") [] ["--model" model])

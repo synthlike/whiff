@@ -8,7 +8,7 @@ MCP, or give an agent a home and mailbox in whiff.
 
 | | MCP client | Resident agent |
 | --- | --- | --- |
-| Starts the model | Your MCP client | whiff, through the Claude CLI |
+| Starts the model | Your MCP client | whiff, through the Claude CLI, or huff for other providers' models |
 | Session address | `:agent/<n>` | `:agent/<name>` for its tools; `:<name>` for its mailbox |
 | Tools | Exposed address functions, except those reserved for you; eval, wait, cancel and inbox | Functions in `:can`, plus its own `later` |
 | Conversation | Managed by your client | Kept in the agent's home across turns |
@@ -76,6 +76,33 @@ wait in its inbox. A turn runs as a job, with the same Claude conversation
 resumed for later turns. Conversation and accounting files live in
 `~/.whiff/agents/helper/`; durable messages and task results live in
 `~/.whiff/whiff.db`.
+
+### On other models, with huff
+
+An agent whose `:model` names its provider runs its turns on `huff`,
+whiff's own harness, instead of the Claude CLI:
+
+```lisp
+(agent helper
+  :prompt "Help the user track work."
+  :model "openrouter/moonshotai/kimi-k2"
+  :can [:todo/open :todo/add])
+```
+
+| `:model` | Provider | Key, in the daemon's environment |
+| --- | --- | --- |
+| `openrouter/<model>` | OpenRouter (Kimi, GLM, DeepSeek, ...) | `OPENROUTER_API_KEY` |
+| `openai/<model>` | OpenAI | `OPENAI_API_KEY` |
+| `local/<model>` | A server that speaks Chat Completions, at `WHIFF_LOCAL_URL` | none; Ollama's `http://localhost:11434/v1` if unset |
+
+It bills per token to those keys, not to a Claude subscription. Its tools
+are the same `:can` functions, called as the agent's session, so writes
+meet the review gate and history has each call. The conversation is kept
+in `~/.whiff/agents/<name>/huff-<session>.puff`, puff data you can read.
+A turn stops at 20 model calls, or at `:turn` dollars where the provider
+reports cost, as OpenRouter does. `huff` needs to be on the daemon's
+`PATH`, as `go install ./cmd/...` puts it. It also runs on its own:
+`huff -m openrouter/moonshotai/kimi-k2 "a question"`.
 
 ## Review writes or grant trust
 

@@ -325,8 +325,10 @@ func (d *daemon) spawn(j *job) (*proc, error) {
 	if j.opts.stdin != nil {
 		cmd.Stdin = strings.NewReader(*j.opts.stdin)
 	}
+	// A session job's client, whiff mcp or huff, claims its session with
+	// the token, from the daemon in WHIFF_DIR.
 	if j.opts.token != "" {
-		cmd.Env = append(os.Environ(), "WHIFF_SESSION="+j.opts.token)
+		cmd.Env = append(os.Environ(), "WHIFF_SESSION="+j.opts.token, "WHIFF_DIR="+d.dir)
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {

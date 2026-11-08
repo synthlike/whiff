@@ -28,7 +28,7 @@ func agentService(f *puff.Form, file string) (*puff.Form, error) {
 	opts := map[puff.Keyword]*puff.Form{}
 	wants := map[puff.Keyword]string{
 		"prompt": ":prompt wants a string, what the agent is for",
-		"model":  ":model wants a string, Claude's model name",
+		"model":  ":model wants a string, Claude's model name, or a provider's model for huff, as openrouter/moonshotai/kimi-k2",
 		"every":  ":every wants a duration, as 1d",
 		"can":    ":can wants the functions the agent may use, as [:gh/prs :todo/add]",
 		"dir":    ":dir wants a string, the directory its tools act in",

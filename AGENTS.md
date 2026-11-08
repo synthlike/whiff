@@ -7,7 +7,7 @@ complete.
 
 ## Layout
 
-One module, three binaries: `go install ./cmd/...` installs them all.
+One module, four binaries: `go install ./cmd/...` installs them all.
 
 - `cmd/puff`: runs puff without a daemon (`puff file.puff args...`, `puff -e`,
   `puff` for a REPL), with the base stdlib only.
@@ -26,11 +26,16 @@ One module, three binaries: `go install ./cmd/...` installs them all.
   One goroutine owns the routing state; each service runs on its own goroutine and
   holds its own state. Others talk to them over channels and never touch state
   directly.
-- `internal/huff`: whiff's own agent harness: a provider-neutral transcript
-  (puff data) and a `net/http` client for OpenAI's Chat Completions format,
-  which OpenRouter, OpenAI and local servers share. It knows nothing about
-  whiff; the turn loop that calls whiff functions belongs in
-  `internal/daemon`.
+- `cmd/huff`: runs a model with tools, a turn at a time: on its own, a
+  prompt and its answer; in a whiff job holding an agent's session
+  (`WHIFF_SESSION`), a turn of that agent whose tools are its `:can`
+  functions. An `(agent ...)` whose `:model` names a provider
+  (`openrouter/...`, `openai/...`, `local/...`) runs its turns on it.
+- `internal/huff`: huff's turn loop, a provider-neutral transcript (puff
+  data) and a `net/http` client for OpenAI's Chat Completions format, which
+  OpenRouter, OpenAI and local servers share. It knows nothing about whiff.
+- `internal/tools`: whiff functions described as tools for a model, and
+  reading a call's arguments and answer: shared by `whiff mcp` and huff.
 - `internal/rpc`: JSON lines over the per-user unix socket
   (`/tmp/whiff-<uid>/whiff.sock`) between the daemon and its clients.
 
