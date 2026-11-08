@@ -487,6 +487,11 @@ func TestTimersSurviveRestart(t *testing.T) {
 		return n
 	}, "both")
 	historyHas(t, c, `notes/add "an agent's "`)
+	// The notes are written before the timers' messages are handled, as
+	// remind's ring waits on notes/add: stopping before then would give
+	// them again at start, as it should. History has each once handled.
+	historyHas(t, c, `-> :remind/ring "rung "`)
+	historyHas(t, c, `-> :notes/add "due "`)
 	if n := notes(); strings.Contains(n, "an agent's") {
 		t.Errorf("an agent's timer passed the review gate: %q", n)
 	}
