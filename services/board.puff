@@ -303,7 +303,7 @@
           project id id))))
 
   (on (plan state repo title task) :write :update
-    "Adds a ticket to the Todo column of the project of the repository at repo for a pipeline run of task, a developer's whole task, titled title, a line: (ok id). build starts its run, and from then on the ticket shows the run's step. How a lead puts its whole plan on the board before it builds it."
+    "Adds a ticket to the Todo column of the project of the repository at repo for a pipeline run of task, a developer's whole task, titled title, a line: (ok id). build starts its run, and from then on the ticket shows the run's step. How a lead puts a stage's runs on the board before it builds them."
     (let [id (map/get-or state :next 1)
           project (or-else (project/name repo) (path/base repo))]
       (if (or (= (string/trim title) "") (= (string/trim task) ""))

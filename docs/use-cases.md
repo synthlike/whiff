@@ -135,9 +135,11 @@ agent coordinates `board` tickets and `pipeline` runs, as below.
 ## A team of agents on a project
 
 `lead` is a resident agent that delegates code changes to pipeline runs.
-Its prompt tells it to put the whole plan on the board first: a scaffold,
-parts built in parallel from that scaffold's branch, then integration
-from the parts' branches merged. Each run has a developer, a check and a
+It plans and builds in stages: a scaffold, parts built in parallel from
+that scaffold's branch, then integration from the parts' branches merged.
+It puts each stage's runs on the board before starting them, and plans
+the next stage once that one is ready, so its tasks can name what the
+scaffold or the parts really built. Each run has a developer, a check and a
 reviewer. A developer can ask the lead questions while it works.
 
 From the whiff checkout, install the three services (requires the Claude
