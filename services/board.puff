@@ -210,15 +210,30 @@
                  [_ 0.0])]
       (+ (spent runs project now) lead)))
 
+  ; command is check as a command, a vector of strings: one written as a
+  ; line, as models do, "go test ./...", split into its words; "" for none.
+  ; Anything else stays as it is, for choose to refuse.
+  (def (command check)
+    (if (= (value/type check) :string)
+      (vector/filter (string/split check " ") (fn (w) (not (= w ""))))
+      check))
+
+  (test "a check written as a line is its words"
+    (= [(command "go test  ./...") (command "") (command ["make"]) (command 3)]
+      [["go" "test" "./..."] [] ["make"] 3]))
+
   ; choose is what a run of team's starts with, given the model and check
   ; the lead named, "" and [] for the team's: (ok {:dev :reviewer :check}),
   ; or why not, as a model the team doesn't allow.
   (def (choose team model check)
     (let [{:dev dev :reviewer reviewer :models allowed} team
           dev (if (= model "") dev model)
-          check (if (vector/empty? check) (map/get-or team :check []) check)
+          check (command check)
+          check (if (= check []) (map/get-or team :check []) check)
           off (vector/filter [dev reviewer] (fn (m) (and (not (= m "")) (not (vector/empty? allowed)) (not (vector/contains? allowed m)))))]
       (cond
+        [(not (= (value/type check) :vector))
+         (err {:kind :bad-check :message (str "check wants a command, a vector of strings as [\"go\" \"test\" \"./...\"], got " (value/to-string check))})]
         [(not (vector/empty? off))
          (err {:kind :not-allowed :message (str "this project's runs may use " (string/join allowed ", ") ", not " (string/join off ", "))})]
         [(vector/empty? check) (err {:kind :no-check :message "name a check, as [\"go\" \"test\" \"./...\"], or set the team's"})]
@@ -228,10 +243,14 @@
     (= [(choose (map/merge team-defaults {:dev "haiku" :reviewer "sonnet" :check ["make"]}) "" [])
         (choose (map/merge team-defaults {:dev "haiku" :check ["make"]}) "opus" ["go" "test"])
         (match (choose (map/merge team-defaults {:models ["haiku"] :reviewer "opus"}) "haiku" ["make"]) [(err {:kind k}) k])
-        (match (choose team-defaults "" []) [(err {:kind k}) k])]
+        (match (choose team-defaults "" []) [(err {:kind k}) k])
+        (choose (map/merge team-defaults {:check ["make"]}) "" "go test ./...")
+        (match (choose team-defaults "" 3) [(err {:kind k}) k])]
       [(ok {:dev "haiku" :reviewer "sonnet" :check ["make"]})
        (ok {:dev "opus" :reviewer "" :check ["go" "test"]})
-       :not-allowed :no-check]))
+       :not-allowed :no-check
+       (ok {:dev "" :reviewer "" :check ["go" "test" "./..."]})
+       :bad-check]))
 
   ; set-role is team with role k set to v, as set-team takes them, or
   ; why it can't be: :default for its default, a string for :lead, :dev,
@@ -320,7 +339,7 @@
           project id id))))
 
   (on (build state id base check model)
-    "Starts ticket id's run, as :pipeline/build does, from base, a branch or a vector of them merged, with check, a command, and the developer on model, \"\" and [] for the project's team's, its reviewer on the team's: pending at once, and the run's result once it ends, as :pipeline/build gives it. A project has at most its team's :most runs going at once, 4 unless set: (err {:kind :busy}) past that, so start it once one ends; (err {:kind :over-budget}) once its runs and its lead's turns for it cost the team's :day in the last 24 hours; (err {:kind :not-allowed}) for a model the team doesn't allow. (err {:kind :no-ticket}) for a ticket with no task, as one add made."
+    "Starts ticket id's run, as :pipeline/build does, from base, a branch or a vector of them merged, with check, a command, as [\"go\" \"test\" \"./...\"] or the line \"go test ./...\", and the developer on model, \"\" and [] for the project's team's, its reviewer on the team's: pending at once, and the run's result once it ends, as :pipeline/build gives it. A project has at most its team's :most runs going at once, 4 unless set: (err {:kind :busy}) past that, so start it once one ends; (err {:kind :over-budget}) once its runs and its lead's turns for it cost the team's :day in the last 24 hours; (err {:kind :not-allowed}) for a model the team doesn't allow. (err {:kind :no-ticket}) for a ticket with no task, as one add made."
     (let [t (try (ticket-of state id))
           {:project p} t
           team (team-of state p)]
