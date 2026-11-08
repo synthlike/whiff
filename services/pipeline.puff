@@ -399,11 +399,11 @@
   (test "a dev turn's cost, from its JSON"
     (= [(dev-cost "{\"total_cost_usd\":0.25}") (dev-cost "{\"total_cost_usd\":0}") (dev-cost "a summary")] [0.25 0.0 0.0]))
 
-  ; refused-text is what a run's note says of what Claude refused its dev:
+  ; refused-text is what a run's note says of what its permissions refused its dev:
   ; nothing if it refused nothing. whiff refused none of it.
   (def (refused-text calls)
     (if (vector/empty? calls) ""
-      (str "\n\nThe developer's Claude refused it these, by the permissions pipeline gives it (whiff's review wasn't asked): "
+      (str "\n\nThe developer's permissions refused it these, those pipeline gives it (whiff's review wasn't asked): "
         (string/join (vector/map calls (fn (c) (str "`" c "`"))) ", ") ".")))
 
   (test "a dev's refused calls, from its JSON, and what the note says of them"

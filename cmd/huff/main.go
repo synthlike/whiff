@@ -62,6 +62,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	calls := fs.Int("calls", 20, "the most model calls a turn makes")
 	usd := fs.Float64("usd", 0, "the most dollars a turn spends, as the provider reports cost; 0 for no limit")
 	tokens := fs.Int("tokens", 0, "the most tokens a turn uses, in and out; 0 for no limit")
+	maxTokens := fs.Int("max-tokens", 16384, "the most tokens a reply may have; 0 for the provider's default")
 	stream := fs.Bool("json", false, "print each step as a line of JSON, as claude -p --output-format stream-json does, the last saying how it ended")
 	dir := fs.String("dir", "", "where its tools act; the working directory by default")
 	toolNames := fs.String("tools", "", "the file tools it may use, of "+strings.Join(huff.LocalTools, ",")+", as claude -p's --tools")
@@ -101,7 +102,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 
 	t := huff.Turn{Provider: p, Model: name, System: *system, History: history, Input: input,
-		Limits: huff.Limits{Calls: *calls, USD: *usd, Tokens: *tokens}}
+		Limits: huff.Limits{Calls: *calls, USD: *usd, Tokens: *tokens}, MaxTokens: *maxTokens}
 	out := json.NewEncoder(stdout)
 	if *stream {
 		out.Encode(map[string]any{"type": "system", "subtype": "init", "model": *model})
@@ -189,9 +190,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		fmt.Fprintln(stdout, strings.TrimSpace(r.Text))
 	}
 	if why != "" {
-		if !*stream {
-			fmt.Fprintf(stderr, "huff: %s\n", why)
-		}
+		// On stderr with -json too: whiff says a failed job's stderr.
+		fmt.Fprintf(stderr, "huff: %s\n", why)
 		return 1
 	}
 	return 0

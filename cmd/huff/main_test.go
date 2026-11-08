@@ -10,6 +10,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/synthlike/whiff/internal/huff"
 )
 
 // model is a server that answers each request with how many messages it
@@ -83,6 +86,8 @@ func TestHuffJSON(t *testing.T) {
 
 // What's missing says so.
 func TestHuffErrors(t *testing.T) {
+	huff.Backoff = time.Millisecond
+	defer func() { huff.Backoff = time.Second }()
 	for _, tt := range []struct {
 		env  map[string]string
 		args []string
@@ -108,10 +113,13 @@ func TestHuffTools(t *testing.T) {
 	}
 	n := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req struct{ Tools []struct{ Function struct{ Name string } } }
+		var req struct {
+			Tools     []struct{ Function struct{ Name string } }
+			MaxTokens int `json:"max_tokens"`
+		}
 		json.NewDecoder(r.Body).Decode(&req)
-		if len(req.Tools) != 2 {
-			t.Errorf("tools offered: %+v", req.Tools)
+		if len(req.Tools) != 2 || req.MaxTokens != 16384 {
+			t.Errorf("tools offered: %+v, max_tokens %d", req.Tools, req.MaxTokens)
 		}
 		if n < len(calls) {
 			io.WriteString(w, `{"choices":[{"message":{"role":"assistant","tool_calls":[`+calls[n]+`]},"finish_reason":"tool_calls"}]}`)

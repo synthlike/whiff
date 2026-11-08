@@ -12,8 +12,9 @@ import (
 	"time"
 )
 
-// backoff is the first wait before trying a call again; a test's is shorter.
-var backoff = time.Second
+// Backoff is the first wait before trying a call again; a test's is
+// shorter.
+var Backoff = time.Second
 
 // Chat is a provider that speaks OpenAI's Chat Completions format,
 // POST {BaseURL}/chat/completions, as OpenRouter, OpenAI and local
@@ -22,9 +23,10 @@ type Chat struct {
 	BaseURL string
 	Key     string       // sent as a bearer token; "" for none, as a local server
 	HTTP    *http.Client // nil for one with a 10 minute timeout
-	// Retries is how many times a call is tried again after a 429, a 5xx
-	// or a failed connection, waiting as the server asks or 1s, 2s, ...;
-	// 0 for 2, -1 for none.
+	// Retries is how many times a call is tried again after a 429, a 402, a 5xx,
+	// a failed connection or a 200 that isn't a chat completion, waiting
+	// as the server asks or 1s, 2s, 4s, ...; 0 for 4, -1 for none. A turn
+	// that fails loses its work so far, so it tries hard.
 	Retries int
 }
 
@@ -85,7 +87,7 @@ func (c *Chat) Complete(ctx context.Context, r Request) (Reply, error) {
 	retries := c.Retries
 	switch {
 	case retries == 0:
-		retries = 2
+		retries = 4
 	case retries < 0:
 		retries = 0
 	}
@@ -95,7 +97,7 @@ func (c *Chat) Complete(ctx context.Context, r Request) (Reply, error) {
 			return reply, err
 		}
 		if wait == 0 {
-			wait = backoff << try
+			wait = Backoff << try
 		}
 		select {
 		case <-ctx.Done():
@@ -141,7 +143,9 @@ func (c *Chat) post(ctx context.Context, body []byte) (Reply, time.Duration, err
 			msg = cr.Error.Message
 		}
 		err := fmt.Errorf("%s: %d %s", c.BaseURL, resp.StatusCode, msg)
-		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+		// OpenRouter answers 402 when the requests in flight would spend
+		// more than the credits left, and says to try once they settle.
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusPaymentRequired || resp.StatusCode >= 500 {
 			wait := time.Duration(0)
 			if s, perr := strconv.Atoi(resp.Header.Get("Retry-After")); perr == nil && s > 0 {
 				wait = time.Duration(s) * time.Second
@@ -151,14 +155,14 @@ func (c *Chat) post(ctx context.Context, body []byte) (Reply, time.Duration, err
 		return Reply{}, -1, err
 	}
 	if jerr != nil {
-		return Reply{}, -1, fmt.Errorf("%s: want a chat completion, got %.200q: %v", c.BaseURL, data, jerr)
+		return Reply{}, 0, fmt.Errorf("%s: want a chat completion, got %.200q: %v", c.BaseURL, data, jerr)
 	}
 	// OpenRouter may answer 200 with an error from the model's provider.
 	if cr.Error != nil {
 		return Reply{}, 0, fmt.Errorf("%s: %s", c.BaseURL, cr.Error.Message)
 	}
 	if len(cr.Choices) == 0 {
-		return Reply{}, -1, errors.New(c.BaseURL + ": a chat completion with no choices")
+		return Reply{}, 0, errors.New(c.BaseURL + ": a chat completion with no choices")
 	}
 	ch := cr.Choices[0]
 	m := Message{Role: "assistant"}

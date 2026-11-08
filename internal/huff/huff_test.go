@@ -71,8 +71,8 @@ func TestChat(t *testing.T) {
 // message; an error in a 200, as OpenRouter's from a model's provider, is
 // tried again too.
 func TestChatErrors(t *testing.T) {
-	backoff = time.Millisecond
-	defer func() { backoff = time.Second }()
+	Backoff = time.Millisecond
+	defer func() { Backoff = time.Second }()
 	var n atomic.Int32
 	answers := []func(w http.ResponseWriter){}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -96,17 +96,27 @@ func TestChatErrors(t *testing.T) {
 		return c.Complete(context.Background(), Request{Model: "m", Messages: []Message{{Role: "user", Text: "hi"}}})
 	}
 
-	answers, n = []func(http.ResponseWriter){limited, upstream, ok}, atomic.Int32{}
-	if r, err := call(); err != nil || r.Message.Text != "hi" || r.Stop != "end" || n.Load() != 3 {
-		t.Errorf("after a 429 and an upstream error = %+v %v, %d tries", r, err, n.Load())
+	credits := func(w http.ResponseWriter) {
+		w.WriteHeader(http.StatusPaymentRequired)
+		io.WriteString(w, `{"error":{"message":"would exceed your available credits given your current in-flight requests","code":402}}`)
+	}
+	answers, n = []func(http.ResponseWriter){limited, upstream, credits, ok}, atomic.Int32{}
+	if r, err := call(); err != nil || r.Message.Text != "hi" || r.Stop != "end" || n.Load() != 4 {
+		t.Errorf("after a 429, an upstream error and a 402 = %+v %v, %d tries", r, err, n.Load())
 	}
 	answers, n = []func(http.ResponseWriter){bad, ok}, atomic.Int32{}
 	if _, err := call(); err == nil || !strings.Contains(err.Error(), "400 no such model") || n.Load() != 1 {
 		t.Errorf("a 400 = %v, %d tries", err, n.Load())
 	}
-	answers, n = []func(http.ResponseWriter){limited, limited, limited, ok}, atomic.Int32{}
-	if _, err := call(); err == nil || !strings.Contains(err.Error(), "429 slow down") || n.Load() != 3 {
+	answers, n = []func(http.ResponseWriter){limited, limited, limited, limited, limited, ok}, atomic.Int32{}
+	if _, err := call(); err == nil || !strings.Contains(err.Error(), "429 slow down") || n.Load() != 5 {
 		t.Errorf("past its retries = %v, %d tries", err, n.Load())
+	}
+	garbled := func(w http.ResponseWriter) { io.WriteString(w, `{"choices":[]}`) }
+	cut := func(w http.ResponseWriter) { io.WriteString(w, `{"choices":[{"mess`) }
+	answers, n = []func(http.ResponseWriter){garbled, cut, ok}, atomic.Int32{}
+	if r, err := call(); err != nil || r.Message.Text != "hi" || n.Load() != 3 {
+		t.Errorf("after no choices and a cut answer = %+v %v, %d tries", r, err, n.Load())
 	}
 }
 

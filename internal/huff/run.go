@@ -37,6 +37,10 @@ type Turn struct {
 	Tools    Toolbox
 	Limits   Limits
 	Step     func(m Message, u Usage)
+	// MaxTokens bounds each reply, 0 for the provider's default. OpenRouter
+	// holds back credit for each call in flight as if its reply were that
+	// long, so a model's whole limit can refuse calls the credit would pay.
+	MaxTokens int
 }
 
 // A Result is how a run ended: the model's last text, the transcript with
@@ -74,7 +78,7 @@ func Run(ctx context.Context, t Turn) (Result, error) {
 			r.Stop = "calls"
 			return r, nil
 		}
-		reply, err := t.Provider.Complete(ctx, Request{Model: t.Model, System: t.System, Messages: r.History, Tools: tools})
+		reply, err := t.Provider.Complete(ctx, Request{Model: t.Model, System: t.System, Messages: r.History, Tools: tools, MaxTokens: t.MaxTokens})
 		if err != nil {
 			return r, err
 		}
