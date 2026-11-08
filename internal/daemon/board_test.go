@@ -37,6 +37,11 @@ func TestBoardBuild(t *testing.T) {
                                                      :model model :cost 1.0 :started (some (time/now))}))))]
       [_ (ok state)]))
   (on (runs state) :read "Every run." (ok (map/get-or state :runs []))))`,
+		// The team's lead, as an agent's usage says what its turns spent on
+		// each project.
+		"lead": `(service lead
+  (on (usage) :read "What its turns spent." (ok {:spent 0.7 :turns 2 :day 10.0 :projects {"tally" 0.5 "shorty" 0.2}}))
+  (on (tell text) "Says the project its tell is in." (ok (project/name))))`,
 	})
 	start(t, dir)
 	you := dial(t, dir)
@@ -121,14 +126,19 @@ func TestBoardBuild(t *testing.T) {
 	if got := call("board/build", `[5 "b" ["true"] ""]`); !strings.Contains(got, ":kind :busy") || !strings.Contains(got, "tally has 4 runs going") {
 		t.Errorf("a 5th build = %s, want busy", got)
 	}
-	// More may go, but they cost $4 today, of $3 a day.
+	// More may go, but they and the lead's turns for tally cost $4.50
+	// today, of $3 a day.
 	// As sniff's Change sends it, printed.
 	team(`"{:most 10 :day 3}"`)
 	if got := call("board/build", `[5 "b" ["true"] ""]`); !strings.Contains(got, ":kind :over-budget") {
 		t.Errorf("a build over budget = %s", got)
 	}
-	if r, _ := you.Eval(`(call :board/team "tally")`, dir); !strings.Contains(r.Value, ":going 4") || !strings.Contains(r.Value, ":spent 4.0") || !strings.Contains(r.Value, ":most 10") {
+	if r, _ := you.Eval(`(call :board/team "tally")`, dir); !strings.Contains(r.Value, ":going 4") || !strings.Contains(r.Value, ":spent 4.5") || !strings.Contains(r.Value, ":most 10") {
 		t.Errorf("tally's team = %s", r.Value)
+	}
+	// Telling tally's lead puts its turns in tally.
+	if r, _ := you.Eval(`(call :board/tell "tally" "build it")`, dir); r.Value != `(ok (some "tally"))` {
+		t.Errorf("tell = %s %s", r.Value, r.Error)
 	}
 	// One add made has no task to build.
 	if got, _ := you.Eval(`[(call :board/add "tally" "by hand") (call :board/build 6 "b" ["true"] "")]`, dir); !strings.Contains(got.Value, ":kind :no-ticket") {

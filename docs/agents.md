@@ -147,8 +147,8 @@ Inspect schedules with `whiff call timers/view`.
 The day limit checks recorded spending before another turn; it doesn't
 reserve future costs for work already running. Delegated costs depend on
 what results report, such as a pipeline build's `:cost`. A board project's
-`:day` is a separate admission check over its pipeline runs, and doesn't
-include the lead's own turns. See the
+`:day` is a separate admission check over its pipeline runs and the
+lead's turns for that project; `usage` says the latter as `:projects`. See the
 [team example](use-cases.md#a-team-of-agents-on-a-project).
 
 ```sh

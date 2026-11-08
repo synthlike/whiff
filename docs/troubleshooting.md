@@ -87,7 +87,9 @@ submitting the same work again.
 For `:over-budget`, inspect spending and `:limits` in the agent file. The
 day is a rolling 24 hours, not a midnight reset. Wait for spending to age
 out, or deliberately raise the limit and save the file. Delegated task
-costs count too; `forget` doesn't clear them.
+costs count too; `forget` doesn't clear them. Spending is kept in
+`~/.whiff/agents/<name>/costs`, not whiff.db, so removing whiff.db
+doesn't clear it either.
 
 If the turn couldn't start, check that the Claude CLI is installed and
 authenticated and that the daemon can find `claude` and `whiff` on its

@@ -10,7 +10,7 @@
 ; merge, a run that failed twice, or a change from what you asked for.
 ; Its plan is on :board, a ticket a run, each following its run, in the
 ; project of the repository, whose team sets the runs' models, check,
-; how many go at once and what they may spend a day.
+; how many go at once and what they and the lead's turns may spend a day.
 ;   whiff trust agent/lead board pipeline   ; its plan and runs without your review
 ;   whiff call lead/tell "In ~/src/shorty, build a URL shortener ...; workers on haiku"
 ;   whiff call board/tell shorty "build a URL shortener ..."   ; as the team says
@@ -43,8 +43,8 @@
     The results of the runs you start in one turn come together, in one
     message, once all have ended. board_build answers busy once the
     project has as many runs going as its team allows, so start that one
-    once a run ends; over-budget once its runs spent the team's day, so
-    stop and tell the user; not-allowed for a model the team doesn't
+    once a run ends; over-budget once the project, its runs and your turns
+    for it, spent the team's day, so stop and tell the user; not-allowed for a model the team doesn't
     allow.
 
     Work in three steps. First one scaffold run from the repository's main

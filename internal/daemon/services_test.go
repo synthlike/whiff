@@ -668,7 +668,9 @@ echo "changed things"
 		t.Errorf("done = %s", got)
 	}
 	// runs, but when each started, which varies.
-	runs := func() string { return regexp.MustCompile(` :started \(some [^)]*\)`).ReplaceAllString(call("runs", "[]"), "") }
+	runs := func() string {
+		return regexp.MustCompile(` :started \(some [^)]*\)`).ReplaceAllString(call("runs", "[]"), "")
+	}
 	if got := runs(); !strings.Contains(got, `{:branch "whiff/1" :cost 0.0 :dir "`+wt+`" :from :review :round 2 :run 1 :step :ready :task "add a feature"}`) ||
 		!strings.Contains(got, ":round 3 :run 2 :step :gave-up") {
 		t.Errorf("runs = %s", got)
@@ -1403,7 +1405,7 @@ func TestAgentSession(t *testing.T) {
 func TestAgentLimits(t *testing.T) {
 	dir := tempDir(t)
 	fakeClaude(t, dir)
-	for name, cost := range map[string]string{"cheap": "0.6", "capped": "0.3"} {
+	for name, cost := range map[string]string{"cheap": "0.6", "capped": "0.3", "led": "0.25"} {
 		home := filepath.Join(dir, ".whiff", "agents", name)
 		os.MkdirAll(home, 0o700)
 		os.WriteFile(filepath.Join(home, "cost"), []byte(cost), 0o600)
@@ -1413,6 +1415,9 @@ func TestAgentLimits(t *testing.T) {
 		"capped": `(agent capped :prompt "p" :limits {:turn 0.5})`,
 		"quick":  `(agent quick :prompt "p" :limits {:time 1s})`,
 		"long":   `(agent long :prompt "p")`,
+		"led":    `(agent led :prompt "p")`,
+		// as board/tell does: the lead's turn for it is the project's.
+		"tells": `(service tells (on (ask q) "Asks led q in tally." (let [_ (project/enter "tally")] (hand-on (call :led/ask q)))))`,
 	})
 	start(t, dir)
 	c := dial(t, dir)
@@ -1442,8 +1447,16 @@ func TestAgentLimits(t *testing.T) {
 	if got := ask("cheap", "one"); got != `(ok "new in cheap: one")` {
 		t.Errorf("one = %s", got)
 	}
-	if got := eval(`(call :cheap/usage)`); got != "(ok {:day 1.0 :spent 0.6 :turns 1})" {
+	if got := eval(`(call :cheap/usage)`); got != "(ok {:day 1.0 :projects {} :spent 0.6 :turns 1})" {
 		t.Errorf("usage = %s", got)
+	}
+
+	// A turn in a project's chain is spent on that project; one outside
+	// any isn't, though both count against the agent's day.
+	ask("tells", "planned")
+	ask("led", "aside")
+	if got := eval(`(call :led/usage)`); got != `(ok {:day 5.0 :projects {"tally" 0.25} :spent 0.5 :turns 2})` {
+		t.Errorf("led's usage = %s", got)
 	}
 	ask("cheap", "two")
 	historyHas(t, c, `:cheap -> :me/tell "cheap has spent $1.20 in the last 24 hours, its $1.00 a day`)

@@ -295,7 +295,8 @@ func agentSpent(name string, now time.Time) spending {
 		return sp
 	}
 	b, _ := os.ReadFile(filepath.Join(home, ".whiff", "agents", name, "costs"))
-	// Each line is "time usd" for a turn, "time usd task" for a task.
+	// Each line is "time usd" for a turn, "time usd - project" for one in
+	// a project, "time usd task" for a task.
 	for _, line := range strings.Split(string(b), "\n") {
 		f := strings.Fields(line)
 		if len(f) < 2 {
@@ -307,7 +308,7 @@ func agentSpent(name string, now time.Time) spending {
 			continue
 		}
 		sp.usd += usd
-		if len(f) == 2 {
+		if len(f) == 2 || f[2] == "-" {
 			sp.turns, sp.last = sp.turns+1, t
 		} else {
 			sp.tasks += usd

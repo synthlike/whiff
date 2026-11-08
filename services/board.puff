@@ -200,6 +200,16 @@
            (+ sum (map/get-or r :cost 0.0))]
           [_ sum]))))
 
+  ; day-spent is what project spent in the 24 hours before now: its runs,
+  ; from runs, as :pipeline/runs gives them, and its team's lead's turns
+  ; for it, as the lead's usage says; none if the lead isn't there.
+  (def (day-spent team runs project now)
+    (let [usage (unwrap (keyword/from-string (str (map/get-or team :lead "lead") "/usage")))
+          lead (match (call usage)
+                 [(ok {:projects ps}) (map/get-or ps project 0.0)]
+                 [_ 0.0])]
+      (+ (spent runs project now) lead)))
+
   ; choose is what a run of team's starts with, given the model and check
   ; the lead named, "" and [] for the team's: (ok {:dev :reviewer :check}),
   ; or why not, as a model the team doesn't allow.
@@ -304,7 +314,7 @@
           project id id))))
 
   (on (build state id base check model)
-    "Starts ticket id's run, as :pipeline/build does, from base, a branch or a vector of them merged, with check, a command, and the developer on model, \"\" and [] for the project's team's, its reviewer on the team's: pending at once, and the run's result once it ends, as :pipeline/build gives it. A project has at most its team's :most runs going at once, 4 unless set: (err {:kind :busy}) past that, so start it once one ends; (err {:kind :over-budget}) once its runs cost the team's :day in the last 24 hours; (err {:kind :not-allowed}) for a model the team doesn't allow. (err {:kind :no-ticket}) for a ticket with no task, as one add made."
+    "Starts ticket id's run, as :pipeline/build does, from base, a branch or a vector of them merged, with check, a command, and the developer on model, \"\" and [] for the project's team's, its reviewer on the team's: pending at once, and the run's result once it ends, as :pipeline/build gives it. A project has at most its team's :most runs going at once, 4 unless set: (err {:kind :busy}) past that, so start it once one ends; (err {:kind :over-budget}) once its runs and its lead's turns for it cost the team's :day in the last 24 hours; (err {:kind :not-allowed}) for a model the team doesn't allow. (err {:kind :no-ticket}) for a ticket with no task, as one add made."
     (let [t (try (ticket-of state id))
           {:project p} t
           team (team-of state p)]
@@ -312,11 +322,11 @@
         [[(some task) (some repo)]
          (let [runs (try (call :pipeline/runs))
                n (going runs p)
-               cost (spent runs p (time/now))
+               cost (day-spent team runs p (time/now))
                {:most most :day day} team]
            (cond
              [(>= n most) (err {:kind :busy :message (str p " has " n " runs going, at most " most ": start this one once one ends")})]
-             [(and (> day 0.0) (>= cost day)) (err {:kind :over-budget :message (str p "'s runs cost " (usd cost) " in the last 24 hours, of " (usd day) " a day")})]
+             [(and (> day 0.0) (>= cost day)) (err {:kind :over-budget :message (str p "'s runs and its lead's turns cost " (usd cost) " in the last 24 hours, of " (usd day) " a day")})]
              [_ (let [{:dev dev :reviewer reviewer :check check} (try (choose team model check))
                       r (call :pipeline/build repo base task check (if (= reviewer "") dev {:dev dev :reviewer reviewer}))]
                   (do (send :board/assign id (if (= dev "") "dev" (str dev " dev")))
@@ -350,7 +360,8 @@
   ; runs and spent, from runs, as :pipeline/runs gives them.
   (def (teams state projects runs)
     (let [now (time/now)]
-      (vector/map projects (fn (p) (let [it (team-item p (team-of state p) (going runs p) (spent runs p now))]
+      (vector/map projects (fn (p) (let [team (team-of state p)
+                                         it (team-item p team (going runs p) (day-spent team runs p now))]
                                      (if (> (vector/length projects) 1) (map/set it :tag p) it))))))
 
   (on (show state) :read
@@ -362,12 +373,13 @@
     (ok (view (vector/filter (all state) (fn ({:project p}) (= p project))) #f (teams state [project] (or-else (call :pipeline/runs) [])))))
 
   (on (team state project) :read
-    "Project's team, {:lead :dev :reviewer :check :most :day :models :repo}, defaults for what isn't set, and :going, its runs going now, and :spent, what its runs cost in the last 24 hours, in dollars."
-    (let [runs (or-else (call :pipeline/runs) [])]
-      (ok (map/merge (team-of state project) {:going (going runs project) :spent (spent runs project (time/now))}))))
+    "Project's team, {:lead :dev :reviewer :check :most :day :models :repo}, defaults for what isn't set, and :going, its runs going now, and :spent, what its runs and its lead's turns for it cost in the last 24 hours, in dollars."
+    (let [runs (or-else (call :pipeline/runs) [])
+          team (team-of state project)]
+      (ok (map/merge team {:going (going runs project) :spent (day-spent team runs project (time/now))}))))
 
   (on (set-team state project changes) :write :update
-    "Sets the roles of project's team that changes, a map, names, keeping the rest: {:dev \"haiku\" :reviewer \"sonnet\"}, the developers' and reviewers' models; :models [\"haiku\" \"sonnet\"], those its runs may use, [] for any; :check [\"go\" \"test\" \"./...\"]; :most 3, runs going at once; :day 5.0, dollars a day for its runs, 0.0 for no limit; :lead \"lead\", the agent tell tells; :repo \"~/src/tally\", its repository. :default puts a role back to its default. changes may be that map printed, as sniff's Change sends it. (ok team)."
+    "Sets the roles of project's team that changes, a map, names, keeping the rest: {:dev \"haiku\" :reviewer \"sonnet\"}, the developers' and reviewers' models; :models [\"haiku\" \"sonnet\"], those its runs may use, [] for any; :check [\"go\" \"test\" \"./...\"]; :most 3, runs going at once; :day 5.0, dollars a day for its runs and its lead's turns for it, 0.0 for no limit; :lead \"lead\", the agent tell tells; :repo \"~/src/tally\", its repository. :default puts a role back to its default. changes may be that map printed, as sniff's Change sends it. (ok team)."
     (let [changes (if (= (value/type changes) :string) (try (value/from-string changes)) changes)]
       (if (not (= (value/type changes) :map))
         (err {:kind :bad-team :message (str "want the roles to set, as {:dev \"haiku\" :most 3}, got " (value/to-string changes))})
@@ -382,7 +394,8 @@
       (ok [team-defaults (map/update state :teams (fn (ts) (map/delete ts project)))])))
 
   (on (tell state project text)
-    "Tells project's lead, its team's :lead agent, text, a request, saying the project's repository if the team names one: pending at once, and the lead's answer once it has one, as its tell gives it."
+    "Tells project's lead, its team's :lead agent, text, a request, saying the project's repository if the team names one: pending at once, and the lead's answer once it has one, as its tell gives it. The lead's turns for it are the project's, in its team's :day."
     (let [{:lead lead :repo repo} (team-of state project)
-          to (unwrap (keyword/from-string (str lead "/tell")))]
+          to (unwrap (keyword/from-string (str lead "/tell")))
+          _ (project/enter project)]
       (hand-on (call to (str (if (= repo "") "" (str "In " repo " (project " project "): ")) text))))))

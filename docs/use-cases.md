@@ -162,10 +162,11 @@ sniff -open
 ```
 
 The board's `:most` limits concurrent runs; its `:day` checks what the
-project's runs cost, for runs started in the last 24 hours, before
-admitting another build.
-It does not reserve a budget for running work or include the lead's own
-turns. The lead has its own `:limits`, which count its turns and the costs
+project cost in the last 24 hours before admitting another build: its
+runs started in that time, and the lead's turns for the project, which
+`board/tell` puts in it.
+It does not reserve a budget for running work. The lead also has its own
+`:limits`, across every project, which count its turns and the costs
 reported by its delegated tasks. `board/set-team` also supports a
 `:models` allowlist, and `board/reset-team` restores defaults.
 

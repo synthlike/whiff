@@ -93,3 +93,28 @@ func TestProjectTag(t *testing.T) {
 		}
 	}
 }
+
+// A handler puts its chain in a project it names, as board/tell does for
+// the lead it tells: what it sends carries the tag, and a chain in one
+// already stays there.
+func TestProjectEnter(t *testing.T) {
+	dir := tempDir(t)
+	writeServices(t, dir, map[string]string{
+		"teller": `(service teller
+  (on (tell) "Puts its chain in tally, then shorty, and tells after." (let [a (project/enter "tally") b (project/enter "shorty")] (do (send :after/it 1) (ok [a b]))))
+  (on (bad) "Names no project." (project/enter "")))`,
+		"after": `(service after (on (it x) "Says its chain's project." (ok (project/name))))`,
+	})
+	start(t, dir)
+	c := dial(t, dir)
+	if resp, err := c.Eval(`(call :teller/tell)`, dir); err != nil || resp.Value != `(ok [(ok "tally") (ok "tally")])` {
+		t.Fatalf("tell = %s %s %v", resp.Value, resp.Error, err)
+	}
+	historyHas(t, c, `:teller -> :after/it 1  (ok (some "tally"))`)
+	if h, _ := historyOf(c); !strings.Contains(h, "#tally") {
+		t.Errorf("the send isn't tagged:\n%s", h)
+	}
+	if resp, err := c.Eval(`(call :teller/bad)`, dir); err != nil || !strings.Contains(resp.Value+resp.Error, "want a project's name") {
+		t.Errorf("bad = %s %s %v", resp.Value, resp.Error, err)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"maps"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/synthlike/whiff/internal/puff"
@@ -154,6 +155,20 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 					return puff.None(), nil
 				}
 				return puff.Some(puff.String(p)), nil
+			}},
+		// The tag says whose work a chain is, for history and budgets; it
+		// grants nothing, so naming one is :read.
+		{Name: "project/enter", Args: "name", Mark: puff.MarkRead,
+			Doc: "Puts the rest of this message's chain in project name, as a job run in its repository does, unless it is in one already: what the handler sends and calls from here on, and what comes of it, carry the tag. (ok project), the chain's project now.",
+			Fn: func(_ *puff.Call, args []puff.Value) (puff.Value, error) {
+				name, ok := args[0].(puff.String)
+				if !ok || strings.TrimSpace(string(name)) == "" {
+					return nil, fmt.Errorf("project/enter: want a project's name, got %s", puff.Print(args[0]))
+				}
+				if cur.project == "" {
+					cur.project = string(name)
+				}
+				return puff.Ok(puff.String(cur.project)), nil
 			}},
 		{Name: "session/tasks", Mark: puff.MarkRead,
 			Doc: "(ok ids): for an agent, the tasks its turns' session started that haven't ended, oldest first: its messages waiting in an inbox or for your review. (err {:kind :no-session}) for a service that isn't an agent.",
