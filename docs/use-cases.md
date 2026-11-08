@@ -163,6 +163,11 @@ whiff services lead
 sniff -open
 ```
 
+In sniff, the team's item on the project's board has "Ask todo's lead",
+which sends the same `board/tell`; a project's band on the Map links to
+that board, and the status strip shows a project with runs going, with
+what it spent of its day.
+
 The board's `:most` limits concurrent runs; its `:day` checks what the
 project cost in the last 24 hours before admitting another build: its
 runs started in that time, and the lead's turns for the project, which

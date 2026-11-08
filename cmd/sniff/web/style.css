@@ -256,6 +256,7 @@ h1 { font-size: 15px; margin: 0; letter-spacing: .02em; }
 .pill.running { color: var(--accent); background: color-mix(in srgb, var(--accent) 11%, var(--panel)); }
 .pill.review { color: var(--err); background: color-mix(in srgb, var(--err) 13%, var(--panel)); }
 .pill.inbox { color: var(--accent); background: color-mix(in srgb, var(--accent) 11%, var(--panel)); }
+.pill.project { color: hsl(var(--hue, 210) 60% var(--tag-fg)); background: color-mix(in srgb, hsl(var(--hue, 210) 60% var(--tag-fg)) 11%, var(--panel)); }
 .pill:hover { filter: brightness(.96); }
 .pill:focus-visible { outline: 2px solid currentColor; outline-offset: 1px; }
 .spend { color: var(--muted); font-size: 12.5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -506,6 +507,8 @@ svg.map { display: block; max-width: 100%; height: auto; font-family: var(--sans
 .map .band-name.link:hover { text-decoration: underline; }
 .map .band-caret { font-size: 11px; fill: var(--muted); }
 .map .band-sub { font-size: 11.5px; fill: var(--muted); }
+.map .band-ask { font-size: 11.5px; fill: hsl(var(--hue, 210) 60% var(--tag-fg)); cursor: pointer; }
+.map .band-ask:hover { text-decoration: underline; }
 .map .node.band-node rect { fill: color-mix(in srgb, var(--select) 60%, var(--panel)); stroke: var(--accent); stroke-dasharray: 5 3; }
 .map .node.band-node .node-name { fill: var(--accent); }
 .map .edge-label { font: 11px var(--mono); fill: var(--muted); paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round; }

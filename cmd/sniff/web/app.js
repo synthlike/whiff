@@ -832,27 +832,47 @@ function foldBand(b) {
   redraw();
 }
 
-// teams are each project's team, as :board/team gives it, a line to
-// show in its band's heading: fetched once a band shows, and again once
-// history says a team changed, a run was built or one moved on; not on
-// a read, as fetching a team is.
+// teams are each project's team, as :board/team gives it, for its
+// band's heading and the status strip: fetched once one shows, and again
+// once history says a team changed, a run was built or one moved on;
+// not on a read, as fetching a team is. null while it is fetched.
 const teams = new Map();
-function teamLine(b) {
-  if (!services.has("board")) return "";
+function teamOf(b) {
+  if (!services.has("board")) return null;
   if (!teams.has(b)) {
-    teams.set(b, "");
+    teams.set(b, null);
     getJSON("api/view?target=board/team&args=" + encodeURIComponent(`[${JSON.stringify(b)}]`)).then((r) => {
       const t = r.t === "tag" && r.n === "ok" ? r.v[0] : null;
       if (!t) return;
       const s = (k) => field(t, k)?.v ?? "";
       const n = (k) => Number(field(t, k)?.v ?? 0);
-      const usd = (x) => "$" + x.toFixed(2);
-      teams.set(b, ["lead :" + s("lead"), "dev " + (s("dev") || "default"), "review " + (s("reviewer") || "default"),
-        `${n("going")} of ${n("most")} running`, n("day") > 0 ? `${usd(n("spent"))} of ${usd(n("day"))} today` : ""].filter(Boolean).join(" · "));
+      teams.set(b, { lead: s("lead"), dev: s("dev"), reviewer: s("reviewer"), going: n("going"), most: n("most"), spent: n("spent"), day: n("day") });
       redrawSoon();
+      drawPills();
     }, () => {});
   }
   return teams.get(b);
+}
+
+// usd is dollars to the cent, as "$0.40".
+const usd = (x) => "$" + x.toFixed(2);
+
+// teamSpend is what team t spent today, of its day if it has one.
+function teamSpend(t) {
+  return t.day > 0 ? `${usd(t.spent)} of ${usd(t.day)} today` : `${usd(t.spent)} today`;
+}
+
+// teamLine is project b's team as a line, for its band's heading.
+function teamLine(b) {
+  const t = teamOf(b);
+  if (!t) return "";
+  return ["lead :" + t.lead, "dev " + (t.dev || "default"), "review " + (t.reviewer || "default"),
+    `${t.going} of ${t.most} running`, teamSpend(t)].join(" · ");
+}
+
+// boardOf is project b's board, as a tab's href.
+function boardOf(b) {
+  return "/view/board/for?args=" + encodeURIComponent(`[${JSON.stringify(b)}]`);
 }
 
 // bandEl draws a project's band behind its addresses, its heading saying
@@ -876,6 +896,13 @@ function bandEl(b, x, y, w, h, info, n) {
   name.append(svgEl("title", {}, `show only ${b}'s requests`));
   const sub = [info && plural(info.requests, "request"), plural(n, "address", "addresses"), info?.cost > 0 && "$" + info.cost.toFixed(2), teamLine(b)].filter(Boolean).join(" · ");
   g.append(caret, name, svgEl("text", { x: x + 38 + b.length * 8.5, y: y + 22, class: "band-sub" }, sub));
+  // Its lead is asked from its board, whose team says what it runs.
+  if (services.has("board")) {
+    const ask = svgEl("text", { x: x + w - 14, y: y + 22, class: "band-ask link", "text-anchor": "end" }, "Ask its lead…");
+    ask.dataset.board = boardOf(b);
+    ask.append(svgEl("title", {}, `open ${b}'s board, to ask its lead`));
+    g.append(ask);
+  }
   return g;
 }
 
@@ -996,7 +1023,7 @@ function drawProject() {
   $("project").hidden = !project;
   $("project").textContent = project + " ×";
   $("project").className = "chip project " + hueOf(project);
-  $("side-board").href = project ? "/view/board/for?args=" + encodeURIComponent(`[${JSON.stringify(project)}]`) : "/view/board/show";
+  $("side-board").href = project ? boardOf(project) : "/view/board/show";
 }
 $("project").onclick = () => showProject("");
 drawProject();
@@ -1020,7 +1047,10 @@ function append(e) {
   entries.splice(i, 0, e);
   noteFault(e);
   servicesSoon();
-  if (/^board\/(set-team|reset-team|build)$|:pipeline\/(step|done)$/.test(e.to || "")) teams.clear();
+  if (/^board\/(set-team|reset-team|build)$|:pipeline\/(step|done)$/.test(e.to || "")) {
+    teams.clear();
+    pillsSoon();
+  }
   if (selected !== null && selected >= i) selected++;
   if (e.kind !== "note") {
     for (const a of [from(e), to(e)]) {
@@ -1891,6 +1921,8 @@ function setStatus(s) {
 }
 
 $("rows").addEventListener("click", (ev) => {
+  const board = ev.target.closest(".map [data-board]");
+  if (board) return void openTab(board.dataset.board);
   const p = ev.target.closest("[data-project]");
   if (p) return showProject(p.dataset.project);
   const band = ev.target.closest(".map [data-band]");
@@ -2005,6 +2037,14 @@ document.addEventListener("keydown", (ev) => {
 $("query").value = query;
 follow();
 
+// pillsSoon draws the status strip again shortly, once a burst of
+// history that changes a team has passed.
+let pillsTimer = null;
+function pillsSoon() {
+  clearTimeout(pillsTimer);
+  pillsTimer = setTimeout(drawPills, 300);
+}
+
 // drawPills draws the status strip: only what isn't zero, each a way to
 // it. The browser tab's title counts what waits for you.
 function drawPills() {
@@ -2025,6 +2065,16 @@ function drawPills() {
   pill(counts.running, "running", "running", "requests still running: show the newest", null);
   pill(counts.review, "review", "to review", "agents' writes that wait for your review", "/view/review/pending");
   pill(counts.inbox, "inbox", "in your inbox", "questions and reports sent to you", "/view/me/inbox");
+  // A project with runs going, as its team says: how many, and what it
+  // spent of its day, its runs' and its lead's turns'.
+  for (const p of new Set(entries.map((e) => e.project).filter(Boolean))) {
+    const t = teamOf(p);
+    if (!t?.going) continue;
+    const a = el("a", "pill project " + hueOf(p), `${p}: ${t.going} running · ${teamSpend(t)}`);
+    a.href = boardOf(p);
+    a.title = `${p}'s board: ${t.going} of ${t.most} runs going, and what its runs and its lead's turns cost in the last 24 hours`;
+    box.append(a);
+  }
   const all = counts.review + counts.inbox;
   document.title = (all ? `(${all}) ` : "") + "sniff";
 }

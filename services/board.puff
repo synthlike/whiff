@@ -275,7 +275,8 @@
     (= [(usd 1.2) (usd 5.0) (usd 0.054)] ["$1.20" "$5.00" "$0.05"]))
 
   ; team-item is project's team, as the board's Team column shows it, with
-  ; n runs going and cost spent today.
+  ; n runs going and cost spent today; asking its lead from there starts
+  ; the project's work without the CLI.
   (def (team-item project team n cost)
     (let [{:lead lead :dev dev :reviewer reviewer :most most :day day :models models :check check} team
           name (fn (m) (if (= m "") "default" m))]
@@ -285,11 +286,13 @@
                                             (if (vector/empty? check) "" (string/join check " "))
                                             (if (vector/empty? models) "" (str "only " (string/join models ", ")))]
                               (fn (x) (not (= x "")))) " · ")
-       :actions [{:label "Change" :action [:board/set-team project] :ask "What to change, as {:dev \"haiku\" :reviewer \"sonnet\" :most 3 :day 5.0 :models [\"haiku\" \"sonnet\"] :check [\"go\" \"test\" \"./...\"]}; :default for a role's default"}]}))
+       :actions [{:label (str "Ask " project "'s lead") :action [:board/tell project] :ask (str "What should :" lead " build or change in " project "?")}
+                 {:label "Change" :action [:board/set-team project] :ask "What to change, as {:dev \"haiku\" :reviewer \"sonnet\" :most 3 :day 5.0 :models [\"haiku\" \"sonnet\"] :check [\"go\" \"test\" \"./...\"]}; :default for a role's default"}]}))
 
-  (test "a team as the board shows it"
-    (= (map/get (team-item "tally" (map/merge team-defaults {:dev "haiku" :day 5.0}) 2 1.2) :detail)
-      (some "2 of 4 running · $1.20 of $5.00 today")))
+  (test "a team as the board shows it, asking its lead first"
+    (let [it (team-item "tally" (map/merge team-defaults {:dev "haiku" :day 5.0}) 2 1.2)]
+      (= [(map/get it :detail) (map/get (unwrap (vector/first (map/get-or it :actions []))) :action)]
+        [(some "2 of 4 running · $1.20 of $5.00 today") (some [:board/tell "tally"])])))
 
   (on (add state project title) :write :update
     "Adds a ticket for title to project's Todo column, project the name of its repository, as (project/name) gives it: (ok id)."
