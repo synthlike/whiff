@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestMain runs whiff itself when the tests start it as the daemon, on the
@@ -195,5 +196,15 @@ func TestTerminal(t *testing.T) {
 	defer tty.Close()
 	if !terminal(tty) {
 		t.Error("terminal(/dev/tty) = false")
+	}
+}
+
+// Setting a mode says what it did.
+func TestModeLine(t *testing.T) {
+	if got := modeLine("agent/3", "trusted", []string{"gh", ":todo"}, 2*time.Hour); got != "agent/3 is trusted :gh :todo, for 2h0m0s" {
+		t.Errorf("trusted: %q", got)
+	}
+	if got := modeLine(":agent/lead", "gated", nil, 0); got != "agent/lead is gated" {
+		t.Errorf("gated: %q", got)
 	}
 }

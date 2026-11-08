@@ -381,7 +381,24 @@ func setMode(dir, op, agent string, args []string, stdout, stderr io.Writer) int
 		fmt.Fprintf(stderr, "whiff: %v\n", err)
 		return 1
 	}
-	return result(op, resp, stdout, stderr)
+	code := result(op, resp, stdout, stderr)
+	if code == 0 {
+		fmt.Fprintln(stdout, modeLine(agent, mode, services, d))
+	}
+	return code
+}
+
+// modeLine says what setting a mode did: agent/3 is trusted :gh :todo,
+// for 2h0m0s.
+func modeLine(agent, mode string, services []string, d time.Duration) string {
+	s := strings.TrimPrefix(agent, ":") + " is " + mode
+	for _, name := range services {
+		s += " :" + strings.TrimPrefix(name, ":")
+	}
+	if d > 0 {
+		s += fmt.Sprintf(", for %v", d)
+	}
+	return s
 }
 
 // serviceOp evaluates (op :service), reset or state: reset has the daemon
