@@ -188,6 +188,41 @@ whiff call lead/resume
 whiff call lead/cancel
 ```
 
+### The same team on other models
+
+Name a provider's model and the team runs on huff instead of Claude:
+the lead as an agent, the developers with huff's file tools in their
+worktrees, the reviewers without tools. Nothing else changes: the board,
+the check, the budgets and the review gate are the same. A lead is an
+agent file, so a lead on Kimi is a copy of `lead.puff` with its own
+name and `:model`:
+
+```lisp
+(agent klead
+  :model "openrouter/moonshotai/kimi-k2.6"
+  :prompt """..."""   ; lead.puff's
+  :can [:board/plan :board/build :board/for :board/team :pipeline/runs :pipeline/show]
+  :limits {:turn 0.5 :day 2.0 :time 10m})
+```
+
+```sh
+whiff trust agent/klead board pipeline
+whiff eval '(call :board/set-team "mdtoc" {:repo (os/cwd) :lead "klead"
+  :dev "openrouter/moonshotai/kimi-k2.7-code" :reviewer "openrouter/moonshotai/kimi-k2.6"
+  :check ["go" "test" "./..."] :most 3 :day 3.0})'
+whiff call board/tell mdtoc "Build mdtoc, which prints a Markdown file's table of contents ..."
+```
+
+The daemon needs `OPENROUTER_API_KEY` in its environment: start it from
+a shell that has it. A run on Kimi built mdtoc's scaffold for $0.05, and
+its reviewer sent the anchor part back once for a real bug in its tests,
+before approving it. Kimi's lead keeps less to the prompt's three stages
+than Claude's: it put the integration in the second stage, alongside the
+parts. OpenRouter holds back credit for each call in flight, so several
+runs at once need more credit than they spend; huff bounds each reply
+to 16384 tokens (`-max-tokens`) to keep that small, and tries a refused
+call again.
+
 ## Your TODO list from anywhere
 
 `todo` reads the checkbox items of `TODO.md` in the directory you call it
