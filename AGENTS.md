@@ -26,6 +26,11 @@ One module, three binaries: `go install ./cmd/...` installs them all.
   One goroutine owns the routing state; each service runs on its own goroutine and
   holds its own state. Others talk to them over channels and never touch state
   directly.
+- `internal/huff`: whiff's own agent harness: a provider-neutral transcript
+  (puff data) and a `net/http` client for OpenAI's Chat Completions format,
+  which OpenRouter, OpenAI and local servers share. It knows nothing about
+  whiff; the turn loop that calls whiff functions belongs in
+  `internal/daemon`.
 - `internal/rpc`: JSON lines over the per-user unix socket
   (`/tmp/whiff-<uid>/whiff.sock`) between the daemon and its clients.
 
