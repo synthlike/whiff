@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // TestHuffAgent runs an agent on huff, the real binary, built for the
@@ -23,14 +24,7 @@ import (
 // History has the calls as the agent's, and its home the transcript.
 func TestHuffAgent(t *testing.T) {
 	dir := tempDir(t)
-	bin := filepath.Join(dir, "bin")
-	os.Mkdir(bin, 0o700)
-	build := exec.Command("go", "build", "-o", filepath.Join(bin, "huff"), "github.com/synthlike/whiff/cmd/huff")
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("building huff: %v\n%s", err, out)
-	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("HOME", dir)
+	withHuff(t, dir)
 
 	// The model: asked by the user, it calls both tools; given their
 	// answers, it says them.
@@ -134,6 +128,93 @@ func TestHuffAgent(t *testing.T) {
 	// What its turn cost is the agent's, as a claude turn's is.
 	if got, _ := c.Eval(`(match (call :scout/usage) [(ok {:spent s :turns n}) [s n]] [e e])`, ""); got.Value != "[0.005 2]" {
 		t.Errorf("usage = %s %s", got.Value, got.Error)
+	}
+}
+
+// withHuff builds huff into dir/bin, puts it on PATH and makes dir HOME.
+func withHuff(t *testing.T, dir string) {
+	t.Helper()
+	bin := filepath.Join(dir, "bin")
+	os.Mkdir(bin, 0o700)
+	build := exec.Command("go", "build", "-o", filepath.Join(bin, "huff"), "github.com/synthlike/whiff/cmd/huff")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("building huff: %v\n%s", err, out)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("HOME", dir)
+}
+
+// TestHuffAgentStopped stops a huff turn while its model call is under
+// way: huff hears the job's SIGTERM, abandons the call and keeps the
+// transcript as far as it got, before the SIGKILL that would lose it, so
+// the next turn goes on from it, the stopped message and all.
+func TestHuffAgentStopped(t *testing.T) {
+	dir := tempDir(t)
+	withHuff(t, dir)
+	asked := make(chan struct{}, 1)
+	var mu sync.Mutex
+	var second string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		if !strings.Contains(string(b), "second") {
+			// The first turn's call hangs until huff gives it up.
+			asked <- struct{}{}
+			<-r.Context().Done()
+			return
+		}
+		mu.Lock()
+		second = string(b)
+		mu.Unlock()
+		io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"Here."},"finish_reason":"stop"}],"usage":{"prompt_tokens":9,"completion_tokens":1,"cost":0.001}}`)
+	}))
+	defer srv.Close()
+	t.Setenv("WHIFF_LOCAL_URL", srv.URL)
+	writeServices(t, dir, map[string]string{
+		"scout": `(agent scout :prompt "Greet people." :model "local/fake" :can [])`,
+	})
+	start(t, dir)
+	c := dial(t, dir)
+	if resp, err := c.Eval(`(call :scout/tell "first")`, ""); err != nil || !strings.HasPrefix(resp.Value, "(err {:id ") {
+		t.Fatalf("tell = %+v %v", resp, err)
+	}
+	select {
+	case <-asked:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the turn never called the model")
+	}
+	stopped := time.Now()
+	if r, err := c.Eval(`(call :scout/stop)`, ""); err != nil || !strings.HasPrefix(r.Value, "(ok") {
+		t.Fatalf("stop = %+v %v", r, err)
+	}
+	home := filepath.Join(dir, ".whiff", "agents", "scout")
+	eventually(t, "the stopped turn's transcript", func() string {
+		b, _ := os.ReadFile(filepath.Join(home, "huff-"+readTrim(t, filepath.Join(home, "session"))+".puff"))
+		if strings.Contains(string(b), `{:role :user :text "first"}`) {
+			return "kept"
+		}
+		return string(b)
+	}, "kept")
+	if took := time.Since(stopped); took > 3*time.Second {
+		t.Errorf("huff took %v to stop, past the SIGKILL", took)
+	}
+	eventually(t, "the agent idle", func() string {
+		r, _ := c.Eval(`(match (service/status :scout) [(ok {:status s}) s] [e e])`, "")
+		return r.Value
+	}, ":idle")
+	if resp, err := c.Eval(`(call :scout/tell "second")`, ""); err != nil || !strings.HasPrefix(resp.Value, "(err {:id ") {
+		t.Fatalf("tell = %+v %v", resp, err)
+	}
+	eventually(t, "the next turn's answer", func() string {
+		text, _ := c.Inbox("me")
+		if strings.Contains(text, "Here.") {
+			return "answered"
+		}
+		return text
+	}, "answered")
+	mu.Lock()
+	defer mu.Unlock()
+	if i, j := strings.Index(second, `"first"`), strings.Index(second, "second"); i < 0 || j < i {
+		t.Errorf("the next turn doesn't go on from the stopped one:\n%s", second)
 	}
 }
 
