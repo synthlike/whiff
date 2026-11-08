@@ -349,7 +349,7 @@ echo "reviewed:"; grep '^+[^+]'
 	}
 	try := func() string {
 		t.Helper()
-		resp, err := c.Try("reviewer.puff", string(src), "review", "[]", repo)
+		resp, err := c.Try("reviewer.puff", string(src), "review", `[""]`, repo)
 		if err != nil || resp.Error != "" {
 			t.Fatalf("try reviewer review: %v %s", err, resp.Error)
 		}
@@ -840,7 +840,7 @@ esac
 	if _, err := watch.Sub("plan/changed"); err != nil {
 		t.Fatal(err)
 	}
-	resp, err := c.Message("call", "plan/start", `["two files" ["true"]]`, repo)
+	resp, err := c.Message("call", "plan/start", `["two files" ["true"] ""]`, repo)
 	if err != nil || resp.Value != "(ok 1)" {
 		t.Fatalf("plan/start = %+v %v", resp, err)
 	}
@@ -911,7 +911,7 @@ esac
 		}, "there")
 	}
 	os.WriteFile(filepath.Join(dir, "picky"), nil, 0o600)
-	if got := call("start", `["more files" ["true"]]`); got != "(ok 2)" {
+	if got := call("start", `["more files" ["true"] ""]`); got != "(ok 2)" {
 		t.Fatalf("plan/start = %s", got)
 	}
 	retry := `{:action [:plan/retry 2] :ask "A note for the developer, if any" :label "Retry with a note"} {:action [:plan/discard 2] :label "Discard"}`
@@ -963,7 +963,7 @@ esac
 
 	// A draft waits with its tasks; edited and approved, it builds them.
 	// (main has plan 1's one.txt and two.txt by now: new tasks change it.)
-	if got := call("draft", `["drafted" ["true"]]`); got != "(ok 3)" {
+	if got := call("draft", `["drafted" ["true"] ""]`); got != "(ok 3)" {
 		t.Fatalf("plan/draft = %s", got)
 	}
 	inboxHas("the draft", `"plan 3, drafted: proposed. Its tasks, in repo, on main:\n\n1. one\n2. two" {:actions [{:action [:plan/approve 3] :label "Build it"} {:action [:plan/discard 3] :label "Discard"}]}`)
@@ -997,7 +997,7 @@ esac
 	// the reviewer runs again, and the plan goes on.
 	os.WriteFile(filepath.Join(dir, "tasks"), []byte(`["four"]`), 0o600)
 	os.WriteFile(filepath.Join(dir, "broken"), nil, 0o600)
-	if got := call("start", `["reviewed" ["true"]]`); got != "(ok 4)" {
+	if got := call("start", `["reviewed" ["true"] ""]`); got != "(ok 4)" {
 		t.Fatalf("plan/start = %s", got)
 	}
 	again := `{:action [:plan/review-again 4] :label "Review again"}`

@@ -548,9 +548,9 @@
     "Starts a run on task in the repository here: a dev Claude makes the change in a worktree of its own, check (a command, like [\"go\" \"test\" \"./...\"]) runs there, and a reviewer Claude reviews the diff, for up to 3 rounds; then it is committed on the run's branch and you hear how it went in your inbox. (ok n), the run's number."
     (begin state (string/trim (try (proc/output ["git" "rev-parse" "--show-toplevel"]))) "HEAD" task check #f {}))
 
-  (on (start-on state repo base task check) :write :update
-    "Starts a run as start does, in the repository at repo, from base, a commit or branch such as an earlier run's, without telling you how it ends (:pipeline/done still does): how a planner stacks runs. (ok n)."
-    (begin state repo base task check #t {}))
+  (on (start-on state repo base task check model) :write :update
+    "Starts a run as start does, in the repository at repo, from base, a commit or branch such as an earlier run's, with the dev on model (\"\" for the default) or {:dev :reviewer}, each's, as build takes them, without telling you how it ends (:pipeline/done still does): how a planner stacks runs. (ok n)."
+    (begin state repo base task check #t (models model)))
 
   (ask (build repo base task check model)
     "Runs task as start-on does, in the repository at repo, from base (a commit or branch, or a vector of them, merged), with the dev Claude on model (\"\" for the default), or with {:dev :reviewer}, each's model: pending at once, and once the run ends (ok {:run :status :branch :dir :note :cost :actions}), :status :ready, :gave-up or :failed, :cost what its dev and reviewer turns cost in dollars, :actions what you can do about it, as Merge or Retry. How an agent hands work to smaller ones and hears back.")

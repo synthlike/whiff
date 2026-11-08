@@ -26,8 +26,12 @@ Install the two services and start a plan in your repository:
 mkdir -p ~/.whiff/services
 ln -s "$PWD"/services/pipeline.puff "$PWD"/services/plan.puff ~/.whiff/services/
 cd ~/src/todo
-whiff call plan/start "A small todo CLI in Go ..." '["go" "test" "./..."]'
+whiff call plan/start "A small todo CLI in Go ..." '["go" "test" "./..."]' '""'
 ```
+
+The last argument is the model: `""` for Claude's default, a Claude model
+as `haiku`, a provider's as `openrouter/moonshotai/kimi-k2.6`, which
+huff runs, or `{:planner "opus" :dev "haiku" :reviewer "sonnet"}`.
 
 A real run, on an empty Go module, with the goal "A small todo CLI in Go,
 run as 'todo': 'todo add <text>' adds an item, 'todo list' lists them
@@ -95,7 +99,7 @@ What happens underneath, for one task:
 ```
 you ──call──> :plan/start ──job──> claude -p (planner: reads, can't edit)
                     │ whiff/done: ["task 1", "task 2", ...]
-                    └──call──> :pipeline/start-on repo base "task 1" check
+                    └──call──> :pipeline/start-on repo base "task 1" check model
                                     │ git worktree add -b whiff/1
                                     ├──job──> claude -p (dev: edits, runs the check)
                                     ├──job──> go test ./...         (whiff runs it)
@@ -301,11 +305,12 @@ process goes, crashes and strays, and that example's real run.
 ## Work that answers later
 
 ```sh
-whiff call reviewer/review     # pending 12 (whiff wait 12)
+whiff call reviewer/review '""'   # pending 12 (whiff wait 12)
 whiff wait 12
 ```
 
-`reviewer` runs `claude -p` as a job, with the diff on stdin and no tools,
+`reviewer` runs `claude -p` as a job, or huff for a model like
+`openrouter/moonshotai/kimi-k2.6`, with the diff on stdin and no tools,
 and hands the job to you (`hand-on`): you get `pending` at once and the
 review when it is done. Any long work fits this shape: a build, a scrape, a
 model's turn.

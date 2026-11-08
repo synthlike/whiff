@@ -62,7 +62,7 @@ func recoverPlanAfter(t *testing.T, after time.Duration) {
 		t.Fatal(err)
 	}
 	cmd, c := testDaemon(t, h.dir, h.env...)
-	go c.Message("call", "plan/start", `["two files" ["true"]]`, h.repo)
+	go c.Message("call", "plan/start", `["two files" ["true"] ""]`, h.repo)
 	time.Sleep(after)
 	if err := cmd.Process.Kill(); err != nil {
 		t.Fatal(err)
@@ -72,7 +72,7 @@ func recoverPlanAfter(t *testing.T, after time.Duration) {
 
 	if plans := h.call(c, "plan/plans", "[]"); plans == "(ok [])" {
 		// It died before the plan was stored: its caller had no answer.
-		if got := h.call(c, "plan/start", `["two files" ["true"]]`); got != "(ok 1)" {
+		if got := h.call(c, "plan/start", `["two files" ["true"] ""]`); got != "(ok 1)" {
 			t.Fatalf("start again = %s", got)
 		}
 	}

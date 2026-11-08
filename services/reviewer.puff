@@ -1,9 +1,12 @@
-; reviewer: Claude reviews the uncommitted changes in the caller's
+; reviewer: a model reviews the uncommitted changes in the caller's
 ; repository. It gets the diff on stdin and no tools, so it can only read
-; what it is given and answer. Needs the claude CLI.
-;   whiff call reviewer/review    ; (err {:kind :pending :id 12}) at once
-;   whiff wait 12                 ; the review, or (err {:kind :exit}) with
-;                                 ; claude's stderr if it fails
+; what it is given and answer. Needs the claude CLI, or huff for a model
+; that names a provider.
+;   whiff call reviewer/review '""'   ; (err {:kind :pending :id 12}) at once, on Claude
+;   whiff call reviewer/review opus   ; on a Claude model
+;   whiff call reviewer/review openrouter/moonshotai/kimi-k2.6   ; on Kimi, through huff
+;   whiff wait 12                     ; the review, or (err {:kind :exit}) with
+;                                     ; its stderr if it fails
 
 (service reviewer
   (def prompt """
@@ -19,7 +22,21 @@
       [(ok "") (err {:kind :nothing :message "no uncommitted changes to review"})]
       [r r]))
 
-  (on (review) :read
-    "Reviews the uncommitted changes here (git diff HEAD) with Claude, without tools: pending at once; (ok review) when done, as text."
-    (hand-on (call :jobs/run ["claude" "-p" "--tools" "" "--no-session-persistence"]
+  ; cmd is the reviewer, without tools, on model: claude, or huff for a
+  ; model that names a provider.
+  (def (cmd model)
+    (cond
+      [(string/contains? model "/") ["huff" "-m" model "-calls" "2"]]
+      [(= model "") ["claude" "-p" "--tools" "" "--no-session-persistence"]]
+      [_ ["claude" "-p" "--tools" "" "--no-session-persistence" "--model" model]]))
+
+  (test "the reviewer on Claude, a Claude model, or a provider's through huff"
+    (= (vector/map ["" "opus" "openrouter/x/y"] cmd)
+      [["claude" "-p" "--tools" "" "--no-session-persistence"]
+       ["claude" "-p" "--tools" "" "--no-session-persistence" "--model" "opus"]
+       ["huff" "-m" "openrouter/x/y" "-calls" "2"]]))
+
+  (on (review model) :read
+    "Reviews the uncommitted changes here (git diff HEAD), without tools, on model: \"\" for Claude's default, a Claude model as \"opus\", or a provider's, as \"openrouter/moonshotai/kimi-k2.6\", which huff runs. Pending at once; (ok review) when done, as text."
+    (hand-on (call :jobs/run (cmd model)
                {:stdin (str prompt "\n\n" (try (diff))) :timeout 10m :as :text}))))

@@ -103,8 +103,9 @@ A turn stops at 20 model calls, or at `:turn` dollars where the provider
 reports cost, as OpenRouter does. `huff` needs to be on the daemon's
 `PATH`, as `go install ./cmd/...` puts it.
 
-The pipeline's developers and reviewers run on huff the same way, when
-their model names a provider: a team set to
+The pipeline's developers and reviewers, plan's planner and the
+reviewer service run on huff the same way, when their model names a
+provider: a team set to
 `{:dev "openrouter/moonshotai/kimi-k2" :reviewer "openrouter/z-ai/glm-4.6"}`
 builds its runs without Claude. A developer gets huff's file tools,
 named and used as Claude's (Read, Write, Edit, Glob, Grep and Bash),

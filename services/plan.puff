@@ -1,13 +1,16 @@
-; plan: a goal, planned by Claude and built by pipelines. A planner Claude,
+; plan: a goal, planned by a model and built by pipelines. A planner,
 ; which can read the repository but not change it, splits the goal into a
-; few ordered tasks; each task is a :pipeline run (a dev Claude, your check
-; and a reviewer Claude), started from the branch of the one before, so
-; the last run's branch holds the whole goal. A run that doesn't end ready
-; stops the plan, until you retry it with a note for the developer. How it
-; went lands in your inbox, with what you can do about it. Needs git, the
-; claude CLI and services/pipeline.puff.
-;   whiff call plan/start "a todo CLI: add, list and done, kept in todo.json" '["go" "test" "./..."]'
-;   whiff call plan/draft "..." '["go" "test" "./..."]'   ; the same, but waits for you
+; few ordered tasks; each task is a :pipeline run (a developer, your check
+; and a reviewer), started from the branch of the one before, so the last
+; run's branch holds the whole goal. Each role runs on Claude, or on huff
+; for a model that names a provider. A run that doesn't end ready stops
+; the plan, until you retry it with a note for the developer. How it went
+; lands in your inbox, with what you can do about it. Needs git, the
+; claude CLI or huff, and services/pipeline.puff.
+;   whiff call plan/start "a todo CLI: add, list and done, kept in todo.json" '["go" "test" "./..."]' '""'
+;   whiff call plan/draft "..." '["go" "test" "./..."]' '""'   ; the same, but waits for you
+;   whiff call plan/start "..." '["go" "test" "./..."]' openrouter/moonshotai/kimi-k2.6   ; every role on Kimi, through huff
+;   whiff call plan/start "..." '["go" "test" "./..."]' '{:planner "opus" :dev "haiku"}'  ; or each its own
 ;   whiff call plan/edit 3 2 "store todos in a map"        ; a drafted plan's task 2
 ;   whiff call plan/approve 3      ; build a drafted plan's tasks
 ;   whiff call plan/retry 1 "store todos in a map"   ; after a task's run gave up
@@ -83,12 +86,37 @@
     (= (vector/map [(tasks "[]") (tasks "[1, 2]") (tasks "no")] (fn (r) (match r [(err {:kind k}) k])))
       [:no-tasks :bad-plan :parse]))
 
+  ; roles are a plan's models, from model: a string, every role's, or
+  ; {:planner :dev :reviewer}, each's, "" for the default: Claude's, or
+  ; huff's for a model that names a provider.
+  (def (roles model)
+    (if (= (value/type model) :map)
+      {:planner (map/get-or model :planner "") :dev (map/get-or model :dev "") :reviewer (map/get-or model :reviewer "")}
+      {:planner model :dev model :reviewer model}))
+
+  (test "a plan's models: one for every role, or each its own"
+    (= [(roles "haiku") (roles {:planner "opus"})]
+      [{:planner "haiku" :dev "haiku" :reviewer "haiku"} {:planner "opus" :dev "" :reviewer ""}]))
+
+  ; planner-cmd is the planner, which only reads, on model: claude, or
+  ; huff for a model that names a provider.
+  (def (planner-cmd model)
+    (cond
+      [(string/contains? model "/") ["huff" "-m" model "-tools" "Read,Glob,Grep" "-calls" "40"]]
+      [(= model "") ["claude" "-p" "--strict-mcp-config" "--tools" "Read,Glob,Grep" "--no-session-persistence"]]
+      [_ ["claude" "-p" "--strict-mcp-config" "--tools" "Read,Glob,Grep" "--no-session-persistence" "--model" model]]))
+
+  (test "the planner on Claude, a Claude model, or a provider's through huff"
+    (= (vector/map ["" "opus" "openrouter/x/y"] (fn (m) (vector/first (planner-cmd m))))
+      [(some "claude") (some "claude") (some "huff")]))
+
   ; next-run starts plan n's task i from base, a commit or branch; :built
   ; is each task's run so far.
   (def (next-run state n i base)
     (let [{:repo repo :tasks ts :check check} (plan-of state n)
+          {:dev dev :reviewer reviewer} (roles (map/get-or (plan-of state n) :model ""))
           task (unwrap (vector/get ts i))
-          run (try (call :pipeline/start-on repo base task check))
+          run (try (call :pipeline/start-on repo base task check {:dev dev :reviewer reviewer}))
           built (map/get-or (plan-of state n) :built [])]
       (ok (-> state
             (set-plan n {:step :building :task i :run run :built (vector/append built run)})
@@ -161,34 +189,35 @@
     (do (publish :plan/changed {:plan n})
       r))
 
-  ; ask-planner has a planner Claude, which only reads, plan n's goal in
-  ; its repository: its answer is the plan's whiff/done.
+  ; ask-planner has a planner, which only reads, plan n's goal in its
+  ; repository: its answer is the plan's whiff/done.
   (def (ask-planner state n)
     (let [{:goal goal :check check :repo repo} (plan-of state n)
-          id (try (submitted (call :jobs/run ["claude" "-p" "--strict-mcp-config" "--tools" "Read,Glob,Grep" "--no-session-persistence"]
+          {:planner model} (roles (map/get-or (plan-of state n) :model ""))
+          id (try (submitted (call :jobs/run (planner-cmd model)
                                {:stdin (planner-input goal check) :dir repo :as :text :timeout 10m})))]
       (ok (-> state (set-plan n {:step :planning}) (map/set-in [:jobs id] n)))))
 
-  ; begin plans goal with check as plan n, (ok [n state]); a draft waits
-  ; for your approval once planned.
-  (def (begin state goal check draft)
+  ; begin plans goal with check as plan n, its roles on model, (ok [n
+  ; state]); a draft waits for your approval once planned.
+  (def (begin state goal check model draft)
     (let [repo (string/trim (try (proc/output ["git" "rev-parse" "--show-toplevel"])))
           base (string/trim (try (proc/output ["git" "-C" repo "rev-parse" "HEAD"])))
           branch (string/trim (try (proc/output ["git" "-C" repo "rev-parse" "--abbrev-ref" "HEAD"])))
           n (map/get-or state :next 1)
           state (-> state
                   (map/set :next (+ n 1))
-                  (map/set-in [:plans n] {:goal goal :repo repo :base base :check check :step :planning :tasks [] :draft draft
+                  (map/set-in [:plans n] {:goal goal :repo repo :base base :check check :model model :step :planning :tasks [] :draft draft
                                           :where (where repo branch base)}))]
       (moved n (ok [n (try (ask-planner state n))]))))
 
-  (on (start state goal check) :write :update
-    "Plans goal in the repository here with a planner Claude, then builds its tasks one after another as :pipeline runs, each from the last one's branch, with check (a command, like [\"go\" \"test\" \"./...\"]). (ok n), the plan's number; how it went lands in your inbox."
-    (begin state goal check #f))
+  (on (start state goal check model) :write :update
+    "Plans goal in the repository here with a planner, which only reads, then builds its tasks one after another as :pipeline runs, each from the last one's branch, with check (a command, like [\"go\" \"test\" \"./...\"]); model is every role's model, \"\" for Claude's default, a Claude model as \"haiku\", or a provider's, as \"openrouter/moonshotai/kimi-k2.6\", which huff runs, or {:planner :dev :reviewer}, each's. (ok n), the plan's number; how it went lands in your inbox."
+    (begin state goal check model #f))
 
-  (on (draft state goal check) :write :update
+  (on (draft state goal check model) :write :update
     "Plans goal as start does, then waits for you: its tasks land in your inbox, edit changes one, and approve builds them. (ok n), the plan's number."
-    (begin state goal check #t))
+    (begin state goal check model #t))
 
   (on (plans state) :read
     "Every plan, oldest first: {:plan :goal :step :tasks :task :run}, with :step one of :planning, :proposed, :building, :done, :failed, :merged or :discarded, and :task the index of the task :run builds; :built is each task's run so far."
