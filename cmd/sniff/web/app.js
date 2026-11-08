@@ -270,8 +270,11 @@ function cardOf(chain) {
   const end = rk === "pending" ? dones.get(String(pendingOf(root.reply))) : null;
   if (fault) set("failed", "Faulted: " + fault);
   else if (open) {
+    const at = services.get(to(open).split("/")[0]);
     if (open.gate?.startsWith("held")) set("waiting", "Held for your review");
     else if (to(open) === "me") set("waiting", "Waits for your answer");
+    // A paused agent holds what comes to it until you resume it.
+    else if (at?.status === "paused") set("waiting", `Waits for ${at.service}, paused`);
     else set("running", "Running" + (c.step ? " · " + c.step : ""));
   } else if (rk === "err") set("failed", "Failed: " + errText(root.reply));
   else if (end && kindOf(end.args.v[1]) !== "ok") set("failed", "Failed: " + errText(end.args.v[1]));
@@ -870,7 +873,9 @@ function teamSpend(t) {
 function teamLine(b) {
   const t = teamOf(b);
   if (!t) return "";
-  return ["lead :" + t.lead, "dev " + (t.dev || "default"), "review " + (t.reviewer || "default"),
+  // A provider's model by its own name: kimi-k2.6, not openrouter/moonshotai/kimi-k2.6.
+  const model = (m) => (m ? m.slice(m.lastIndexOf("/") + 1) : "default");
+  return ["lead :" + t.lead, "dev " + model(t.dev), "review " + model(t.reviewer),
     `${t.going} of ${t.most} running`, teamSpend(t)].join(" · ");
 }
 
