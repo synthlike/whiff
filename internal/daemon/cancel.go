@@ -37,11 +37,12 @@ func (d *daemon) cancel(session string, id int64) puff.Value {
 				return
 			}
 			st.take(a.addr, id)
-			cancelled := failed("cancelled", "not-started", "task %d was cancelled before it started", id)
 			if a.addr == "review" {
-				d.settleHeld(st, a, cancelled)
+				d.settleHeld(st, a, failed("cancelled", "not-started", "task %d was cancelled before it started", id))
 			} else {
-				d.answer(st, a.ticket, a.addr, cancelled)
+				// An ask may have begun work its answer waited for, as a
+				// pipeline run: say only that it went unanswered.
+				d.answer(st, a.ticket, a.addr, failed("cancelled", "not-started", "task %d was cancelled before :%s answered it", id, a.addr))
 				d.notifyCancelled(st, st.addrs[a.addr], a)
 			}
 			r = puff.Done

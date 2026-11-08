@@ -42,8 +42,8 @@ func TestCancel(t *testing.T) {
 	}
 	cancel := func(c *rpc.Client, id string) string { return msg(c, "cancel-task", "", "["+id+"]") }
 	wait := func(id string) string { return msg(you, "wait", "", "["+id+"]") }
-	notStarted := func(id string) string {
-		return `(err {:kind :cancelled :message "task ` + id + ` was cancelled before it started" :outcome :not-started})`
+	notStarted := func(id, why string) string {
+		return `(err {:kind :cancelled :message "task ` + id + ` was cancelled before ` + why + `" :outcome :not-started})`
 	}
 
 	// One waiting for a reply leaves its inbox; only you cancel yours.
@@ -54,7 +54,7 @@ func TestCancel(t *testing.T) {
 	if r := cancel(you, q); r != "(ok :done)" {
 		t.Errorf("cancel %s = %s", q, r)
 	}
-	if r := wait(q); r != notStarted(q) {
+	if r := wait(q); r != notStarted(q, ":box answered it") {
 		t.Errorf("wait %s = %s", q, r)
 	}
 	if text, _ := you.Inbox("box"); text != "" {
@@ -70,7 +70,7 @@ func TestCancel(t *testing.T) {
 	if r := cancel(agent, held); r != "(ok :done)" {
 		t.Errorf("cancel %s = %s", held, r)
 	}
-	if r := wait(held); r != notStarted(held) {
+	if r := wait(held); r != notStarted(held, "it started") {
 		t.Errorf("wait %s = %s", held, r)
 	}
 	if text, _ := you.Inbox("review"); text != "" {
