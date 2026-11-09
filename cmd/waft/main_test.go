@@ -338,6 +338,51 @@ func TestUserRestart(t *testing.T) {
 	}
 }
 
+// TestWhiffLib uses lib/whiff.puff, copied next to a host file, as the
+// usage says: whiff for a user is plain resources run as them.
+func TestWhiffLib(t *testing.T) {
+	lib, err := os.ReadFile("lib/whiff.puff")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := write(t, `(use "whiff.puff")
+(host "admin@a"
+  [(pkg "golang-go")
+   (user "whiff" {:linger #t}
+     [(whiff {:version "v0.8.0"
+              :env {"KEY" {:env "KEY"}}
+              :services ["services/pipeline.puff"]})])])`)
+	os.WriteFile(filepath.Join(filepath.Dir(path), "whiff.puff"), lib, 0o644)
+	hosts, err := load(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, r := range hosts[0].resources {
+		got = append(got, r.String()+" "+r.opts().as+" "+fmt.Sprint(r.opts().restarts))
+	}
+	want := `pkg golang-go  []
+user whiff  []
+go-bin github.com/synthlike/whiff/cmd/whiff@v0.8.0 whiff [whiff]
+env ~/.whiff/env whiff [whiff]
+file ~/.config/systemd/user/whiff.service whiff [whiff]
+file ~/.whiff/services/pipeline.puff whiff []
+cmd whiff enabled and running whiff []`
+	if g := strings.Join(got, "\n"); g != want {
+		t.Errorf("got:\n%s\nwant:\n%s", g, want)
+	}
+	rs := hosts[0].resources
+	if f := rs[4].(*file); !strings.Contains(f.content, "ExecStart=%h/go/bin/whiff daemon\nEnvironmentFile=-%h/.whiff/env\n") {
+		t.Errorf("unit:\n%s", f.content)
+	}
+	if f := rs[5].(*file); f.from != filepath.Join(filepath.Dir(path), "services/pipeline.puff") {
+		t.Errorf("service from %s", f.from)
+	}
+	if c := rs[6].(*cmd); !strings.HasPrefix(c.script, userBus+"\n") || !strings.HasPrefix(c.unless, userBus+";") {
+		t.Errorf("cmd %q unless %q", c.script, c.unless)
+	}
+}
+
 // TestRemote runs a script as its user, in its home.
 func TestRemote(t *testing.T) {
 	if got, want := remote("whiff", "go install x"), `sudo -n -H -u 'whiff' -- sh -c 'cd "$HOME" || exit 1

@@ -1,0 +1,47 @@
+; whiff for a user, as waft resources. Copy this file next to your host
+; file, (use "whiff.puff"), and put (whiff {...}) in a user's setup:
+;
+;   (pkg "golang-go")
+;   (user "whiff" {:keys ["~/.ssh/id_ed25519.pub"] :linger #t}
+;     [(whiff {:version "v0.8.0"
+;              :env {"OPENROUTER_API_KEY" {:cmd "op read op://dev/openrouter/key"}}
+;              :services ["services/pipeline.puff"]})])
+;
+; The host needs golang-go, to build whiff, and the user :linger #t, so
+; its whiff runs without a login. Then reach it from here with
+;   whiff peer add vps whiff@host --whiff /home/whiff/go/bin/whiff
+;
+; Options:
+;   :version   whiff's, as go install takes it: a tag, or a pushed commit;
+;              "latest" by default, installed once and never upgraded
+;   :env       ~/.whiff/env's vars, which whiff's unit loads, as env takes
+;              them: names to {:env "NAME"} or {:cmd "op read ..."}
+;   :services  service files here, put in ~/.whiff/services/, which whiff
+;              loads as they change
+
+(def whiff-unit "[Unit]
+Description=whiff
+
+[Service]
+ExecStart=%h/go/bin/whiff daemon
+EnvironmentFile=-%h/.whiff/env
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+")
+
+; systemctl --user needs it under sudo, which drops it.
+(def user-bus "export XDG_RUNTIME_DIR=/run/user/$(id -u)")
+
+(def (whiff opts)
+  (vector/concat
+    [(go-bin (string/concat "github.com/synthlike/whiff/cmd/whiff@" (map/get-or opts :version "latest"))
+            {:restarts "whiff"})
+     (env "~/.whiff/env" (map/get-or opts :env {}) {:restarts "whiff"})
+     (file "~/.config/systemd/user/whiff.service" whiff-unit {:restarts "whiff"})]
+    (vector/map (map/get-or opts :services [])
+      (fn (s) (file (string/concat "~/.whiff/services/" (path/base s)) {:from s})))
+    [(cmd (string/concat user-bus "\nsystemctl --user daemon-reload\nsystemctl --user enable --now whiff")
+          {:name "whiff enabled and running"
+           :unless (string/concat user-bus "; systemctl --user is-enabled -q whiff && systemctl --user is-active -q whiff")})]))

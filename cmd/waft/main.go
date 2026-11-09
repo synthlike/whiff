@@ -21,13 +21,14 @@ const usage = `usage: waft plan file.puff    show what would change on each host
 The file is puff whose last form is a host, or a vector of hosts. A host
 is its ssh dest, an admin with passwordless sudo, and its resources:
 
+  (use "whiff.puff")
   (host "admin@203.0.113.7"
     [(pkg "git" "golang-go")
      (user "whiff" {:keys ["~/.ssh/id_ed25519.pub"] :linger #t}
        [(ssh-key)
         (file "~/.gitconfig" {:from "dotfiles/gitconfig"})
         (repo "~/src/mdtoc" "git@github.com:me/mdtoc.git")
-        (go-bin "golang.org/x/tools/gopls@v0.20.0")])])
+        (whiff {:version "v0.8.0" :services ["services/pipeline.puff"]})])])
 
 Resources:
   pkg name ...              apt packages, all a host's installed first, as root
@@ -46,7 +47,8 @@ Resources:
 Each takes :as, a user to run as (except pkg and user), and :restarts, a
 systemd unit restarted once at the end if it changed: the :as user's own.
 Local paths are from the host file's folder. The file runs :read, so it
-can't change anything itself.
+can't change anything itself. whiff comes from whiff.puff in waft's lib
+folder (cmd/waft/lib), copied next to the host file: see its comments.
 `
 
 func main() {
