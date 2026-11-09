@@ -7,7 +7,7 @@ complete.
 
 ## Layout
 
-One module, four binaries: `go install ./cmd/...` installs them all.
+One module, five binaries: `go install ./cmd/...` installs them all.
 
 - `cmd/puff`: runs puff without a daemon (`puff file.puff args...`, `puff -e`,
   `puff` for a REPL), with the base stdlib only.
@@ -33,6 +33,10 @@ One module, four binaries: `go install ./cmd/...` installs them all.
   agent harness: an `(agent ...)`, or a pipeline developer or reviewer,
   whose model names a provider (`openrouter/...`, `openai/...`,
   `local/...`) runs on it instead of the Claude CLI.
+- `cmd/waft`: provisions Ubuntu hosts over ssh from a puff file (`waft plan`,
+  `waft apply`): resources checked read-only and fixed with sudo, users
+  with their setups. Outside releases until it earns its keep; it borrows
+  only `internal/puff`.
 - `internal/huff`: huff's turn loop, a provider-neutral transcript (puff
   data), file tools confined to a directory (Read, Write, Edit, Glob, Grep,
   and Bash for allowed commands, without a shell) and a `net/http` client

@@ -15,7 +15,7 @@ that builds and reviews code in git worktrees.
 
 ## Get started
 
-From a checkout, install all four binaries with Go:
+From a checkout, install the binaries with Go:
 
 ```sh
 go install ./cmd/...

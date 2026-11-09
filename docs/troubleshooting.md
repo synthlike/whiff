@@ -160,7 +160,7 @@ opening a browser. Use the full URL with its token; it is served only on
 
 If a client reports a protocol mismatch, follow its message: stop an old
 daemon with `whiff stop` and let the next command start the installed
-version. If the client is older, reinstall all four binaries from the
+version. If the client is older, reinstall all the binaries from the
 same checkout with `go install ./cmd/...` and restart sniff.
 
 ## A peer doesn't connect
