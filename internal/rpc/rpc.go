@@ -110,6 +110,9 @@ type Entry struct {
 	// in it ran in, as "tally"; "" until one did. What a message began
 	// before its chain had one has none: see whiff history's chains.
 	Project string `json:"project,omitempty"`
+	// Peer is the peer whose history the entry is from, mirrored here:
+	// its addresses are far already, and its client is client@peer.
+	Peer string `json:"peer,omitempty"`
 }
 
 // String is e as a line of whiff history:
@@ -121,11 +124,15 @@ func (e Entry) String() string {
 	if e.Kind == "note" {
 		return at + "  note  " + e.Note
 	}
-	from := "client"
+	client := "client"
+	if e.Peer != "" {
+		client += "@" + e.Peer
+	}
+	from := client
 	if e.From != "" {
 		from = ":" + e.From
 	}
-	target := "client"
+	target := client
 	switch {
 	case e.Kind == "eval":
 		target = "eval"

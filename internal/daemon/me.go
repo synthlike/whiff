@@ -21,7 +21,7 @@ func (d *daemon) meService() *service {
 			"tell": {params: []string{"text", "opts"}, optional: 1, ask: true, mark: puff.MarkRead, marked: true, check: tellOpts,
 				doc: `Tells you text, a report: it waits in your inbox until you reply, which dismisses it. opts, {:actions [{:label "Show the diff" :action [:address/fn args...]}]}, offers what to do about it.`},
 			"inbox": {mark: puff.MarkRead, marked: true, yours: true, native: d.meInbox,
-				doc: "(ok view): what waits in your inbox, oldest first: questions to answer and reports to dismiss."},
+				doc: "(ok view): what waits in your inbox, oldest first: questions to answer and reports to dismiss; then each connected peer's, each label after the peer's name."},
 			"answer": {params: []string{"id", "text"}, optional: 1, mark: puff.MarkWrite, marked: true, yours: true, native: d.meAnswer,
 				doc: "Reply to message id in your inbox (ok text), or (ok :done) without text or with \"\", which dismisses a report."},
 		},
@@ -83,14 +83,20 @@ func (st *state) meChanged(user bool, cause int64) {
 // meInbox is :me's inbox as (items [...]): a question with its choices and
 // Answer, which asks for your answer, and a report with its actions and
 // Dismiss.
-func (d *daemon) meInbox(message, []puff.Value) (puff.Value, error) {
+func (d *daemon) meInbox(m message, _ []puff.Value) (puff.Value, error) {
 	var items []puff.Value
 	d.do(func(st *state) {
 		for _, a := range st.inbox("me") {
 			items = append(items, a.meItem())
 		}
 	})
+	// Each peer's too: one inbox, wherever you are asked.
+	far, topics := d.farViews(m, "me/inbox")
+	items = append(items, far...)
 	opts, _ := puff.NewMap(puff.Key("changed", puff.Keyword("me/changed")))
+	if len(topics) > 0 {
+		opts, _ = puff.NewMap(puff.Key("changed", puff.NewVector(append([]puff.Value{puff.Keyword("me/changed")}, topics...)...)))
+	}
 	return puff.Ok(puff.NewTag("items", puff.NewVector(items...), opts)), nil
 }
 

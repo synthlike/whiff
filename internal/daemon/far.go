@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"go.etcd.io/bbolt"
@@ -186,6 +187,93 @@ func (d *daemon) atPeer(req rpc.Request) rpc.Response {
 		return rpc.Response{Error: fmt.Sprintf("peer %s went before it answered: %v", name, err)}
 	}
 	return resp
+}
+
+// farViewRead is the Read a view here sends for a peer's part of it: a
+// view that gets it leaves its own peers out, so two whiffs that are each
+// other's peers don't ask each other round and round.
+const farViewRead = "a peer's view"
+
+// farViewWait is how long a view here waits for a peer's part of it.
+var farViewWait = 3 * time.Second
+
+// farViews are the items of the view target, address/fn, on each
+// connected peer, made far, each label after the peer's name, "vps: ...",
+// so this whiff's queues are every peer's too; and the topics those views
+// follow, made far, for a page to follow. A peer that doesn't answer
+// within farViewWait is left out.
+func (d *daemon) farViews(m message, target string) (items, topics []puff.Value) {
+	if m.read == farViewRead {
+		return nil, nil
+	}
+	type part struct {
+		name string
+		c    *rpc.Client
+		view puff.Value
+	}
+	var parts []*part
+	d.do(func(st *state) {
+		for name, p := range st.peers {
+			if p.client != nil {
+				parts = append(parts, &part{name: name, c: p.client})
+			}
+		}
+	})
+	slices.SortFunc(parts, func(a, b *part) int { return strings.Compare(a.name, b.name) })
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	for _, pt := range parts {
+		wg.Go(func() {
+			got := make(chan puff.Value, 1)
+			go func() {
+				resp, err := pt.c.Forward(rpc.Request{Op: "call", Target: ":" + target, Args: "[]", Read: farViewRead})
+				v, _ := puff.ReadValue(resp.Value)
+				if err != nil || v == nil {
+					v = puff.Done
+				}
+				got <- v
+			}()
+			select {
+			case v := <-got:
+				mu.Lock()
+				pt.view = farActions(puff.OkValue(v), pt.name)
+				mu.Unlock()
+			case <-time.After(farViewWait):
+			}
+		})
+	}
+	wg.Wait()
+	for _, pt := range parts {
+		mu.Lock()
+		t, ok := pt.view.(puff.Tag)
+		mu.Unlock()
+		if !ok || t.Name() != "items" || t.Len() == 0 {
+			continue
+		}
+		vec, _ := t.At(0).(puff.Vector)
+		for i := range vec.Len() {
+			item, ok := vec.At(i).(puff.Map)
+			if !ok {
+				continue
+			}
+			if l, ok := puff.Field(item, "label").(puff.String); ok {
+				item, _ = item.With(puff.Keyword("label"), puff.String(pt.name+": "+string(l)))
+			}
+			items = append(items, item)
+		}
+		if t.Len() > 1 {
+			opts, _ := t.At(1).(puff.Map)
+			switch ch := puff.Field(opts, "changed").(type) {
+			case puff.Keyword:
+				topics = append(topics, ch)
+			case puff.Vector:
+				for j := range ch.Len() {
+					topics = append(topics, ch.At(j))
+				}
+			}
+		}
+	}
+	return items, topics
 }
 
 // newKey is a new submission key.
@@ -376,10 +464,10 @@ const farIDs = 10000
 // hop.
 func (st *state) mirror(p *peer, re rpc.Entry) {
 	p.cursor = re
-	if strings.Contains(re.From+re.To, "@") {
+	if re.Peer != "" || strings.Contains(re.From+re.To, "@") {
 		return
 	}
-	e := entry{at: re.At, kind: re.Kind, user: re.Origin == "user", args: re.Args, reply: re.Reply, took: re.Took, gate: re.Gate, project: re.Project}
+	e := entry{at: re.At, kind: re.Kind, user: re.Origin == "user", args: re.Args, reply: re.Reply, took: re.Took, gate: re.Gate, project: re.Project, peer: p.name}
 	if re.Kind == "note" {
 		e.note = p.name + ": " + re.Note
 		st.record(e)
@@ -509,6 +597,12 @@ func farActions(v puff.Value, name string) puff.Value {
 			case puff.Equal(e.Key, puff.Keyword("changed")):
 				if k, ok := far(e.Val); ok {
 					es[i].Val = k
+				} else if vec, ok := e.Val.(puff.Vector); ok {
+					ks := make([]puff.Value, vec.Len())
+					for j := range vec.Len() {
+						ks[j], _ = far(vec.At(j))
+					}
+					es[i].Val = puff.NewVector(ks...)
 				}
 			case puff.Equal(e.Key, puff.Keyword("action")):
 				act, ok := e.Val.(puff.Vector)

@@ -276,6 +276,10 @@ func TestFar(t *testing.T) {
 	ac.Agent = true
 	id = pendingOf(t, call(ac, rpc.Request{Op: "call", Target: "box@far/put", Args: "[7]"}))
 	held := farID("review")
+	// It's in your review queue here, after the peer's name, accepted there.
+	if got := here("review/pending", "[]"); !strings.Contains(got, `:label "far: `) || !strings.Contains(got, "[:review@far/accept "+held+"]") || !strings.Contains(got, ":review@far/pending") {
+		t.Errorf("review/pending here = %s", got)
+	}
 	if got := call(fc, rpc.Request{Op: "accept", Args: "[" + held + "]"}); got != "(ok 7)" {
 		t.Errorf("far's accept = %s", got)
 	}
@@ -346,7 +350,13 @@ func TestFarSync(t *testing.T) {
 	}
 
 	call(fc, "call", "box/put", "[1]")
-	eventually(t, "far's call in history here", func() string { return count("client -> :box@far/put 1  (ok 1)") }, "1")
+	eventually(t, "far's call in history here", func() string { return count("client@far -> :box@far/put 1  (ok 1)") }, "1")
+
+	// Its questions are in your inbox here.
+	call(fc, "call", "me/ask", `["go?"]`)
+	if got := call(c, "call", "me/inbox", "[]"); !strings.Contains(got, `:label "far: go?"`) || !strings.Contains(got, ":me@far/changed") {
+		t.Errorf("me/inbox here = %s", got)
+	}
 
 	call(fc, "pub", "box/changed", "[5]")
 	eventually(t, "watch hears far's publish", func() string {
@@ -359,8 +369,8 @@ func TestFarSync(t *testing.T) {
 	call(fc, "call", "box/put", "[2]")
 	start(t, dir)
 	c = dial(t, dir)
-	eventually(t, "what far did meanwhile", func() string { return count("client -> :box@far/put 2  (ok 2)") }, "1")
-	if n := count("client -> :box@far/put 1  (ok 1)"); n != "1" {
+	eventually(t, "what far did meanwhile", func() string { return count("client@far -> :box@far/put 2  (ok 2)") }, "1")
+	if n := count("client@far -> :box@far/put 1  (ok 1)"); n != "1" {
 		t.Errorf("box@far/put 1 is in history %s times after a restart", n)
 	}
 
@@ -368,8 +378,8 @@ func TestFarSync(t *testing.T) {
 	call(c, "call", "peers/rm", `["far"]`)
 	call(c, "call", "peers/add", `["far" `+bridge+`]`)
 	call(fc, "call", "box/put", "[3]")
-	eventually(t, "far's next call", func() string { return count("client -> :box@far/put 3  (ok 3)") }, "1")
-	if n := count("client -> :box@far/put 2  (ok 2)"); n != "1" {
+	eventually(t, "far's next call", func() string { return count("client@far -> :box@far/put 3  (ok 3)") }, "1")
+	if n := count("client@far -> :box@far/put 2  (ok 2)"); n != "1" {
 		t.Errorf("box@far/put 2 is in history %s times after far was added again", n)
 	}
 

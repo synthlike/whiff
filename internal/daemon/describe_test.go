@@ -142,7 +142,7 @@ func TestLs(t *testing.T) {
 :me
   (answer id [text])         :write  Reply to message id in your inbox (ok text), or (ok :done) without text or with "", which dismisses a report.
   ask (ask question [opts])  :read   Asks you question: pending now, your answer when you reply. opts, {:choices ["yes" "no"]}, offers answers to pick.
-  (inbox)                    :read   (ok view): what waits in your inbox, oldest first: questions to answer and reports to dismiss.
+  (inbox)                    :read   (ok view): what waits in your inbox, oldest first: questions to answer and reports to dismiss; then each connected peer's, each label after the peer's name.
   ask (tell text [opts])     :read   Tells you text, a report: it waits in your inbox until you reply, which dismisses it. opts, {:actions [{:label "Show the diff" :action [:address/fn args...]}]}, offers what to do about it.
 :peers
   (add name peer)  :write  Adds peer name, another machine's whiff, and connects to it, by ssh dest whiff bridge, again whenever the connection goes: peer is {:dest "user@host"}, with :whiff, whiff's path there, if ssh doesn't find it, and :dir, where calls run there; or {:cmd [...]}, the command that reaches it. One of the same name is replaced. :done, or (err {:kind :bad-peer}).
@@ -151,7 +151,7 @@ func TestLs(t *testing.T) {
   (view)           :read   (ok view): the peers as list gives them, as items, each with Remove; following :peers/changed, which is published as one is added, removed, connects or goes.
 :review
   (accept id)           :write  Deliver the held message id as it was sent, or run the code it holds; its result, which its sender gets too.
-  (pending)             :read   (ok view): what waits for your review, as items to accept or reject, oldest first.
+  (pending)             :read   (ok view): what waits for your review, as items to accept or reject, oldest first; then each connected peer's, each label after the peer's name.
   (reject id [reason])  :write  Answer the held message id (err {:kind :rejected :reason reason}) without delivering it; reason, a string, tells its sender why.
   (trust id)            :write  Accept the held message id, an agent session's to a service, and trust the session for that service from now on, as whiff trust does.
 :tasks

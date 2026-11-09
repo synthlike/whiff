@@ -106,10 +106,13 @@ const counts = { review: 0, inbox: 0, failed: 0, running: 0 };
 
 // Addresses of an entry: where it comes from and where it goes. A client has
 // no address; to is address/fn, or address on :topic.
-function from(e) { return e.from || "client"; }
+// A peer's client is client@peer, as a peer's addresses are far,
+// :jobs@vps: an entry from its history, mirrored here, says which.
+function client(e) { return e.peer ? "client@" + e.peer : "client"; }
+function from(e) { return e.from || client(e); }
 function to(e) {
   let t = e.to;
-  if (!t) return "client";
+  if (!t) return client(e);
   // whiff's notices to a service, whiff/done, whiff/result, whiff/asked,
   // go to the service.
   const w = t.indexOf("/whiff/");
@@ -302,7 +305,7 @@ function askText(e) {
 // whoOf is who sent e: you, an agent's session by the agent's name, or
 // the address.
 const whoOf = (e) => {
-  if (!e.from) return e.origin === "agent" ? "an agent" : "you";
+  if (!e.from) return (e.origin === "agent" ? "an agent" : "you") + (e.peer ? " on " + e.peer : "");
   const name = e.from.replace(/^agent\//, "");
   return name !== e.from && services.get(name)?.agent ? name : e.from;
 };
@@ -489,9 +492,9 @@ function chainRow(e, i, depth, inChain = false) {
   if (k) r.classList.add(k);
   const what = el("span", "what");
   what.style.setProperty("--depth", depth);
-  what.append(el("span", "glyph", { send: "⇢", pub: "◇", done: "↩", eval: "λ" }[e.kind] || "→"), (e.from ? ":" + e.from : "client") + " → ");
+  what.append(el("span", "glyph", { send: "⇢", pub: "◇", done: "↩", eval: "λ" }[e.kind] || "→"), (e.from ? ":" + e.from : client(e)) + " → ");
   if (e.kind === "eval") what.append(el("b", "", "eval"));
-  else if (!e.to) what.append("client");
+  else if (!e.to) what.append(client(e));
   else what.append(":" + to(e) + (e.kind === "pub" ? " on " : "/"), el("b", "", fn(e)));
   let args = e.args ? print(e.args).slice(1, -1) : "";
   if (e.kind === "done" && e.args && e.args.v.length) args = print(e.args.v[0]);
@@ -520,7 +523,11 @@ function placeOf(a) {
   const name = a.startsWith("agent/") ? a.slice("agent/".length) : "";
   return name && services.get(name)?.agent ? name : a;
 }
-const placeName = (a) => (a === "client" ? "you" : ":" + a);
+// isYou says whether a is a client: you here, or on a peer, client@vps.
+const isYou = (a) => a === "client" || a.startsWith("client@");
+// peerOf is the peer a far address is on, :jobs@vps's vps; "" for one here.
+const peerOf = (a) => (a.includes("@") ? a.slice(a.indexOf("@") + 1) : "");
+const placeName = (a) => (isYou(a) ? "you" + (peerOf(a) ? " on " + peerOf(a) : "") : ":" + a);
 
 // arrowLabel is a message on its arrow: what it asked, or for an answer
 // how it came back.
@@ -556,8 +563,8 @@ function lanesEl(c) {
   const svg = svgEl("svg", { class: "lanes", width: "100%", height, role: "img", "aria-label": "The chain as lanes: who sent whom what, in order" });
   lanes.forEach((a, k) => {
     const x = pct((k + 0.5) / n);
-    const head = svgEl("text", { x, y: 14, "text-anchor": "middle", class: "lane-name" + (a === "client" ? " you" : "") }, placeName(a));
-    if (a !== "client") head.dataset.address = a;
+    const head = svgEl("text", { x, y: 14, "text-anchor": "middle", class: "lane-name" + (isYou(a) ? " you" : "") }, placeName(a));
+    if (!isYou(a) && !peerOf(a)) head.dataset.address = a;
     svg.append(head, svgEl("line", { x1: x, y1: 22, x2: x, y2: height, class: "lifeline" }));
   });
   rows.forEach(({ i, e, a, b }, r) => {
@@ -641,8 +648,11 @@ function mapEl(is, projAt, perProject) {
     const [p, n] = [...t].sort((a, b) => b[1] - a[1])[0];
     bandOf.set(x, n * 3 >= all * 2 ? p : "");
   }
-  bandOf.set("client", "");
+  for (const x of bandOf.keys()) if (isYou(x)) bandOf.set(x, "");
   if (bandOf.has("me")) bandOf.set("me", "");
+  // A peer's addresses, and its clients, are in its band, @vps, whatever
+  // project they work for: what runs there, not here.
+  for (const x of bandOf.keys()) if (peerOf(x)) bandOf.set(x, "@" + peerOf(x));
   const members = new Map();
   for (const [x, b] of bandOf) if (b) members.set(b, (members.get(b) || 0) + 1);
   const folded = (x) => {
@@ -674,7 +684,7 @@ function mapEl(is, projAt, perProject) {
   const out = new Map();
   for (const ed of edges.values()) if (ed.a !== ed.b && ed.b !== "me") (out.get(ed.a) || out.set(ed.a, []).get(ed.a)).push(ed.b);
   const into = new Set([...edges.values()].filter((ed) => ed.a !== ed.b).map((ed) => ed.b));
-  const roots = ["client", ...[...first.keys()].filter((x) => x !== "client" && !into.has(x)), ...first.keys()].filter((x) => first.has(x));
+  const roots = ["client", ...[...first.keys()].filter((x) => !isYou(x) && !into.has(x)), ...first.keys()].filter((x) => first.has(x));
   const seen = new Map(), back = new Set(), order = [];
   const visit = (x) => {
     seen.set(x, 1);
@@ -698,7 +708,7 @@ function mapEl(is, projAt, perProject) {
   // You on top, then in the order they first show; each further column in
   // the order of who sends to it, so fewer arrows cross.
   const row = new Map();
-  cols[0].sort((x, y) => (x === "client" ? -1 : y === "client" ? 1 : x === "me" ? -1 : y === "me" ? 1 : first.get(x) - first.get(y)));
+  cols[0].sort((x, y) => (isYou(x) && !isYou(y) ? -1 : isYou(y) && !isYou(x) ? 1 : x === "me" ? -1 : y === "me" ? 1 : first.get(x) - first.get(y)));
   cols[0].forEach((x, r) => row.set(x, r));
   for (let d = 1; d < cols.length; d++) {
     const at = (x) => {
@@ -788,7 +798,8 @@ function mapEl(is, projAt, perProject) {
     g.append(svgEl("path", { d, class: "hit" }), svgEl("path", { d, "stroke-width": 1.2 + Math.min(4, Math.log2(ed.n)), "marker-end": "url(#ah)" }));
     const bad = ed.fault ? ` · ${ed.fault} faulted` : ed.err ? ` · ${ed.err} failed` : "";
     g.append(svgEl("text", { x: mid[0], y: mid[1] - 4, "text-anchor": "middle", class: "edge-label" }, ed.n + bad));
-    g.append(svgEl("title", {}, (cross ? `crosses from ${ba} to ${bb}: work of one project sent to another's\n` : "") + `${placeName(ed.a)} → ${placeName(ed.b)}: ${plural(ed.n, ed.pub ? "publish" : "message")}${bad}\nlast: ${arrowLabel(entries[ed.last]).slice(0, 120)}\nclick to show them`));
+    g.append(svgEl("title", {}, (cross && (bb.startsWith("@") || ba.startsWith("@")) ? `between this whiff and the peer ${(bb.startsWith("@") ? bb : ba).slice(1)}\n`
+      : cross ? `crosses from ${ba} to ${bb}: work of one project sent to another's\n` : "") + `${placeName(ed.a)} → ${placeName(ed.b)}: ${plural(ed.n, ed.pub ? "publish" : "message")}${bad}\nlast: ${arrowLabel(entries[ed.last]).slice(0, 120)}\nclick to show them`));
     edgesG.append(g);
   }
   for (const [x, p] of pos) {
@@ -797,30 +808,32 @@ function mapEl(is, projAt, perProject) {
       g.dataset.band = b;
       g.append(svgEl("rect", { x: p.x, y: p.y, width: NW, height: NH, rx: 8 }),
         svgEl("text", { x: p.x + 14, y: p.y + 20, class: "node-name" }, b.slice(0, 20)),
-        svgEl("text", { x: p.x + 14, y: p.y + 35, class: "node-sub" }, `project · ${plural(members.get(b), "address", "addresses")}`),
+        svgEl("text", { x: p.x + 14, y: p.y + 35, class: "node-sub" }, `${b.startsWith("@") ? "peer" : "project"} · ${plural(members.get(b), "address", "addresses")}`),
         svgEl("title", {}, `${b}, folded: click to unfold its addresses`));
       nodesG.append(g);
       continue;
     }
     const st = services.get(x), fault = faulted.has(x) && !st;
-    const cls = x === "client" ? "you" : fault ? "fault" : st ? statusClass(st.status) : "";
+    const cls = isYou(x) ? "you" : fault ? "fault" : st ? statusClass(st.status) : "";
     const g = svgEl("g", { class: "node " + (cls || "quiet") + (isAgent(x) ? " agent" : "") + (x === shownAddress ? " selected" : "") });
-    if (x !== "client") g.dataset.address = x;
+    if (!isYou(x) && !peerOf(x)) g.dataset.address = x;
     // What it is: an agent, a puff service of yours, a client, one of
     // whiff's own, as :jobs; or not there now: gone, if it answered
     // something once, as a service whose file you removed, else no such
     // address, as a mistyped name.
     const a = addresses.find((y) => y.address === x);
-    const what = isAgent(x) ? "agent" : x === "me" ? "your inbox" : st ? "service" : a?.client ? "client" : a ? "built-in"
+    // A peer's address is on it: whiff here knows only that.
+    const what = peerOf(x) ? "on " + peerOf(x) : isAgent(x) ? "agent" : x === "me" ? "your inbox" : st ? "service" : a?.client ? "client" : a ? "built-in"
       : answered.has(x) ? "gone" : "no such address";
-    if (x !== "client" && (what === "gone" || what === "no such address")) g.classList.add("unknown");
-    const sub = x === "client" ? "you" : [what,
+    if (!isYou(x) && (what === "gone" || what === "no such address")) g.classList.add("unknown");
+    const sub = isYou(x) ? placeName(x) : [what,
       st && st.status !== "ok" && st.status !== "idle" ? st.status.replace("-", " ") : "", handled.get(x) ? handled.get(x) + " in" : ""].filter(Boolean).join(" · ");
     g.append(svgEl("rect", { x: p.x, y: p.y, width: NW, height: NH, rx: 8 }),
       svgEl("circle", { cx: p.x + 14, cy: p.y + 16, r: 4, class: "dot" }),
       svgEl("text", { x: p.x + 26, y: p.y + 20, class: "node-name" }, placeName(x).slice(0, 20)),
       svgEl("text", { x: p.x + 26, y: p.y + 35, class: "node-sub" }, sub),
-      svgEl("title", {}, x === "client" ? "you, and sniff and the CLI"
+      svgEl("title", {}, x === "client" ? "you, and sniff and the CLI" : isYou(x) ? "a client on " + peerOf(x) + ": you there, or this whiff"
+        : peerOf(x) ? placeName(x) + ", an address on the peer " + peerOf(x)
         : what === "gone" ? placeName(x) + " answered once, but isn't there now: its file was removed, or failed to load"
         : what === "no such address" ? "nothing ever answered at " + placeName(x) + ": a mistyped name?"
         : placeName(x) + (st?.note ? ": " + st.note : "") + "\nclick for its functions, status and state"));
@@ -905,6 +918,17 @@ function bandEl(b, x, y, w, h, info, n) {
   }
   const folded = foldedBands.has(b);
   const caret = svgEl("text", { x: x + 14, y: y + 22, class: "band-caret" }, folded ? "▸" : "▾");
+  // A peer's band: another machine's whiff, what runs on it.
+  if (b.startsWith("@")) {
+    const peer = b.slice(1), away = peersAway.find((p) => p.name === peer);
+    caret.dataset.band = b;
+    caret.append(svgEl("title", {}, folded ? "unfold its addresses" : "fold it into one box"));
+    const gone = peerNames && !peerNames.has(peer);
+    const sub = [gone ? "was a peer: not now" : "a peer: runs there", plural(n, "address", "addresses"), away && `${away.status}, as of its history here`].filter(Boolean).join(" · ");
+    g.append(caret, svgEl("text", { x: x + 30, y: y + 22, class: "band-name" }, peer),
+      svgEl("text", { x: x + 38 + peer.length * 8.5, y: y + 22, class: "band-sub" }, sub));
+    return [back, g];
+  }
   caret.dataset.band = b;
   caret.append(svgEl("title", {}, folded ? "unfold its addresses" : "fold it into one box"));
   const name = svgEl("text", { x: x + 30, y: y + 22, class: "band-name link" }, b);
@@ -1070,7 +1094,7 @@ function append(e) {
   if (selected !== null && selected >= i) selected++;
   if (e.kind !== "note") {
     for (const a of [from(e), to(e)]) {
-      if (a === "client" || seen.has(a)) continue;
+      if (isYou(a) || peerOf(a) || seen.has(a)) continue;
       seen.add(a);
       if (!addresses.some((x) => x.address === a)) reloadSoon();
     }
@@ -1154,7 +1178,7 @@ function argsBox(e) {
 // rawText is a message as history keeps it, printed as puff.
 function rawText(e) {
   const kv = [["kind", ":" + e.kind], ["id", e.id], ["cause", e.cause], ["origin", e.origin && ":" + e.origin],
-    ["from", e.from ? ":" + e.from : "client"], ["to", e.to ? ":" + e.to : "client"], ["at", JSON.stringify(e.at)],
+    ["from", e.from ? ":" + e.from : client(e)], ["to", e.to ? ":" + e.to : client(e)], ["peer", e.peer && JSON.stringify(e.peer)], ["at", JSON.stringify(e.at)],
     ["took", e.took ? JSON.stringify(took(e.took)) : ""], ["gate", e.gate && JSON.stringify(e.gate)], ["note", e.note && JSON.stringify(e.note)],
     ["args", e.args && print(e.args)], ["reply", e.reply && print(e.reply)]].filter(([, v]) => v);
   return "{" + kv.map(([k, v]) => ":" + k + " " + v).join("\n ") + "}";
@@ -1172,8 +1196,8 @@ function showEntry(i) {
     d.append(el("p", "", e.note));
     return;
   }
-  const target = e.kind === "eval" ? "eval" : e.kind === "pub" ? fn(e) : e.to ? ":" + e.to : "client";
-  const d = pane(e.kind, `${e.from || (e.origin === "agent" ? "an agent" : "you")} → ${target}`);
+  const target = e.kind === "eval" ? "eval" : e.kind === "pub" ? fn(e) : e.to ? ":" + e.to : client(e);
+  const d = pane(e.kind, `${e.from || whoOf(e)} → ${target}`);
   const meta = el("div", "meta");
   meta.append(el("span", "", fullTime(e.at)), el("span", "badge", e.origin || "whiff"));
   if (e.took) meta.append(el("span", "", took(e.took)));
@@ -1260,7 +1284,7 @@ function entryActions(e) {
     box.append(again);
   }
   const addr = e.kind === "eval" ? "" : to(e);
-  if (addr && addr !== "client") {
+  if (addr && !isYou(addr) && !peerOf(addr)) {
     const b = el("button", "", "Open :" + addr);
     b.type = "button";
     b.title = "its functions, status and state";
@@ -1359,9 +1383,9 @@ function showSession(d, name) {
       if (e.kind === "note") {
         b.append(e.note);
       } else {
-        const target = e.kind === "eval" ? "eval" : e.to ? ":" + e.to : "client";
+        const target = e.kind === "eval" ? "eval" : e.to ? ":" + e.to : client(e);
         const args = e.args ? " " + print(e.args).slice(1, -1) : "";
-        b.append(`${e.from ? ":" + e.from : "client"} → ${target}${args} `);
+        b.append(`${e.from ? ":" + e.from : client(e)} → ${target}${args} `);
         if (e.gate) b.append(gateBadge(e.gate));
       }
       b.title = b.textContent;
@@ -2080,6 +2104,12 @@ function drawPills() {
   pill(counts.running, "running", "running", "requests still running: show the newest", null);
   pill(counts.review, "review", "to review", "agents' writes that wait for your review", "/view/review/pending");
   pill(counts.inbox, "inbox", "in your inbox", "questions and reports sent to you", "/view/me/inbox");
+  for (const p of peersAway) {
+    const a = el("a", "pill peer", `${p.name} ${p.status}`);
+    a.href = "/view/peers/view";
+    a.title = `the peer ${p.name} isn't connected${p.error ? ": " + p.error : ""}; what sniff shows of it, its queues and history, is as of when it last was`;
+    box.append(a);
+  }
   // A project with runs going, as its team says: how many, and what it
   // spent of its day, its runs' and its lead's turns'.
   for (const p of new Set(entries.map((e) => e.project).filter(Boolean))) {
@@ -2132,8 +2162,11 @@ async function loadSpend() {
 // it reviews: agents' writes wait for you rather than failing with
 // :no-reviewer. A watch that sniff refuses, while whiff isn't running, is
 // tried again.
+// A queue's view names the topics it follows, its peers' too, so the
+// watch is opened again when they change, as a peer connects.
 function followQueue(name, target, topics, then) {
   const link = document.querySelector(".side ." + name);
+  let w = null;
   const count = async () => {
     let n = 0;
     try {
@@ -2141,6 +2174,12 @@ function followQueue(name, target, topics, then) {
       const r = await getJSON("api/view?target=" + target);
       const v = r.t === "tag" && r.n === "ok" ? r.v[0] : null;
       n = v?.t === "tag" && v.v[0]?.t === "vec" ? v.v[0].v.length : 0;
+      const named = changedOf(v);
+      if (named.length && named.join(" ") !== topics.join(" ")) {
+        topics = named;
+        w?.close();
+        watch();
+      }
     } catch {
       return;
     }
@@ -2154,13 +2193,50 @@ function followQueue(name, target, topics, then) {
     count();
     if (then) then();
   };
-  const w = new EventSource("api/watch?" + topics.map((t) => "topic=" + t).join("&"));
-  w.addEventListener("open", changed);
-  w.addEventListener("changed", changed);
+  const watch = () => {
+    const me = (w = new EventSource("api/watch?" + topics.map((t) => "topic=" + t).join("&")));
+    me.addEventListener("open", changed);
+    me.addEventListener("changed", changed);
+    me.onerror = () => {
+      if (me === w && me.readyState === EventSource.CLOSED) setTimeout(watch, 2000);
+    };
+  };
+  watch();
+}
+
+// changedOf is the topics a view, (items [...] {:changed ...}), names.
+function changedOf(v) {
+  const opts = v?.t === "tag" ? v.v[1] : null;
+  if (opts?.t !== "map") return [];
+  const ch = opts.v.find(([k]) => k.t === "kw" && k.v === "changed")?.[1];
+  if (ch?.t === "kw") return [ch.v];
+  return ch?.t === "vec" ? ch.v.filter((k) => k.t === "kw").map((k) => k.v) : [];
+}
+
+// followPeers shows each peer that isn't connected in the status strip:
+// what sniff shows of it is as old as its history here.
+const peersAway = [];
+let peerNames = null; // every peer's name, once known
+function followPeers() {
+  const load = async () => {
+    try {
+      const r = await getJSON("api/view?target=peers/list");
+      const list = r.t === "tag" && r.n === "ok" && r.v[0]?.t === "vec" ? r.v[0].v : [];
+      const field = (m, k) => m.v.find(([x]) => x.v === k)?.[1]?.v;
+      peerNames = new Set(list.map((m) => field(m, "name")));
+      peersAway.splice(0, peersAway.length, ...list.filter((m) => field(m, "status") !== "connected")
+        .map((m) => ({ name: field(m, "name"), status: field(m, "status"), error: field(m, "error") || "" })));
+      drawPills();
+    } catch {}
+  };
+  const w = new EventSource("api/watch?topic=peers/changed");
+  w.addEventListener("open", load);
+  w.addEventListener("changed", load);
   w.onerror = () => {
-    if (w.readyState === EventSource.CLOSED) setTimeout(() => followQueue(name, target, topics, then), 2000);
+    if (w.readyState === EventSource.CLOSED) setTimeout(followPeers, 2000);
   };
 }
+followPeers();
 followQueue("review", "review/pending", ["review/pending", "review/done"], () => loadBanner());
 followQueue("inbox", "me/inbox", ["me/changed"]);
 followQueue("failed", "tasks/failed", ["tasks/changed"]);

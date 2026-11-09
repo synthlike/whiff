@@ -265,7 +265,7 @@ func (d *daemon) reviewService() *service {
 	return &service{name: "review", d: d, cur: caller{addr: "review"},
 		fns: map[string]handler{
 			"pending": {mark: puff.MarkRead, marked: true, yours: true, native: d.pendingView,
-				doc: "(ok view): what waits for your review, as items to accept or reject, oldest first."},
+				doc: "(ok view): what waits for your review, as items to accept or reject, oldest first; then each connected peer's, each label after the peer's name."},
 			"accept": {params: []string{"id"}, mark: puff.MarkWrite, marked: true, yours: true, native: d.acceptFn, apart: true,
 				doc: "Deliver the held message id as it was sent, or run the code it holds; its result, which its sender gets too."},
 			"reject": {params: []string{"id", "reason"}, optional: 1, mark: puff.MarkWrite, marked: true, yours: true, native: d.rejectFn,
@@ -279,14 +279,17 @@ func (d *daemon) reviewService() *service {
 
 // pendingView is :review's inbox as (items [...]), each item a held message
 // with Accept and Reject, fetched again when the queue changes.
-func (d *daemon) pendingView(message, []puff.Value) (puff.Value, error) {
+func (d *daemon) pendingView(m message, _ []puff.Value) (puff.Value, error) {
 	var items []puff.Value
 	d.do(func(st *state) {
 		for _, a := range st.inbox("review") {
 			items = append(items, a.reviewItem(st.addrs[a.from] != nil))
 		}
 	})
-	opts, _ := puff.NewMap(puff.Key("changed", puff.NewVector(puff.Keyword("review/pending"), puff.Keyword("review/done"))))
+	// Each peer's too, which you review from here.
+	far, topics := d.farViews(m, "review/pending")
+	items = append(items, far...)
+	opts, _ := puff.NewMap(puff.Key("changed", puff.NewVector(append([]puff.Value{puff.Keyword("review/pending"), puff.Keyword("review/done")}, topics...)...)))
 	return puff.Ok(puff.NewTag("items", puff.NewVector(items...), opts)), nil
 }
 

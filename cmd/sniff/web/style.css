@@ -256,6 +256,7 @@ h1 { font-size: 15px; margin: 0; letter-spacing: .02em; }
 .pill.running { color: var(--accent); background: color-mix(in srgb, var(--accent) 11%, var(--panel)); }
 .pill.review { color: var(--err); background: color-mix(in srgb, var(--err) 13%, var(--panel)); }
 .pill.inbox { color: var(--accent); background: color-mix(in srgb, var(--accent) 11%, var(--panel)); }
+.pill.peer { color: var(--muted); background: color-mix(in srgb, var(--muted) 12%, var(--panel)); }
 .pill.project { color: hsl(var(--hue, 210) 60% var(--tag-fg)); background: color-mix(in srgb, hsl(var(--hue, 210) 60% var(--tag-fg)) 11%, var(--panel)); }
 .pill:hover { filter: brightness(.96); }
 .pill:focus-visible { outline: 2px solid currentColor; outline-offset: 1px; }

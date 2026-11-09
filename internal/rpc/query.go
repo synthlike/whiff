@@ -20,6 +20,7 @@ import (
 //	time:>500ms    took longer than 500ms; time:<1ms shorter
 //	mark:write     to a :write function, or an agent's eval that writes; mark:read
 //	gate:held      how the review gate treated it: held, refused, accepted, trusted, free or for
+//	peer:vps       from the peer vps's history, mirrored here; peer:here only this whiff's
 //	word           its target, arguments, reply or note hold word, in any case
 //
 // So "to:plan kind:err -gate:held" is what :plan answered with an error,
@@ -54,7 +55,7 @@ func ParseQuery(s string) (Query, error) {
 			return Query{}, fmt.Errorf("%s: want something after %s:", f, key)
 		}
 		switch key {
-		case "to", "from", "gate", "project":
+		case "to", "from", "gate", "project", "peer":
 		case "origin":
 			if t.val != "user" && t.val != "agent" {
 				return Query{}, fmt.Errorf("%s: want origin:user or origin:agent", f)
@@ -151,6 +152,8 @@ func (t term) match(e Entry, marks map[string]string) bool {
 		return kind == t.val
 	case "project":
 		return e.Project == t.val
+	case "peer":
+		return e.Peer == t.val || t.val == "here" && e.Peer == ""
 	}
 	return false
 }

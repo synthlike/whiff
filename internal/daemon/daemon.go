@@ -437,6 +437,7 @@ func (d *daemon) message(ctx context.Context, from string, req rpc.Request) rpc.
 			}
 		}
 		// A peer's view calls a :read function, as it would here.
+		m.read = req.Read
 		if req.Read != "" {
 			if err := d.readOnly(puff.WithMark(ctx, req.Read, puff.MarkRead), addr, m); err != nil {
 				return rpc.Response{Error: err.Error()}
