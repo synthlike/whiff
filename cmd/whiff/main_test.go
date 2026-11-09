@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/synthlike/whiff/internal/puff"
 )
 
 // TestMain runs whiff itself when the tests start it as the daemon, on the
@@ -210,5 +212,25 @@ func TestModeLine(t *testing.T) {
 	}
 	if got := modeLine(":agent/lead", "gated", nil, 0); got != "agent/lead is gated" {
 		t.Errorf("gated: %q", got)
+	}
+}
+
+func TestDumpEntry(t *testing.T) {
+	val, _ := puff.ReadValue(`{:fn :tick :to :gh}`)
+	timer := puff.NewVector(puff.Int(1794248088713498000), puff.Int(2))
+	for _, c := range []struct {
+		key   puff.Value
+		width int
+		want  string
+	}{
+		{puff.Int(7), 0, "7 {:fn :tick :to :gh}"},
+		{puff.Int(7), 80, "7 {:fn :tick :to :gh}"},
+		{puff.Int(7), 15, "7 {:fn :tick\n   :to :gh}"},
+		{timer, 15, "[1794248088713498000 2]\n  {:fn :tick\n   :to :gh}"},
+		{timer, 0, "[1794248088713498000 2] {:fn :tick :to :gh}"},
+	} {
+		if got := dumpEntry(c.key, val, c.width); got != c.want {
+			t.Errorf("dumpEntry(%s, %d) =\n%s\nwant\n%s", puff.Print(c.key), c.width, got, c.want)
+		}
 	}
 }

@@ -499,8 +499,9 @@ History is stored in whiff.db for 30 days; clients get the last
 1000 entries, and `whiff history -f` and sniff follow it live, with
 nothing missed between the snapshot and the stream. Older entries, and
 whatever else whiff.db holds, are in `whiff dump history` (`whiff dump`
-lists its buckets), an entry a line, its key then its value as puff, for
-grep.
+lists its buckets), its key then its value as puff: an entry a line when
+piped, for grep, and on a terminal broken over lines to fit, as `whiff
+state` is.
 
 ## Limits, for now
 

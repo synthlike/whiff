@@ -54,7 +54,9 @@ const usage = `usage:
   whiff services service          one service in full: its file, last message, faults, inbox and timers; an agent's turns and spend
   whiff ls                        list every address's functions and their marks, each agent session's mode, then the :read overrides
   whiff state service             print a service's state, as it last committed it
-  whiff dump [bucket]             list whiff.db's buckets, or print one's entries, a line each: key value
+                                  (broken over lines to fit, on a terminal)
+  whiff dump [bucket]             list whiff.db's buckets, or print one's entries: key value,
+                                  a line each when piped, for grep; broken over lines on a terminal
   whiff reset service             forget a service's stored state, so it starts from its :state again
   whiff mcp [--dir path]          serve whiff to an agent over MCP on stdin and stdout, as :agent/<n>, its calls from path
   whiff sandbox check             say which container runtime confines sandboxed commands, and whether its image is built
@@ -146,7 +148,7 @@ func run(args []string, dir, services string, stdout, stderr io.Writer) int {
 	case len(args) == 2 && (args[0] == "reset" || args[0] == "state"):
 		return serviceOp(dir, args[0], args[1], stdout, stderr)
 	case len(args) <= 2 && len(args) >= 1 && args[0] == "dump":
-		return text(dir, func(c *rpc.Client) (string, error) { return dump(c, args[1:]) }, stdout, stderr)
+		return text(dir, func(c *rpc.Client) (string, error) { return dump(c, args[1:], prettyWidth(stdout)) }, stdout, stderr)
 	case len(args) == 1 && args[0] == "mcp":
 		return mcpRun(dir, stderr)
 	case len(args) == 3 && args[0] == "mcp" && args[1] == "--dir":
@@ -346,6 +348,8 @@ func result(op string, resp rpc.Response, stdout, stderr io.Writer) int {
 			io.WriteString(stdout, text)
 		} else if s, ok := r.At(0).(puff.String); ok {
 			fmt.Fprintln(stdout, string(s))
+		} else if w := prettyWidth(stdout); op == "state" && w > 0 {
+			fmt.Fprintln(stdout, puff.PrintPretty(r.At(0), 0, w))
 		} else {
 			fmt.Fprintln(stdout, puff.Print(r.At(0)))
 		}
@@ -683,9 +687,10 @@ func text(dir string, get func(*rpc.Client) (string, error), stdout, stderr io.W
 }
 
 // dump is whiff dump's output: with no bucket, each bucket in whiff.db
-// and how many entries it holds; with one, its entries, a line each, its
-// key and its value printed as puff, for grep.
-func dump(c *rpc.Client, bucket []string) (string, error) {
+// and how many entries it holds; with one, its entries, its key and its
+// value printed as puff, a line each for grep, or, if width isn't 0,
+// pretty, as dumpEntry has it.
+func dump(c *rpc.Client, bucket []string, width int) (string, error) {
 	expr := "(store/buckets)"
 	if len(bucket) == 1 {
 		expr = "(store/dump " + puff.Print(puff.String(bucket[0])) + ")"
@@ -722,9 +727,37 @@ func dump(c *rpc.Client, bucket []string) (string, error) {
 	entries := r.At(0).(puff.Vector)
 	for i := range entries.Len() {
 		kv := entries.At(i).(puff.Vector)
-		b.WriteString(puff.Print(kv.At(0)) + " " + puff.Print(kv.At(1)) + "\n")
+		b.WriteString(dumpEntry(kv.At(0), kv.At(1), width) + "\n")
 	}
 	return b.String(), nil
+}
+
+// dumpEntry is an entry of whiff dump: key, then its value, on one line if
+// width is 0; else the value pretty within width, after a short key, as an
+// id, or on the lines below a long one, as a timer's [due id].
+func dumpEntry(key, val puff.Value, width int) string {
+	k := puff.Print(key)
+	switch {
+	case width == 0:
+		return k + " " + puff.Print(val)
+	case len(k) <= 20:
+		return k + " " + puff.PrintPretty(val, len(k)+1, width)
+	default:
+		return k + "\n  " + puff.PrintPretty(val, 2, width)
+	}
+}
+
+// prettyWidth is how wide w is, if it is a terminal, for puff values
+// printed there to be pretty in; else 0, for a value a line, for grep.
+func prettyWidth(w io.Writer) int {
+	f, ok := w.(*os.File)
+	if !ok || !terminal(f) {
+		return 0
+	}
+	if cols, _, err := term.GetSize(int(f.Fd())); err == nil && cols > 0 {
+		return cols
+	}
+	return 80
 }
 
 // stop stops the daemon, whatever protocol it speaks.
