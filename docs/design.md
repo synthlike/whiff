@@ -460,7 +460,9 @@ internet and, under Podman, the host's servers that listen on every
 interface. What a command writes in its directory is the agent's work, as
 its file tools' is: the review gate and git cover that, not the sandbox,
 and a repository's own hooks or config written there run on the host
-when you use git in it. A worktree's command can read all of its
+when you use git in it. whiff's own git in a pipeline run's worktree
+doesn't follow its `.git`, which the developer can rewrite to name a
+gitdir of its own: it uses the gitdir whiff made with the worktree. A worktree's command can read all of its
 repository's `.git`: other branches, and its config, with any
 credential written in a remote's URL. huff's own calls to its provider leave from the host, by design.
 Agents on `claude -p` aren't sandboxed: their shell still reaches the

@@ -270,3 +270,106 @@ func TestPipelineSandbox(t *testing.T) {
 	}
 	historyHas(t, c, `(ok {:exit 0 :stderr "" :stdout "Linux\nwhiff/1\n"})`)
 }
+
+// TestPipelineGitRedirect has a dev, with its file tools only, plant a
+// .git in its worktree that names a gitdir of its own, whose config runs
+// a command when git looks at the tree. The pipeline runs git on the host
+// there after the dev's turn (add, diff, commit), so if git followed the
+// planted .git, the dev's command would run unconfined, sandbox or not.
+// The pipeline's git uses the worktree's real gitdir instead: the command
+// never runs, and the planted files are only the dev's work.
+func TestPipelineGitRedirect(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	src, err := os.ReadFile(filepath.Join("..", "..", "services", "pipeline.puff"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := tempDir(t)
+	withHuff(t, dir)
+	marker := filepath.Join(dir, "PWNED")
+
+	// The dev writes the gitdir and the .git naming it; a reviewer approves.
+	files := [][2]string{
+		{"evil/HEAD", "ref: refs/heads/main\n"},
+		{"evil/objects/info/keep", ""},
+		{"evil/refs/heads/keep", ""},
+		{"evil/config", "[core]\n\trepositoryformatversion = 0\n\tfsmonitor = touch " + marker + "\n"},
+		{".git", "gitdir: evil\n"},
+	}
+	var calls []string
+	for i, f := range files {
+		args, _ := json.Marshal(map[string]string{"file_path": f[0], "content": f[1]})
+		call, _ := json.Marshal(map[string]any{"id": "c" + strconv.Itoa(i), "type": "function",
+			"function": map[string]string{"name": "Write", "arguments": string(args)}})
+		calls = append(calls, string(call))
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		var req struct {
+			Messages []struct{ Role string }
+			Tools    []struct{ Function struct{ Name string } }
+		}
+		json.Unmarshal(b, &req)
+		reply := func(content string) {
+			text, _ := json.Marshal(content)
+			io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":`+string(text)+`},"finish_reason":"stop"}],"usage":{"prompt_tokens":9,"completion_tokens":3,"cost":0.001}}`)
+		}
+		switch {
+		case len(req.Tools) == 0:
+			reply("Fine.\nSUBJECT: Add files\nVERDICT: approve")
+		case req.Messages[len(req.Messages)-1].Role == "user":
+			io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[`+strings.Join(calls, ",")+
+				`]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":9,"completion_tokens":3,"cost":0.001}}`)
+		default:
+			reply("Done.")
+		}
+	}))
+	defer srv.Close()
+	t.Setenv("WHIFF_LOCAL_URL", srv.URL)
+
+	writeServices(t, dir, map[string]string{"pipeline": string(src)})
+	start(t, dir)
+	c := dial(t, dir)
+	if _, err := c.Sub("pipeline/done"); err != nil {
+		t.Fatal(err)
+	}
+	repo := filepath.Join(dir, "repo")
+	os.Mkdir(repo, 0o700)
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"commit", "-q", "--allow-empty", "-m", "first"}} {
+		cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	for _, k := range []string{"GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"} {
+		t.Setenv(k, "t")
+	}
+	for _, k := range []string{"GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"} {
+		t.Setenv(k, "t@example.com")
+	}
+
+	resp, err := c.Message("call", "pipeline/start-on", `["`+repo+`" "main" "add files" ["true"] {:dev "local/fake" :reviewer "local/fake"}]`, repo)
+	if err != nil || resp.Value != "(ok 1)" {
+		t.Fatalf("start-on = %s %s %v", resp.Value, resp.Error, err)
+	}
+	select {
+	case e := <-c.Events():
+		if !strings.Contains(e.Value, ":status :ready") {
+			t.Errorf("done = %s", e.Value)
+		}
+	case <-time.After(2 * time.Minute):
+		h, _ := historyOf(c)
+		t.Fatalf("no :pipeline/done; history:\n%s", h)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Error("the pipeline's git ran a command from the dev's planted gitdir")
+	}
+	// The planted gitdir is committed as the dev's work, for review.
+	out, err := exec.Command("git", "-C", repo, "show", "--stat", "--format=", "whiff/1").CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "evil/config") {
+		t.Errorf("whiff/1's commit = %s %v", out, err)
+	}
+}

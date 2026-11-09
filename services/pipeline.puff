@@ -135,6 +135,20 @@
 
   (def (git dir args) (proc/output (vector/concat ["git" "-C" dir] args)))
 
+  ; in runs git in run's worktree as its own gitdir, never as the .git
+  ; there says: the dev can write that file, and a gitdir it planted
+  ; would have git run what its config says (core.fsmonitor, say) here,
+  ; on the host, out of any sandbox. whiff keeps the gitdir from when it
+  ; made the worktree, before any dev ran; a run from before it did has
+  ; its worktree's, by name, in the repository's .git.
+  (def (in run args)
+    (let [{:dir dir :repo repo} run
+          gitdir (match (map/get-or run :gitdir "")
+                   ["" (path/join (string/trim (try (git repo ["rev-parse" "--path-format=absolute" "--git-common-dir"])))
+                         "worktrees" (path/base dir))]
+                   [g g])]
+      (git dir (vector/concat [(str "--git-dir=" gitdir) (str "--work-tree=" dir)] args))))
+
   ; heard is a publish's result, r, as one a run goes on after: a refused
   ; publish (nobody reviews, say) mustn't leave a run where it was.
   (def (heard r) (or-else r :unheard))
@@ -249,11 +263,11 @@
   ; named are the files in the repository at dir that task names by
   ; path, as README.md, with what they hold with the change: [[path
   ; text]], the first 5, each cut to 20000 characters.
-  (def (named dir task)
-    (let [hits (vector/filter (string/lines (or-else (git dir ["ls-files"]) ""))
+  (def (named run task)
+    (let [hits (vector/filter (string/lines (or-else (in run ["ls-files"]) ""))
                  (fn (p) (and (not (= p "")) (string/contains? task p))))]
       (vector/map (vector/slice hits 0 (min 5 (vector/length hits)))
-        (fn (p) [p (head (or-else (git dir ["show" (str ":" p)]) "") 20000)]))))
+        (fn (p) [p (head (or-else (in run ["show" (str ":" p)]) "") 20000)]))))
 
   ; files-text is named's files for the reviewer.
   (def (files-text files)
@@ -275,13 +289,14 @@
       [_ ["claude" "-p" "--strict-mcp-config" "--tools" "" "--no-session-persistence" "--output-format" "json" "--model" model]]))
 
   (def (review state n checked)
-    (let [{:dir dir :base base :task task} (run-of state n)
-          model (map/get-or (run-of state n) :reviewer-model "")
-          _ (try (git dir ["add" "-A"]))
-          diff (try (git dir ["diff" "--cached" base]))]
+    (let [run (run-of state n)
+          {:dir dir :base base :task task} run
+          model (map/get-or run :reviewer-model "")
+          _ (try (in run ["add" "-A"]))
+          diff (try (in run ["diff" "--cached" base]))]
       (if (= diff "")
         (finish state n :failed "The developer changed nothing.")
-        (let [input (str review-prompt "\n\nTask: " task "\n\nThe check " (check-text checked) (files-text (named dir task)) "\n\nThe diff:\n" diff)
+        (let [input (str review-prompt "\n\nTask: " task "\n\nThe check " (check-text checked) (files-text (named run task)) "\n\nThe diff:\n" diff)
               id (try (submitted (call :jobs/run (reviewer-cmd model)
                                    {:stdin input :dir dir :as :text :timeout 10m :stream (huff? model)})))]
           (ok (waiting (set-run state n {:checked checked :diff diff}) n :review id))))))
@@ -310,17 +325,18 @@
   (test "a check's output is cut to its last 4000 characters"
     (= [(string/length (tail (string/join (vector/map (vector/range 0 5000) (fn (i) "x")) ""))) (tail "abc")] [4000 "abc"]))
 
-  ; commit commits the run's work in dir, from base, as task. whiff dying
+  ; commit commits run's work, from its base, as its task. whiff dying
   ; between the commit and the run's state being stored has it run again:
   ; the review saw a diff, so a clean tree past base has it already, and it
   ; isn't committed twice.
-  (def (commit dir base task review)
-    (let [clean (= (try (git dir ["status" "--porcelain"])) "")
-          head (try (git dir ["rev-parse" "HEAD"]))
-          from (try (git dir ["rev-parse" base]))]
+  (def (commit run review)
+    (let [{:base base :task task} run
+          clean (= (try (in run ["status" "--porcelain"])) "")
+          head (try (in run ["rev-parse" "HEAD"]))
+          from (try (in run ["rev-parse" base]))]
       (if (and clean (not (= head from)))
         (ok :committed)
-        (git dir ["commit" "-q" "-m" (subject task review) "-m" task]))))
+        (in run ["commit" "-q" "-m" (subject task review) "-m" task]))))
 
   (def (reviewed state n text)
     (let [{:round round :checked checked :dir dir :task task :branch branch :base base} (run-of state n)
@@ -330,7 +346,7 @@
           approved (string/contains? text "VERDICT: approve")]
       (cond
         [(and (passed? checked) approved)
-         (do (try (commit dir base task text))
+         (do (try (commit (run-of state n) text))
            (finish state n :ready (str "Committed on " branch " in " dir ", after " round " rounds. The last review:\n\n" text)))]
         [(>= round limit)
          (finish state n :gave-up (str "Not approved after " round " rounds; the work is in " dir ". The last review:\n\n" text))]
@@ -567,6 +583,8 @@
           _ (try (file/mkdir home))
           n (try (worktree repo (map/get-or state :next 1) base))
           dir (path/join home (str (path/base repo) "-" n))
+          ; Its gitdir, as in uses, from before any dev wrote there.
+          gitdir (string/trim (try (git dir ["rev-parse" "--absolute-git-dir"])))
           branch (str "whiff/" n)
           session (uuid/new)
           rest (vector/slice bases 1 (vector/length bases))
@@ -574,7 +592,7 @@
                    (git dir (vector/concat ["-c" "user.name=whiff" "-c" "user.email=whiff@localhost" "merge" "-q" "--no-edit" "-m" (str "Merge " (string/join rest ", "))] rest)))
           ; Its base is where the dev starts: the merge, if there is one.
           base (match merged [(ok _) (string/trim (or-else (git dir ["rev-parse" "HEAD"]) base))] [_ base])
-          run (map/merge {:task task :repo repo :dir dir :branch branch :base base :check check :round 1 :session session :step :starting :quiet quiet :started (time/now)} extra)
+          run (map/merge {:task task :repo repo :dir dir :gitdir gitdir :branch branch :base base :check check :round 1 :session session :step :starting :quiet quiet :started (time/now)} extra)
           state (-> state (map/set :next (+ n 1)) (map/set-in [:runs n] run))]
       ; A run that can't start leaves no worktree or branch behind.
       (match (match merged [(ok _) (dev state n (str (match (map/get-or extra :lead "") ["" ""] [l (ask-text l n)]) "Task: " task))] [e e])
