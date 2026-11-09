@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -99,6 +100,27 @@ func TestLocalBash(t *testing.T) {
 	}
 	if w, err := words(`go test -run 'TestA B' "./..."`); err != nil || strings.Join(w, "|") != "go|test|-run|TestA B|./..." {
 		t.Errorf("words = %q %v", w, err)
+	}
+}
+
+// wrap is a Runner that runs each command through echo, so its output is
+// the command it was given and where.
+type wrap struct{}
+
+func (wrap) Command(ctx context.Context, dir string, argv []string) *exec.Cmd {
+	return exec.CommandContext(ctx, "echo", append([]string{"in", dir + ":"}, argv...)...)
+}
+
+// TestLocalRunner: Bash's allowed commands go through its Runner, as a
+// sandbox makes them; refused ones never reach it.
+func TestLocalRunner(t *testing.T) {
+	dir := t.TempDir()
+	l := &Local{Dir: dir, Names: []string{"Bash"}, Allow: []string{"go test:*"}, Runner: wrap{}}
+	if out, isErr := call(t, l, "Bash", map[string]any{"command": "go test ./..."}); isErr || out != "in "+dir+": go test ./...\n" {
+		t.Errorf("through the runner = %q %v", out, isErr)
+	}
+	if out, isErr := call(t, l, "Bash", map[string]any{"command": "rm -rf /"}); !isErr || !strings.Contains(out, "isn't allowed") {
+		t.Errorf("a refused command = %q %v", out, isErr)
 	}
 }
 

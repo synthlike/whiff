@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/synthlike/whiff/internal/puff"
+	"github.com/synthlike/whiff/internal/sandbox"
 )
 
 // tailSize bounds what a job keeps of each output stream: its end.
@@ -308,8 +309,7 @@ func (d *daemon) spawn(j *job) (*proc, error) {
 		p.ctx, p.cancel = context.WithCancel(j.ctx)
 	}
 	argv := j.argv()
-	cmd := exec.CommandContext(p.ctx, argv[0], argv[1:]...)
-	cmd.Dir = j.opts.dir
+	cmd := sandbox.Direct{}.Command(p.ctx, j.opts.dir, argv)
 	cmd.Stdout, cmd.Stderr = &p.stdout, &p.stderr
 	if p.stream {
 		// A first attempt has its id only once it has started, on the route

@@ -15,6 +15,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/synthlike/whiff/internal/sandbox"
 )
 
 // Local is the tools of a model that works on files: claude -p's Read,
@@ -26,9 +28,10 @@ import (
 // pipes, redirections, $ and ; are refused.
 type Local struct {
 	Dir     string
-	Names   []string      // the tools it offers, of LocalTools
-	Allow   []string      // the commands Bash may run
-	Timeout time.Duration // what a command may take, 10m if 0
+	Names   []string       // the tools it offers, of LocalTools
+	Allow   []string       // the commands Bash may run
+	Timeout time.Duration  // what a command may take, 10m if 0
+	Runner  sandbox.Runner // makes Bash's commands; on the host if nil
 
 	Denied []string // the Bash commands it refused, as "go run ."
 }
@@ -472,9 +475,11 @@ func (l *Local) bash(ctx context.Context, command string) (string, bool) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, ws[0], ws[1:]...)
-	cmd.Dir = l.Dir
-	out, err := cmd.CombinedOutput()
+	runner := l.Runner
+	if runner == nil {
+		runner = sandbox.Direct{}
+	}
+	out, err := runner.Command(ctx, l.Dir, ws).CombinedOutput()
 	s := string(out)
 	if len(s) > outputMax {
 		s = fmt.Sprintf("(its first %d characters are cut)\n", len(s)-outputMax) + s[len(s)-outputMax:]
