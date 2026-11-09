@@ -54,6 +54,7 @@ Local paths are from the host file's folder. plan exits 0 if each host
 matches, 2 if one differs, 1 on an error. The file runs :read, so it
 can't change anything itself. whiff comes from whiff.puff in waft's lib
 folder (cmd/waft/lib), copied next to the host file: see its comments.
+The guide is docs/waft.md in whiff's repository.
 `
 
 func main() {

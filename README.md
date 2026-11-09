@@ -228,6 +228,7 @@ evolving; the included services are used to develop whiff itself.
 - [Design](docs/design.md): messages, persistence, supervision and the review gate
 - [Process management](docs/procs.md): dev servers and containers
 - [Tasks](docs/tasks.md): work that answers later
+- [waft](docs/waft.md): hosts described in puff, planned and applied over ssh
 - [Standard library](docs/stdlib.md): puff and daemon functions
 
 ## Inspirations
