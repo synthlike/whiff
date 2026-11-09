@@ -181,8 +181,9 @@ same checkout with `go install ./cmd/...` and restart sniff.
   whiff: install the same one on both, then `whiff stop` on the peer.
 
 A call to a peer that is still connecting, as whiff has just started,
-waits up to 15 seconds for it. One to a peer that is offline fails at
-once with `(err {:kind :offline})`, which says why.
+or that was connected a moment ago, waits up to 15 seconds for it. One to
+a peer that has been offline for longer fails at once with `(err {:kind
+:offline})`, which says why.
 
 ## A command's argument has the wrong type
 

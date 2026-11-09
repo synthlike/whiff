@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/synthlike/whiff/internal/puff"
 	"github.com/synthlike/whiff/internal/rpc"
 )
 
@@ -387,4 +388,64 @@ func TestFarSync(t *testing.T) {
 	eventually(t, "offline, how old", func() string {
 		return fmt.Sprint(strings.Contains(call(c, "call", "peers/view", "[]"), "its history up to"))
 	}, "true")
+}
+
+// TestFarValues sends every kind of puff value to a peer and back, as a
+// call's result, a call's arguments, and a task's, kept across a restart
+// here: each comes back as it went, as plain data, but for the targets
+// of a view's actions, which are made far.
+func TestFarValues(t *testing.T) {
+	set(t, &peerWait, 20*time.Millisecond)
+	set(t, &peerWaitMost, 200*time.Millisecond)
+	dir, far := tempDir(t), tempDir(t)
+	all := `[1 -2 3.5 "tab\tquote\" é 🙂\n" :kw :a@b/c #t #f 250ms 1d 2026-11-05T12:00:00Z 2026-11-05T12:00:00.123456789Z ` +
+		`(some 1) (none) (ok [1]) (err {:kind :x :message "m"}) {:nested [{:a {}} []] "k" 2}]`
+	writeServices(t, far, map[string]string{"vals": `(service vals
+  (on (echo x) :read "Returns x." (ok x))
+  (on (all) :read "Every kind of value." (ok ` + all + `))
+  (on (view) :read "A view." (ok (view/items [{:label "l" :action [:vals/echo 1]}])))
+  (ask (q x) "Holds x."))`})
+	done := start(t, dir)
+	c := dial(t, dir)
+	start(t, far)
+	fc := dial(t, far)
+	call := func(c *rpc.Client, op, target, args string) string {
+		t.Helper()
+		resp, err := c.Message(op, target, args, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.Value
+	}
+	bridge := fmt.Sprintf(`{:cmd ["env" "WHIFF_TEST_BRIDGE=%s" %q]}`, rpc.SocketPath(far), os.Args[0])
+	call(c, "call", "peers/add", `["far" `+bridge+`]`)
+	eventually(t, "far connects", func() string {
+		return fmt.Sprint(strings.Contains(call(c, "call", "peers/list", "[]"), ":status :connected"))
+	}, "true")
+
+	there := call(fc, "call", "vals/all", "[]")
+	if got := call(c, "call", "vals@far/all", "[]"); got != there {
+		t.Errorf("vals@far/all =\n%s\nthere it is\n%s", got, there)
+	}
+	want, _ := puff.ReadValue(all)
+	if got := call(c, "call", "vals@far/echo", "["+all+"]"); got != puff.Print(puff.Ok(want)) {
+		t.Errorf("vals@far/echo =\n%s\nwant\n%s", got, puff.Print(puff.Ok(want)))
+	}
+	if got, there := call(c, "call", "vals@far/view", "[]"), call(fc, "call", "vals/view", "[]"); got != strings.Replace(there, "[:vals/echo 1]", "[:vals@far/echo 1]", 1) {
+		t.Errorf("vals@far/view = %s; there %s", got, there)
+	}
+
+	// A task's arguments and result, kept here across a restart.
+	id := pendingOf(t, call(c, "call", "vals@far/q", "["+all+"]"))
+	stopDaemon(t, c, done)
+	start(t, dir)
+	c = dial(t, dir)
+	if text, _ := c.Inbox("vals@far"); !strings.Contains(text, puff.Print(want)[1:len(puff.Print(want))-1]) {
+		t.Errorf("vals@far's inbox after a restart:\n%s", text)
+	}
+	text, _ := fc.Inbox("vals")
+	call(fc, "reply", "", "["+strings.Fields(text)[0]+" (ok "+all+")]")
+	if got := call(c, "wait", "", "["+id+"]"); got != puff.Print(puff.Ok(want)) {
+		t.Errorf("wait %s =\n%s\nwant\n%s", id, got, puff.Print(puff.Ok(want)))
+	}
 }

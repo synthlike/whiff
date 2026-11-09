@@ -153,29 +153,31 @@ type caller struct {
 
 // state is what the route goroutine owns.
 type state struct {
-	db       *bbolt.DB // whiff.db: see store.go
-	log      io.Writer
-	addrs    map[string]*service
-	history  []entry         // the last historySize entries, oldest first
-	unstored []entry         // history the writer hasn't taken: see record
-	dropped  int             // entries left out of unstored since it was last taken
-	kick     chan<- struct{} // wakes the history writer
-	asked    []*asked        // every service's inbox, oldest first
-	timers   []*timer        // what load read, until resume takes it up
-	lost     []*job          // what load read, until resume takes it up
-	owed     []answered      // results for services that aren't loaded, until they are
-	cut      []ticket        // what load read, until resume takes it up: accepted as whiff went
-	jobs     map[int64]*job
-	nextID   int64                       // the last id given to a message answered later, or a job
-	lastMsg  int64                       // the last id given to a message or an eval in history: see msgID
-	waiters  map[int64][]chan puff.Value // whiff waits, by the id they wait for
-	subs     map[*watcher]bool           // clients' subscriptions: whiff sub
-	tracers  map[*tracer]bool            // clients following history: whiff history -f
-	modes    map[string]*mode            // agent sessions that aren't gated, by address
-	grants   map[string]grant            // agent turns' session tokens: see grant
-	health   map[string]*health          // by service file's name: see whiff services
-	peers    map[string]*peer            // other machines' whiffs, by name: see peers.go
-	keyed    map[string]chan struct{}    // submission keys whose message is running, closed as it ends: see once
+	db         *bbolt.DB // whiff.db: see store.go
+	log        io.Writer
+	addrs      map[string]*service
+	history    []entry         // the last historySize entries, oldest first
+	unstored   []entry         // history the writer hasn't taken: see record
+	dropped    int             // entries left out of unstored since it was last taken
+	kick       chan<- struct{} // wakes the history writer
+	asked      []*asked        // every service's inbox, oldest first
+	timers     []*timer        // what load read, until resume takes it up
+	lost       []*job          // what load read, until resume takes it up
+	owed       []answered      // results for services that aren't loaded, until they are
+	cut        []ticket        // what load read, until resume takes it up: accepted as whiff went
+	jobs       map[int64]*job
+	nextID     int64                       // the last id given to a message answered later, or a job
+	lastMsg    int64                       // the last id given to a message or an eval in history: see msgID
+	waiters    map[int64][]chan puff.Value // whiff waits, by the id they wait for
+	subs       map[*watcher]bool           // clients' subscriptions: whiff sub
+	tracers    map[*tracer]bool            // clients following history: whiff history -f
+	modes      map[string]*mode            // agent sessions that aren't gated, by address
+	grants     map[string]grant            // agent turns' session tokens: see grant
+	health     map[string]*health          // by service file's name: see whiff services
+	peers      map[string]*peer            // other machines' whiffs, by name: see peers.go
+	keyed      map[string]chan struct{}    // submission keys whose message is running, closed as it ends: see once
+	checking   map[int64]bool              // tasks following a peer's whose result is being asked for: see checkFar
+	checkAgain map[int64]bool              // of those, the ones to ask about again once that is done
 }
 
 // grant is what a job's session token lets its whiff mcp claim: the
@@ -206,7 +208,7 @@ type watcher struct {
 func (d *daemon) route() {
 	kick, final := make(chan struct{}, 1), make(chan batch, 1)
 	d.wg.Go(func() { d.writeHistory(kick, final) })
-	st := &state{db: d.db, log: d.log, kick: kick, addrs: map[string]*service{}, jobs: map[int64]*job{}, waiters: map[int64][]chan puff.Value{}, peers: map[string]*peer{}, keyed: map[string]chan struct{}{},
+	st := &state{db: d.db, log: d.log, kick: kick, addrs: map[string]*service{}, jobs: map[int64]*job{}, waiters: map[int64][]chan puff.Value{}, peers: map[string]*peer{}, keyed: map[string]chan struct{}{}, checking: map[int64]bool{}, checkAgain: map[int64]bool{},
 		subs: map[*watcher]bool{}, tracers: map[*tracer]bool{}, modes: map[string]*mode{}, grants: map[string]grant{}, health: map[string]*health{}}
 	defer func() {
 		// Where each peer's history is up to: followFar can't store it
@@ -349,7 +351,12 @@ func (d *daemon) request(ctx context.Context, cur *caller, addr string, m messag
 		path.WriteString(":" + addr)
 		return puff.Errorf("cycle", "%s would wait for itself: %s", target, path.String()), nil
 	}
-	wait, cancel := context.WithTimeout(ctx, d.callTimeout)
+	// A peer's function has the call's time once its peer is connected.
+	timeout := d.callTimeout
+	if _, _, far := farAddr(addr); far {
+		timeout += farConnectWait
+	}
+	wait, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	m.ctx = wait
 	m.chain = cur.chain
@@ -364,7 +371,7 @@ func (d *daemon) request(ctx context.Context, cur *caller, addr string, m messag
 		if ctx.Err() != nil {
 			return nil, errors.New("cancelled")
 		}
-		return puff.Errorf("timeout", "%s didn't reply within %v", target, d.callTimeout), nil
+		return puff.Errorf("timeout", "%s didn't reply within %v", target, timeout), nil
 	}
 }
 

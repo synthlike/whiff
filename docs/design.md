@@ -496,8 +496,9 @@ reaches the peer is what `whiff call` would send there, as you.
   `:git@vps/changed` go to the peer: the peer's name after the address,
   before the last `/`. One hop only: a peer's peers aren't
   reached through it. A peer that is offline answers `(err {:kind
-  :offline})` at once, saying why; one still connecting is waited for a
-  while. A connection that doesn't answer within a minute, as ssh waiting
+  :offline})` at once, saying why; one connecting, or that was connected a
+  moment ago, is waited for up to 15 seconds, on top of the call's own
+  time. A connection that doesn't answer within a minute, as ssh waiting
   for an agent's approval, is given up and tried again.
 - **It goes in its origin.** An agent's message reaches the peer as an
   agent's, so the peer's review gate holds a write for review there, as it
@@ -534,6 +535,10 @@ reaches the peer is what `whiff call` would send there, as you.
   :pipeline@vps/changed (v) ...)`, and a sniff page of the peer's view,
   `/view/pipeline@vps/show`, keeps up with it. A page fetches a peer's
   function only if the peer says it is `:read`.
+- **Values travel as data.** Results, Options, times to the nanosecond,
+  durations, nested maps and views go to a peer and come back as they
+  went, as a call's arguments, its result, or a task's kept across a
+  restart; only a view's action targets change, made far.
 - **Its queues are yours here.** `:review/pending` and `:me/inbox` have
   each connected peer's items after this whiff's, each label after the
   peer's name and its actions far, so sniff's Review and Inbox, and their

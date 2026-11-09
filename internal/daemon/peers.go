@@ -314,9 +314,11 @@ func peerItem(v puff.Value, now time.Time) puff.Value {
 		parts = append(parts, d)
 	}
 	if status != "connected" {
+		_, known := puff.Field(m, "history").(puff.Time)
 		if seen, ok := puff.Field(m, "seen").(puff.Time); ok {
 			parts = append(parts, "seen "+roughly(now.Sub(seen.Go()))+" ago")
-		} else {
+		} else if !known {
+			// One added again has been: its history says how long ago.
 			parts = append(parts, "never connected")
 		}
 		// What it shows of the peer is as old as this.

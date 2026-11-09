@@ -67,6 +67,17 @@ func splitFar(name string) (local, peer string, ok bool) {
 // goes before it answers: it has a submission key, so it runs there once.
 const farTries = 3
 
+// coming says whether p, not connected, is likely to be soon, so a
+// message waits for it: it is connecting, as whiff has just started, or
+// was connected a moment ago, and goes on trying.
+func (p *peer) coming() bool {
+	return p.status == "connecting" || !p.seen.IsZero() && time.Since(p.seen) < farRecent
+}
+
+// farRecent is how lately a peer that isn't connected was, for a message
+// to wait for it rather than fail at once.
+var farRecent = time.Minute
+
 // farConnectWait is how long a message waits for a peer that is
 // connecting, before it goes.
 var farConnectWait = 15 * time.Second
@@ -91,7 +102,7 @@ func (d *daemon) forward(st *state, addr string, m message) puff.Value {
 		res = puff.Errorf("no-address", "%s can't go to a peer", m.to(addr))
 	case p == nil:
 		res = puff.Errorf("no-peer", "no peer %s, for :%s: whiff peer add %s user@host", name, m.to(addr), name)
-	case p.client == nil && p.status != "connecting":
+	case p.client == nil && !p.coming():
 		why := ""
 		if p.err != "" {
 			why = ": " + p.err
@@ -167,7 +178,7 @@ func (d *daemon) atPeer(req rpc.Request) rpc.Response {
 			if p.err != "" {
 				why += ": " + p.err
 			}
-			connecting = p.status == "connecting"
+			connecting = p.coming()
 		default:
 			c = p.client
 		}
@@ -505,11 +516,35 @@ func (d *daemon) checkFar(name string, c *rpc.Client, ids []int64) {
 			c = p.client
 		}
 		for _, a := range st.asked {
-			if _, peer, ok := farAddr(a.addr); ok && a.remote != 0 && peer == name && (ids == nil || slices.Contains(ids, a.remote)) {
-				fs = append(fs, followed{a.id, a.remote})
+			// One being checked already, as its event comes as it is
+			// followed, isn't asked about twice at once: it is asked
+			// again once that check is done, as it may have ended since.
+			if _, peer, ok := farAddr(a.addr); !ok || a.remote == 0 || peer != name || ids != nil && !slices.Contains(ids, a.remote) {
+				continue
 			}
+			if st.checking[a.id] {
+				st.checkAgain[a.id] = true
+				continue
+			}
+			fs = append(fs, followed{a.id, a.remote})
+			st.checking[a.id] = true
 		}
 	})
+	defer func() {
+		var again []int64
+		d.do(func(st *state) {
+			for _, f := range fs {
+				delete(st.checking, f.id)
+				if st.checkAgain[f.id] {
+					delete(st.checkAgain, f.id)
+					again = append(again, f.remote)
+				}
+			}
+		})
+		if len(again) > 0 {
+			d.checkFar(name, nil, again)
+		}
+	}()
 	if c == nil {
 		return
 	}
