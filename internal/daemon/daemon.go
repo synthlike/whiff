@@ -302,6 +302,13 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 			}
 			held, resp = d.claim(l, req)
 		case "history":
+			if req.All {
+				var err error
+				if resp.History, err = d.allHistory(); err != nil {
+					resp.Error = err.Error()
+				}
+				break
+			}
 			d.do(func(st *state) { resp.History = st.entries() })
 		case "trace":
 			if tr != nil {

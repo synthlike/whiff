@@ -583,8 +583,9 @@
           _ (try (file/mkdir home))
           n (try (worktree repo (map/get-or state :next 1) base))
           dir (path/join home (str (path/base repo) "-" n))
-          ; Its gitdir, as in uses, from before any dev wrote there.
-          gitdir (string/trim (try (git dir ["rev-parse" "--absolute-git-dir"])))
+          ; Its gitdir, as in uses, from before any dev wrote there; ""
+          ; has in find it by name, rather than leave the worktree behind.
+          gitdir (string/trim (or-else (git dir ["rev-parse" "--absolute-git-dir"]) ""))
           branch (str "whiff/" n)
           session (uuid/new)
           rest (vector/slice bases 1 (vector/length bases))

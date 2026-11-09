@@ -284,6 +284,42 @@ func (st *state) entries() []rpc.Entry {
 	return es
 }
 
+// allHistory is every entry of history whiff.db holds, the last 30 days,
+// oldest first, and those recorded since that it hasn't stored yet: the
+// entries in memory after the last stored one, matched by how it is
+// stored. One it can't read is left out.
+func (d *daemon) allHistory() ([]rpc.Entry, error) {
+	var es []rpc.Entry
+	last := ""
+	err := d.db.View(func(tx *bbolt.Tx) error {
+		return tx.Bucket(historyBucket).ForEach(func(_, v []byte) error {
+			if e, err := storedEntry(string(v)); err == nil {
+				es = append(es, e.rpc())
+				last = string(v)
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	var recent []entry
+	d.do(func(st *state) { recent = slices.Clone(st.history) })
+	from := 0
+	if last != "" {
+		for i := len(recent) - 1; i >= 0; i-- {
+			if puff.Print(recent[i].stored()) == last {
+				from = i + 1
+				break
+			}
+		}
+	}
+	for _, e := range recent[from:] {
+		es = append(es, e.rpc())
+	}
+	return es, nil
+}
+
 // trace sends l's client each new entry of history until the connection
 // ends. The Response holds history so far: taken with the subscription in
 // one step, so no entry is missed or repeated between them.

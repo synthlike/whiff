@@ -39,6 +39,9 @@ type Request struct {
 	// Agent says the client acts for an agent: its messages' origin is
 	// :agent, not :user. eval, call, send, pub.
 	Agent bool `json:"agent,omitempty"`
+	// All asks history for every entry whiff.db holds, the last 30 days,
+	// not only the last 1000.
+	All bool `json:"all,omitempty"`
 	// Token is, for a claim of "agent", an agent turn's session token,
 	// from the job's WHIFF_SESSION: the claim gets the session it names,
 	// fenced to that agent's :can functions.
@@ -524,6 +527,14 @@ func (c *Client) Mode(addr, mode string, services []string, d time.Duration) (Re
 func (c *Client) History() ([]Entry, error) {
 	var resp Response
 	err := c.roundTrip(Request{Op: "history"}, &resp)
+	return resp.History, err
+}
+
+// AllHistory is History with every entry whiff.db holds, the last 30
+// days, not only the last 1000.
+func (c *Client) AllHistory() ([]Entry, error) {
+	var resp Response
+	err := c.roundTrip(Request{Op: "history", All: true}, &resp)
 	return resp.History, err
 }
 

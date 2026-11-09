@@ -3,6 +3,7 @@ package daemon
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"go.etcd.io/bbolt"
 
 	"github.com/synthlike/whiff/internal/puff"
+	"github.com/synthlike/whiff/internal/rpc"
 )
 
 // History survives a restart, and its ids go on from where they were, so
@@ -129,5 +131,68 @@ func TestHistoryPrunedAndCompacted(t *testing.T) {
 	}
 	if _, err := os.Stat(path + ".compact"); !os.IsNotExist(err) {
 		t.Errorf("the compacted copy is left: %v", err)
+	}
+}
+
+// TestAllHistory asks for all of history where whiff.db holds more than
+// the last 1000 entries a client gets otherwise: each comes once, oldest
+// first, the stored ones and those since, stored yet or not.
+func TestAllHistory(t *testing.T) {
+	dir := tempDir(t)
+	services := filepath.Join(dir, "services")
+	db, err := openStore(services)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var es []entry
+	for i := range historySize + 200 {
+		es = append(es, entry{at: time.Now().Add(-time.Hour), kind: "call", id: int64(i + 1), to: "old/f", reply: "(ok 1)"})
+	}
+	if err := storeEntries(db, es, int64(len(es))); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	writeServices(t, dir, map[string]string{"greet": `(service greet
+  (on (hello name) "Greets name." (ok (string/concat "hello, " name))))`})
+	start(t, dir)
+	c := dial(t, dir)
+	for _, who := range []string{"a", "b", "c"} {
+		if _, err := c.Message("call", "greet/hello", `["`+who+`"]`, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Some of what is new may not be stored yet; all of it comes, once.
+	recent, err := c.History()
+	if err != nil || len(recent) != historySize {
+		t.Fatalf("History = %d entries, %v; want the last %d", len(recent), err, historySize)
+	}
+	all, err := c.AllHistory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var old, hellos int
+	for i, e := range all {
+		switch {
+		case e.To == "old/f":
+			if e.ID != int64(old+1) || i != old {
+				t.Fatalf("entry %d is old/f's %d, want its %d, first", i, e.ID, old+1)
+			}
+			old++
+		case e.To == "greet/hello":
+			hellos++
+		}
+	}
+	if old != len(es) || hellos != 3 {
+		t.Errorf("AllHistory has %d stored entries and %d hellos; want %d and 3", old, hellos, len(es))
+	}
+	if !slices.EqualFunc(all[len(all)-len(recent):], recent, func(a, b rpc.Entry) bool { return a.At.Equal(b.At) && a.ID == b.ID && a.Note == b.Note }) {
+		t.Error("AllHistory doesn't end as History does")
+	}
+	// Once all of it is stored, the same again.
+	time.Sleep(3 * historyDelay)
+	again, _ := c.AllHistory()
+	if len(again) != len(all) {
+		t.Errorf("AllHistory, all stored, has %d entries; before, %d", len(again), len(all))
 	}
 }

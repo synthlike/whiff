@@ -45,7 +45,7 @@ const usage = `usage:
   whiff session <agent/n>                what an agent session wrote, and how: held, accepted, trusted or free
   whiff eval <code>                      evaluate puff code in the daemon and print its value
   whiff repl                             evaluate forms as they're typed, in the daemon, keeping what they define
-  whiff history [<query>]                print every message, newest first; only what query matches, if given
+  whiff history [<query>]                print the last 1000 messages, newest first; with query, what it matches of 30 days'
   whiff history -f [<query>]             print the last 10, oldest first, then each new one until stopped
   whiff history -c [<query>]             print it as chains: each message that began one, newest first, then what it led to, indented
                                          query: to:plan from:agent origin:user kind:err 'time:>500ms' mark:write
@@ -496,7 +496,13 @@ func history(dir, flag, query string, stdout, stderr io.Writer) int {
 		return got
 	}
 	if flag != "-f" {
-		es, err := c.History()
+		// A query looks through all of history; without one, the last
+		// 1000 entries are plenty.
+		get := c.History
+		if query != "" {
+			get = c.AllHistory
+		}
+		es, err := get()
 		if err != nil {
 			fmt.Fprintf(stderr, "whiff: %v\n", err)
 			return 1
