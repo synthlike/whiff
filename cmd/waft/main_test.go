@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -420,5 +421,113 @@ func TestDrift(t *testing.T) {
 		if code := run(context.Background(), []string{"plan", path}, &stdout, &stderr, dial); code != tc.want {
 			t.Errorf("plan with %q missing = %d, want %d: %s", tc.out, code, tc.want, stderr.String())
 		}
+	}
+}
+
+// TestLine adds a line, puts it in place of the lines :match finds, and
+// leaves a file that has it as it is.
+func TestLine(t *testing.T) {
+	m := regexp.MustCompile(`^#?PasswordAuthentication`)
+	for _, tc := range []struct {
+		name, content string
+		match         *regexp.Regexp
+		want          string
+	}{
+		{"empty", "", nil, "PasswordAuthentication no\n"},
+		{"there", "a\nPasswordAuthentication no\n", nil, "a\nPasswordAuthentication no\n"},
+		{"added", "a\n", nil, "a\nPasswordAuthentication no\n"},
+		{"replaced", "#PasswordAuthentication yes\nb\nPasswordAuthentication yes\n", m,
+			"PasswordAuthentication no\nb\nPasswordAuthentication no\n"},
+		{"no match", "b\n", m, "b\nPasswordAuthentication no\n"},
+	} {
+		if got := withLine(tc.content, "PasswordAuthentication no", tc.match); got != tc.want {
+			t.Errorf("%s: %q, want %q", tc.name, got, tc.want)
+		}
+	}
+
+	l := &line{path: "/etc/x", text: "b", match: regexp.MustCompile("^b")}
+	for _, tc := range []struct {
+		name string
+		out  string
+		want []string
+	}{
+		{"missing", "", []string{`mkdir -p "$(dirname -- '/etc/x')"`, writeCmd("b\n", "'/etc/x'")}},
+		{"empty", ".\n", []string{writeCmd("b\n", "'/etc/x'")}},
+		{"ok", ".\na\nb\n", nil},
+		{"differs", ".\nbb\n", []string{writeCmd("b\n", "'/etc/x'")}},
+	} {
+		got, err := l.check(context.Background(), &fake{results: []result{{out: tc.out}}})
+		if err != nil || strings.Join(got, "\n") != strings.Join(tc.want, "\n") {
+			t.Errorf("%s: check = %q, %v; want %q", tc.name, got, err, tc.want)
+		}
+	}
+	for _, tc := range []struct{ src, err string }{
+		{`(host "a" [(line "/x" "a\nb")])`, "is more than a line"},
+		{`(host "a" [(line "/x" "a" {:match "("})])`, "line's :match"},
+		{`(host "a" [(file "/x" "a" {:valid "true"})])`, ":valid: want %s in it"},
+	} {
+		if _, err := load(context.Background(), write(t, tc.src)); err == nil || !strings.Contains(err.Error(), tc.err) {
+			t.Errorf("load %s = %v, want %q", tc.src, err, tc.err)
+		}
+	}
+}
+
+// TestValid writes a file beside its place and moves it in only if :valid
+// passes on it; a failing check stops apply with its output.
+func TestValid(t *testing.T) {
+	f := &file{path: "/etc/ssh/sshd_config.d/00-x.conf", content: "a\n", valid: "sshd -t -f %s", common: common{restarts: []string{"ssh"}}}
+	p := "'/etc/ssh/sshd_config.d/00-x.conf'"
+	fix, err := f.check(context.Background(), &fake{results: []result{{out: "abc\nroot 644\n"}}})
+	want := []string{"[ ! -f " + p + " ] || cp -p " + p + " " + p + ".waft",
+		writeCmd("a\n", p+".waft"),
+		"sshd -t -f " + p + ".waft || { rm -f " + p + ".waft; exit 1; }",
+		"mv " + p + ".waft " + p}
+	if err != nil || strings.Join(fix, "\n") != strings.Join(want, "\n") {
+		t.Errorf("check = %q %v\nwant %q", fix, err, want)
+	}
+
+	h := host{dest: "admin@a", resources: []resource{f}}
+	run := &fake{results: []result{{out: "abc\nroot 644\n"}, {code: 1, stderr: "line 1: Bad configuration option: a"}}}
+	var out strings.Builder
+	if _, err := converge(context.Background(), &out, run, h, true); err == nil || !strings.Contains(err.Error(), "Bad configuration option") {
+		t.Errorf("apply = %v", err)
+	}
+	if len(run.ran) != 2 {
+		t.Errorf("ran %d scripts after a failing check, want 2: no restart", len(run.ran))
+	}
+}
+
+// TestHardenedLib uses lib/hardened.puff as its comments say.
+func TestHardenedLib(t *testing.T) {
+	lib, err := os.ReadFile("lib/hardened.puff")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := write(t, `(use "hardened.puff")
+(host "admin@a" [(hardened {:allow ["80/tcp"] :root-login "no"})])`)
+	os.WriteFile(filepath.Join(filepath.Dir(path), "hardened.puff"), lib, 0o644)
+	hosts, err := load(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, r := range hosts[0].resources {
+		got = append(got, r.String()+" "+fmt.Sprint(r.opts().restarts))
+	}
+	want := `pkg ufw unattended-upgrades []
+file /etc/ssh/sshd_config.d/00-hardened.conf [ssh]
+file /etc/apt/apt.conf.d/20auto-upgrades []
+cmd ufw allow OpenSSH []
+cmd ufw allow 80/tcp []
+cmd ufw --force enable []`
+	if g := strings.Join(got, "\n"); g != want {
+		t.Errorf("got:\n%s\nwant:\n%s", g, want)
+	}
+	rs := hosts[0].resources
+	if f := rs[1].(*file); f.content != "PasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin no\n" || !strings.Contains(f.valid, "sshd -t -f %s") {
+		t.Errorf("sshd config %q valid %q", f.content, f.valid)
+	}
+	if c := rs[4].(*cmd); c.unless != "ufw show added | grep -qxF 'ufw allow 80/tcp'" {
+		t.Errorf("unless %q", c.unless)
 	}
 }

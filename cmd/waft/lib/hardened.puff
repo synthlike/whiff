@@ -1,0 +1,46 @@
+; A hardened Ubuntu host, as waft resources: ssh by key only, a firewall
+; that lets in only ssh, and security upgrades installed daily. Copy this
+; file next to your host file, (use "hardened.puff"), and put (hardened {})
+; first in the host's resources:
+;
+;   (host "admin@203.0.113.7"
+;     [(hardened {:allow ["80/tcp" "443/tcp"]})
+;      (user "whiff" ...)])
+;
+; Options:
+;   :root-login  sshd's PermitRootLogin: "prohibit-password" by default,
+;                root by key only; "no" once waft logs in as an admin who
+;                isn't root, or it locks waft out
+;   :allow       more ufw rules, as ["80/tcp"]; ssh is always allowed
+;
+; sshd keeps the first value it reads and cloud images ship a drop-in of
+; their own (50-cloud-init.conf allows passwords), so these settings go in
+; one that sorts first, checked with sshd -t before it's used. ssh is let
+; in before the firewall is turned on.
+
+; sshd -t needs its privilege separation folder, which a socket-activated
+; ssh only makes as it starts.
+(def sshd-check "mkdir -p /run/sshd && sshd -t -f %s")
+
+(def (sshd-config root-login)
+  (string/concat "PasswordAuthentication no\n"
+                 "KbdInteractiveAuthentication no\n"
+                 "PermitRootLogin " root-login "\n"))
+
+(def auto-upgrades "APT::Periodic::Update-Package-Lists \"1\";
+APT::Periodic::Unattended-Upgrade \"1\";
+")
+
+(def (ufw-allow rule)
+  (cmd (string/concat "ufw allow " rule)
+       {:unless (string/concat "ufw show added | grep -qxF 'ufw allow " rule "'")}))
+
+(def (hardened opts)
+  (vector/concat
+    [(pkg "ufw" "unattended-upgrades")
+     (file "/etc/ssh/sshd_config.d/00-hardened.conf"
+           (sshd-config (map/get-or opts :root-login "prohibit-password"))
+           {:valid sshd-check :restarts "ssh"})
+     (file "/etc/apt/apt.conf.d/20auto-upgrades" auto-upgrades)]
+    (vector/map (vector/concat ["OpenSSH"] (map/get-or opts :allow [])) ufw-allow)
+    [(cmd "ufw --force enable" {:unless "ufw status | grep -qx 'Status: active'"})]))

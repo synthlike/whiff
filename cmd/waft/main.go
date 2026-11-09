@@ -35,8 +35,10 @@ Resources:
   user name [opts] [setup]  an account (:shell :groups :keys :linger), and
                             resources run as it, ~ as its home
   dir path                  a folder (:mode :owner)
-  file path content         a file (:mode :owner), or with {:from path} a
-                            file here's content
+  file path content         a file (:mode :owner :valid), or with
+                            {:from path} a file here's content
+  line path text            a line in a file, at the end or in place of
+                            those :match, a regexp, finds (:valid)
   repo path url             a git repo cloned, never pulled (:ref)
   go-bin pkg@version        a Go program in ~/go/bin, from go install
   ssh-key                   a key made on the host; plan prints its public half
@@ -46,6 +48,8 @@ Resources:
 
 Each takes :as, a user to run as (except pkg and user), and :restarts, a
 systemd unit restarted once at the end if it changed: the :as user's own.
+:valid is a command with %s, as "sshd -t -f %s", that must pass on the new
+file before it replaces the old one.
 Local paths are from the host file's folder. plan exits 0 if each host
 matches, 2 if one differs, 1 on an error. The file runs :read, so it
 can't change anything itself. whiff comes from whiff.puff in waft's lib
@@ -60,7 +64,7 @@ func main() {
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer, dial func(string) (runner, func(), error)) int {
 	if len(args) != 2 || args[0] != "plan" && args[0] != "apply" {
-		fmt.Fprint(stderr, usage)
+		io.WriteString(stderr, usage)
 		return 1
 	}
 	hosts, err := load(ctx, args[1])

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -45,7 +46,8 @@ var kinds = []kind{
 	{"pkg", "name ... [opts]", "apt packages installed, wherever it is: a host's are installed together, first, as root.", false, parsePkg},
 	{"user", "name [opts] [setup]", "An account with its home, and its setup: resources run as it, ~ as its home. Options: :shell, :groups (added, never removed), :keys (its whole authorized_keys: keys, or paths of .pub files here), :linger #t (its systemd user units run without a login).", false, parseUser},
 	{"dir", "path [opts]", "A folder. Options: :as, :mode such as \"755\", :owner.", true, parseDir},
-	{"file", "path content [opts]", "A file's content, or with :from that of a file here, without content. Options: :as, :from, :mode, :owner.", true, parseFile},
+	{"file", "path content [opts]", "A file's content, or with :from that of a file here, without content. Options: :as, :from, :mode, :owner, :valid (a command with %s, the new file's path, that must pass before it replaces the old).", true, parseFile},
+	{"line", "path text [opts]", "A line in a file: added at the end, or with :match, a regexp, in place of each line it finds. Options: :as, :match, :valid as file's.", true, parseLine},
 	{"repo", "path url [opts]", "A git repo cloned at path, never pulled. Options: :as, :ref, a branch, tag or commit checked out.", true, parseRepo},
 	{"go-bin", "pkg@version [opts]", "A Go program in ~/go/bin, built with go install pkg@version; a version that isn't one (latest, a branch) is installed once, never upgraded. Options: :as.", true, parseGoBin},
 	{"ssh-key", "[opts]", "An ed25519 key at ~/.ssh/id_ed25519, made on the host; plan prints its public half. Options: :as.", true, parseKey},
@@ -350,13 +352,14 @@ func (d *dir) check(ctx context.Context, r runner) ([]string, error) {
 // it's checked.
 type file struct {
 	common
-	path, content, from, mode, owner string
+	path, content, from, mode, owner, valid string
 }
 
 func parseFile(base string, args []puff.Value) (resource, error) {
-	args, o, err := splitOpts(args, "as", "from", "mode", "owner")
+	args, o, err := splitOpts(args, "as", "from", "mode", "owner", "valid")
 	f := &file{}
-	err = first(err, optStr(o, "from", &f.from), optMode(o, &f.mode), optStr(o, "owner", &f.owner), f.common.set(o))
+	err = first(err, optStr(o, "from", &f.from), optMode(o, &f.mode), optStr(o, "owner", &f.owner),
+		optValid(o, &f.valid), f.common.set(o))
 	if err == nil && len(args) != 2 && (f.from == "" || len(args) != 1) {
 		err = fmt.Errorf("file takes a path, its content and options, or a path and {:from path}")
 	}
@@ -396,9 +399,85 @@ func (f *file) check(ctx context.Context, r runner) ([]string, error) {
 		fix = []string{`mkdir -p "$(dirname -- ` + p + `)"`}
 	}
 	if hash != hex.EncodeToString(sum[:]) {
-		fix = append(fix, writeCmd(f.content, p))
+		fix = append(fix, writeValid(f.content, p, f.valid)...)
 	}
 	return append(fix, attrs(p, attr, f.mode, f.owner)...), err
+}
+
+// line is a line in a file: there, or, with match, in place of each line
+// match finds.
+type line struct {
+	common
+	path, text, valid string
+	match             *regexp.Regexp
+}
+
+func parseLine(_ string, args []puff.Value) (resource, error) {
+	args, o, err := splitOpts(args, "as", "match", "valid")
+	l := &line{}
+	if err == nil && len(args) != 2 {
+		err = fmt.Errorf("line takes a path, the line and options")
+	}
+	if err == nil {
+		l.path, err = str(args[0], "line's path")
+	}
+	if err == nil {
+		l.text, err = str(args[1], "line's text")
+	}
+	if err == nil && strings.Contains(l.text, "\n") {
+		err = fmt.Errorf("line: %q is more than a line", l.text)
+	}
+	var match string
+	err = first(err, optStr(o, "match", &match), optValid(o, &l.valid), l.common.set(o))
+	if err == nil && match != "" {
+		if l.match, err = regexp.Compile(match); err != nil {
+			err = fmt.Errorf("line's :match: %v", err)
+		}
+	}
+	return l, err
+}
+
+func (l *line) String() string { return "line " + l.path + ": " + l.text }
+
+func (l *line) check(ctx context.Context, r runner) ([]string, error) {
+	p := shPath(l.path)
+	// A mark first, so an empty file isn't a missing one.
+	out, err := probe(ctx, r, l.as, `[ ! -f `+p+` ] || { echo .; cat `+p+`; }`)
+	if err != nil {
+		return nil, err
+	}
+	var old string
+	if rest, ok := strings.CutPrefix(out, ".\n"); ok {
+		old = rest + "\n" // probe took the last newline
+	}
+	want := withLine(old, l.text, l.match)
+	if want == old {
+		return nil, nil
+	}
+	var fix []string
+	if out == "" {
+		fix = []string{`mkdir -p "$(dirname -- ` + p + `)"`}
+	}
+	return append(fix, writeValid(want, p, l.valid)...), nil
+}
+
+// withLine is content with text as a line: each line match finds becomes
+// text; if none does, and text isn't there, it's added at the end.
+func withLine(content, text string, match *regexp.Regexp) string {
+	var lines []string
+	if content != "" {
+		lines = strings.Split(strings.TrimSuffix(content, "\n"), "\n")
+	}
+	replaced := false
+	for i, l := range lines {
+		if match != nil && match.MatchString(l) {
+			lines[i], replaced = text, true
+		}
+	}
+	if !replaced && !slices.Contains(lines, text) {
+		lines = append(lines, text)
+	}
+	return strings.Join(lines, "\n") + "\n"
 }
 
 type cmd struct {
@@ -506,6 +585,28 @@ func probe(ctx context.Context, r runner, as, script string) (string, error) {
 // owner and mode.
 func writeCmd(content, p string) string {
 	return "printf %s " + quote(base64.StdEncoding.EncodeToString([]byte(content))) + " | base64 -d > " + p
+}
+
+// writeValid writes content to p, and with valid, a command with %s for a
+// path, writes it beside p first and moves it in place only if valid
+// passes on it; the copy keeps p's owner and mode.
+func writeValid(content, p, valid string) []string {
+	if valid == "" {
+		return []string{writeCmd(content, p)}
+	}
+	t := p + ".waft"
+	return []string{"[ ! -f " + p + " ] || cp -p " + p + " " + t,
+		writeCmd(content, t),
+		strings.ReplaceAll(valid, "%s", t) + " || { rm -f " + t + "; exit 1; }",
+		"mv " + t + " " + p}
+}
+
+func optValid(o map[string]puff.Value, valid *string) error {
+	err := optStr(o, "valid", valid)
+	if err == nil && *valid != "" && !strings.Contains(*valid, "%s") {
+		err = fmt.Errorf(":valid: want %%s in it, for the new file's path, as \"sshd -t -f %%s\"")
+	}
+	return err
 }
 
 // shownWrite is how plan shows cmd if writeCmd made it: the path and how
