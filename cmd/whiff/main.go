@@ -25,7 +25,7 @@ import (
 )
 
 const usage = `usage:
-  whiff call <address/fn> [<arg>...]     call a function and print its value
+  whiff call <address/fn> [<arg>...]     call a function and print its value, broken over lines to fit on a terminal
   whiff send <address/fn> [<arg>...]     send a message without waiting
   whiff pub <topic> <value>              publish value to the topic's subscribers
   whiff sub [<topic>...]                 print what is published to the topics, every topic by default, until stopped
@@ -53,8 +53,7 @@ const usage = `usage:
   whiff services                         list the services, what needs you first: failed, faulting, waiting for you, busy, then the rest
   whiff services <service>               one service in full: its file, last message, faults, inbox and timers; an agent's turns and spend
   whiff ls                               list every address's functions and their marks, each agent session's mode, then the :read overrides
-  whiff state <service>                  print a service's state, as it last committed it
-                                         (broken over lines to fit, on a terminal)
+  whiff state <service>                  print a service's state, as it last committed it, as call does
   whiff dump [<bucket>]                  list whiff.db's buckets, or print one's entries: key value,
                                          a line each when piped, for grep; broken over lines on a terminal
   whiff reset <service>                  forget a service's stored state, so it starts from its :state again
@@ -325,8 +324,10 @@ func test(dir string, files []string, stdout, stderr io.Writer) int {
 }
 
 // result prints resp's Result for op: the value of (ok v) for a call, a
-// wait or an accept, a string as it is; (err e) prints e and exits 1, except a pending
-// call, which prints how to wait for its answer.
+// wait, an accept or a state, a view as lines, a string as it is, any
+// other value on a line, or, on a terminal, broken over lines to fit; (err
+// e) prints e and exits 1, except a pending call, which prints how to
+// wait for its answer.
 func result(op string, resp rpc.Response, stdout, stderr io.Writer) int {
 	v, err := puff.ReadValue(resp.Value)
 	r, ok := v.(puff.Tag)
@@ -348,7 +349,7 @@ func result(op string, resp rpc.Response, stdout, stderr io.Writer) int {
 			io.WriteString(stdout, text)
 		} else if s, ok := r.At(0).(puff.String); ok {
 			fmt.Fprintln(stdout, string(s))
-		} else if w := prettyWidth(stdout); op == "state" && w > 0 {
+		} else if w := prettyWidth(stdout); w > 0 {
 			fmt.Fprintln(stdout, puff.PrintPretty(r.At(0), 0, w))
 		} else {
 			fmt.Fprintln(stdout, puff.Print(r.At(0)))
