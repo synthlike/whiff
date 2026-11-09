@@ -174,13 +174,19 @@ func (d *daemon) keepPeer(ctx context.Context, p *peer) {
 		d.setPeer(p, "connecting", "", nil)
 		c, err := rpc.DialCommand(ctx, p.argv(), nil)
 		if err == nil {
-			if err = c.PeerCompatible(p.name); err != nil {
+			if err = c.PeerCompatible(p.name); err == nil {
+				// Before anything is sent on it, so no task it begins
+				// there ends unseen.
+				_, err = c.Sub("tasks/changed")
+			}
+			if err != nil {
 				c.Close()
 			}
 		}
 		if err == nil {
 			began := time.Now()
 			d.setPeer(p, "connected", "", c)
+			d.wg.Go(func() { d.followFar(ctx, p.name, c) })
 			select {
 			case <-c.Done():
 				err = errors.New("the connection ended")

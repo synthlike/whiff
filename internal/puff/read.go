@@ -261,7 +261,7 @@ func (r *reader) atom(p Pos) (*Form, error) {
 	case tok[0] == '#':
 		return nil, errorf(p, "unknown %s: booleans are #t and #f", tok)
 	case tok[0] == ':':
-		if !isName(tok[1:]) {
+		if !isKeyword(tok[1:]) {
 			return nil, errorf(p, "bad keyword %s", tok)
 		}
 		return lit(Keyword(tok[1:]))
@@ -331,6 +331,12 @@ func number(tok string) (Value, error) {
 }
 
 func isDigit(c byte) bool { return '0' <= c && c <= '9' }
+
+// isKeyword reports whether s can name a keyword: a name, which may have
+// an @ after its first character, as a peer's address has: :pipeline@vps.
+func isKeyword(s string) bool {
+	return s != "" && s[0] != '@' && isName(strings.ReplaceAll(s, "@", "_"))
+}
 
 // isName reports whether s can name a symbol or keyword: ASCII letters,
 // digits and -_/?!*+<>=.&%, not starting with a digit.

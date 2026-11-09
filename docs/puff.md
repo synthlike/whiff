@@ -26,7 +26,8 @@ Parentheses call a function: `(+ 1 2)` calls `+` with two arguments.
 (def release 2026-11-05T12:00:00Z)
 ```
 
-Strings use double quotes, keywords start with `:`, and booleans are `#t`
+Strings use double quotes, keywords start with `:` (and may hold an `@`,
+as a peer's address does: `:pipeline@vps/build`), and booleans are `#t`
 and `#f`. Numbers include ints and floats; durations such as `250ms`, `2h`
 and `1d` and RFC 3339 times are values too. `1d` means 24 hours.
 Vectors use `[...]`; maps use `{key value ...}`. Collections can contain

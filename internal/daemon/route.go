@@ -30,6 +30,10 @@ type message struct {
 	topic string // instead of fn, for a published value
 	args  string
 	dir   string // the caller's working directory
+	// there is where a message to a peer runs there, whiff call -C's,
+	// instead of the peer's dir; read is what runs under a :read mark
+	// where it was sent, so the peer refuses a :write target.
+	there, read string
 	// chain is the addresses waiting on calls that led to this one, so a
 	// call back into one of them fails at once instead of timing out.
 	chain []string
@@ -171,6 +175,7 @@ type state struct {
 	grants   map[string]grant            // agent turns' session tokens: see grant
 	health   map[string]*health          // by service file's name: see whiff services
 	peers    map[string]*peer            // other machines' whiffs, by name: see peers.go
+	keyed    map[string]chan struct{}    // submission keys whose message is running, closed as it ends: see once
 }
 
 // grant is what a job's session token lets its whiff mcp claim: the
@@ -201,7 +206,7 @@ type watcher struct {
 func (d *daemon) route() {
 	kick, final := make(chan struct{}, 1), make(chan batch, 1)
 	d.wg.Go(func() { d.writeHistory(kick, final) })
-	st := &state{db: d.db, log: d.log, kick: kick, addrs: map[string]*service{}, jobs: map[int64]*job{}, waiters: map[int64][]chan puff.Value{}, peers: map[string]*peer{},
+	st := &state{db: d.db, log: d.log, kick: kick, addrs: map[string]*service{}, jobs: map[int64]*job{}, waiters: map[int64][]chan puff.Value{}, peers: map[string]*peer{}, keyed: map[string]chan struct{}{},
 		subs: map[*watcher]bool{}, tracers: map[*tracer]bool{}, modes: map[string]*mode{}, grants: map[string]grant{}, health: map[string]*health{}}
 	defer func() { final <- st.takeUnstored() }()
 	st.load()
@@ -259,6 +264,9 @@ func (d *daemon) put(st *state, addr string, m message) puff.Value {
 		if s := st.addrs[addr]; s != nil && m.topic == "" && d.markerOn(st).msgMark(s, m) == puff.MarkWrite {
 			m.gate = st.modeOf(m.from).name()
 		}
+	}
+	if _, _, ok := farAddr(addr); ok {
+		return d.forward(st, addr, m)
 	}
 	gate := m.gate
 	switch s := st.addrs[addr]; {

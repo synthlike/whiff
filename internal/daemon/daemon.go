@@ -394,6 +394,10 @@ func canList(can map[string]bool) string {
 // publishes req.Args's one value to the topic req.Target. Its Value is the
 // Result.
 func (d *daemon) message(ctx context.Context, from string, req rpc.Request) rpc.Response {
+	if key := req.Key; key != "" && req.Op != "pub" {
+		req.Key = ""
+		return d.once(key, func() rpc.Response { return d.message(ctx, from, req) })
+	}
 	args, err := puff.ReadValue(req.Args)
 	vec, ok := args.(puff.Vector)
 	if err != nil || !ok {
@@ -416,6 +420,22 @@ func (d *daemon) message(ctx context.Context, from string, req rpc.Request) rpc.
 	m, addr, err := cur.message(req.Dir, vals)
 	if err != nil {
 		return rpc.Response{Error: err.Error()}
+	}
+	if _, _, far := farAddr(addr); far {
+		m.there, m.read = req.There, req.Read
+	} else {
+		if req.There != "" {
+			m.dir = filepath.Join(req.Dir, req.There)
+			if filepath.IsAbs(req.There) {
+				m.dir = req.There
+			}
+		}
+		// A peer's view calls a :read function, as it would here.
+		if req.Read != "" {
+			if err := d.readOnly(puff.WithMark(ctx, req.Read, puff.MarkRead), addr, m); err != nil {
+				return rpc.Response{Error: err.Error()}
+			}
+		}
 	}
 	var r puff.Value
 	if req.Op == "send" {

@@ -26,8 +26,11 @@ import (
 )
 
 const usage = `usage:
-  whiff call <address/fn> [<arg>...]     call a function and print its value, broken over lines to fit on a terminal
-  whiff send <address/fn> [<arg>...]     send a message without waiting
+  whiff call [-C <dir>] <address/fn> [<arg>...]
+                                         call a function and print its value, broken over lines to fit on a terminal;
+                                         address@peer is a peer's, run in its dir, or <dir> there
+  whiff send [-C <dir>] <address/fn> [<arg>...]
+                                         send a message without waiting
   whiff pub <topic> <value>              publish value to the topic's subscribers
   whiff sub [<topic>...]                 print what is published to the topics, every topic by default, until stopped
   whiff try <file.puff> <fn> [<arg>...]  load a service file, call its function once and unload it
@@ -101,6 +104,8 @@ func main() {
 // its streams, returning the exit code.
 func run(args []string, dir, services string, stdout, stderr io.Writer) int {
 	switch {
+	case len(args) >= 4 && (args[0] == "call" || args[0] == "send") && args[1] == "-C":
+		return messageThere(dir, args[0], args[3], args[2], args[4:], stdout, stderr)
 	case len(args) >= 2 && (args[0] == "call" || args[0] == "send"):
 		return message(dir, args[0], args[1], args[2:], stdout, stderr)
 	case len(args) >= 1 && args[0] == "sub":
@@ -205,6 +210,12 @@ func connect(dir string, stderr io.Writer) *rpc.Client {
 // e) prints e and exits 1. The others print nothing. A reject's reason is
 // a string, whatever it reads as.
 func message(dir, op, target string, args []string, stdout, stderr io.Writer) int {
+	return messageThere(dir, op, target, "", args, stdout, stderr)
+}
+
+// messageThere is message for a call or send run in there: a directory on
+// the target's peer, for a far address, or one relative to this one.
+func messageThere(dir, op, target, there string, args []string, stdout, stderr io.Writer) int {
 	vals := make([]puff.Value, len(args))
 	for i, a := range args {
 		vals[i] = shellArg(a)
@@ -227,7 +238,10 @@ func message(dir, op, target string, args []string, stdout, stderr io.Writer) in
 		return 1
 	}
 	defer c.Close()
-	resp, err := c.Message(op, target, puff.Print(puff.NewVector(vals...)), wd)
+	resp, err := c.Forward(rpc.Request{Op: op, Target: target, Args: puff.Print(puff.NewVector(vals...)), Dir: wd, There: there})
+	if err == nil && resp.Error != "" {
+		err = errors.New(resp.Error)
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "whiff: %v\n", err)
 		return 1

@@ -353,6 +353,12 @@ func (d *daemon) outgoing(c *puff.Call, cur *caller, args []puff.Value) (message
 	if err == nil {
 		err = d.readOnly(c.Ctx, addr, m)
 	}
+	// A peer decides on its own targets' marks.
+	if what, ok := puff.ReadOnly(c.Ctx); ok {
+		if _, _, far := farAddr(addr); far {
+			m.read = what
+		}
+	}
 	return m, addr, err
 }
 

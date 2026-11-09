@@ -61,6 +61,9 @@ func (d *daemon) forSession(st *state, s *service, m message) bool {
 // as :jobs/done, aren't gated: like a whiff/done, they tell of something
 // already started.
 func (d *daemon) publishGated(m message) puff.Value {
+	if strings.Contains(m.topic, "@") {
+		return d.farPub(m)
+	}
 	r := puff.Done
 	d.do(func(st *state) {
 		if !m.user && !m.reviewed {

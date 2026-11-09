@@ -491,7 +491,36 @@ reaches the peer is what `whiff call` would send there, as you.
   can't act as you here. ssh doesn't ask for a password, as no one is
   there to type one: the peer needs your key.
 
-Calls to a peer's services, as `:pipeline@vps/build`, come next.
+- **A peer's address is `:address@peer`.** `(call :pipeline@vps/build
+  ...)`, `whiff call pipeline@vps/build`, `send`, and `pub` to
+  `:topic@vps` go to the peer. One hop only: a peer's peers aren't
+  reached through it. A peer that isn't connected answers `(err {:kind
+  :offline})` at once, saying why.
+- **It goes in its origin.** An agent's message reaches the peer as an
+  agent's, so the peer's review gate holds a write for review there, as it
+  would one sent on that machine; one you let through here goes on as
+  yours. An agent session's `:can` names a far function as it does any
+  other, `:pipeline@vps/build`. A message from a `:read` function, as a
+  view, can't reach a `:write` function there either.
+- **It runs in the peer's dir,** `--dir`, never in the laptop's
+  directory, or in `whiff call -C <dir>`'s, relative to it.
+- **A task there is a task here.** A message that begins a task on the
+  peer, an ask or a held write, gets a task here, `(err {:kind :pending
+  :id n})`, which waits in `:pipeline@vps`'s inbox and is stored: `whiff
+  wait n` waits for it, a service gets its `whiff/done`, and cancelling
+  it cancels the one there. whiff follows the peer's `:tasks/changed`,
+  checks each task again as it connects, after a restart too, and every
+  five minutes should an event have been dropped.
+- **A message runs there once.** Each goes with a submission key; if the
+  connection goes before the peer answers, whiff sends it again with the
+  same key once it is back, and the peer answers with the first one's
+  result, kept a day, rather than running it twice.
+- **What comes back is made far.** An `:action` in a view from the peer,
+  `[:review/accept 3]`, comes back as `[:review@vps/accept 3]`, so
+  `whiff act` and sniff act on the peer.
+
+A peer's connection carries one request at a time, so a slow call there
+holds up the next.
 
 ## History
 

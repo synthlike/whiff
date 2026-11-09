@@ -66,10 +66,13 @@ func openStore(services string) (*bbolt.DB, error) {
 		return nil, err
 	}
 	err = db.Update(func(tx *bbolt.Tx) error {
-		for _, b := range [][]byte{stateBucket, metaBucket, inboxBucket, timersBucket, tasksBucket, historyBucket, modesBucket, peersBucket} {
+		for _, b := range [][]byte{stateBucket, metaBucket, inboxBucket, timersBucket, tasksBucket, historyBucket, modesBucket, peersBucket, keysBucket} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err
 			}
+		}
+		if err := pruneKeys(tx, time.Now().Add(-keyKept)); err != nil {
+			return err
 		}
 		return pruneHistory(tx, time.Now().Add(-historyKept))
 	})
@@ -489,7 +492,7 @@ func (d *daemon) resume() {
 			if a.expires > 0 {
 				d.expireAfter(a, time.Until(a.at.Add(a.expires)))
 			}
-			if st.addrs[a.addr] == nil {
+			if st.addrs[a.addr] == nil && a.remote == 0 {
 				away[a.addr]++
 			}
 		}
@@ -979,6 +982,9 @@ func (a *asked) stored() puff.Value {
 	if a.expires > 0 {
 		with("expires", puff.Duration(a.expires))
 	}
+	if a.remote != 0 {
+		with("remote", puff.Int(a.remote))
+	}
 	switch {
 	case a.addr != "review":
 	case a.held == nil:
@@ -1024,8 +1030,9 @@ func storedAsked(id int64, p string) (*asked, error) {
 	msg, _ := get("msg").(puff.Int)
 	parent, _ := get("parent").(puff.Int)
 	project, _ := get("project").(puff.String)
+	remote, _ := get("remote").(puff.Int)
 	a := &asked{ticket: ticket{id: id, msg: int64(msg), from: key("from"), dir: string(dir), lineage: lineage{user: key("origin") == string(origin(true)), session: key("session"), task: int64(parent), project: string(project)}},
-		addr: addr, fn: fn, args: args, at: at.Go(), expires: time.Duration(expires)}
+		addr: addr, fn: fn, args: args, at: at.Go(), expires: time.Duration(expires), remote: int64(remote)}
 	switch addr {
 	case "me":
 		err = a.checkMe()

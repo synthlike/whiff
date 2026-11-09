@@ -23,10 +23,10 @@ import (
 )
 
 // Version is the protocol version. Bump it when a message changes, or a
-// function clients evaluate is renamed (20: a claim's session token, which
-// an older daemon would ignore and hand out an unfenced session); hello and stop must stay readable by every version, so an old
+// function clients evaluate is renamed (21: a submission key, which an
+// older daemon would ignore and run a message twice); hello and stop must stay readable by every version, so an old
 // daemon can be stopped.
-const Version = 20
+const Version = 21
 
 // Request is a client's message to the daemon. The daemon answers each with
 // a Response, in order, except an answer or a cancel, which have none.
@@ -49,6 +49,16 @@ type Request struct {
 	// from the job's WHIFF_SESSION: the claim gets the session it names,
 	// fenced to that agent's :can functions.
 	Token string `json:"token,omitempty"`
+	// Key is, for a call or send, a submission key: a message sent again
+	// with the same key, as a peer does after its connection went, gets
+	// the first one's Response rather than running twice.
+	Key string `json:"key,omitempty"`
+	// There is, for a call or send, where it runs on a peer: whiff call
+	// -C dir. Relative to the peer's dir, or to Dir for a local target.
+	There string `json:"there,omitempty"`
+	// Read is, for a call or send, what runs under a :read mark at the
+	// sender, as a peer's view: a :write target is refused.
+	Read string `json:"read,omitempty"`
 }
 
 // Response is the daemon's answer to one Request; or, with Delivery set, a
@@ -773,17 +783,29 @@ func (c *Client) read() {
 	}
 }
 
-func (c *Client) roundTrip(req Request, resp *Response) error {
+// Forward sends req as it is, as an agent's if it or c says so, and
+// returns its Response, with the daemon's error in its Error: the error is
+// for the connection, which has gone.
+func (c *Client) Forward(req Request) (Response, error) {
+	var resp Response
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	req.Agent = c.Agent
+	req.Agent = req.Agent || c.Agent
 	if err := c.conn.Send(req); err != nil {
-		return err
+		return resp, err
 	}
 	select {
-	case *resp = <-c.resps:
+	case resp = <-c.resps:
+		return resp, nil
 	case <-c.done:
-		return fmt.Errorf("whiff daemon: %w", c.err)
+		return resp, fmt.Errorf("whiff daemon: %w", c.err)
+	}
+}
+
+func (c *Client) roundTrip(req Request, resp *Response) error {
+	var err error
+	if *resp, err = c.Forward(req); err != nil {
+		return err
 	}
 	if resp.Error != "" && req.Op != "eval" && req.Op != "repl" && req.Op != "try" && req.Op != "test" {
 		return errors.New(resp.Error)

@@ -49,6 +49,9 @@ type asked struct {
 	held *message
 	to   string
 	src  string
+	// remote is the task on a peer this one follows, for a message to a
+	// far address, :pipeline@vps: see farTask.
+	remote int64
 }
 
 // what names a held message, publish or eval: :todo/add, publish

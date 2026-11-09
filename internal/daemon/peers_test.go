@@ -137,3 +137,159 @@ func TestPeerArgv(t *testing.T) {
 		t.Errorf("argv = %s", got)
 	}
 }
+
+// TestFar sends to a peer's addresses, :box@far/fn: a call runs there in
+// the peer's dir, or -C's; a task it begins there is one here, answered
+// as it ends there, after a restart too, and cancelled there as it is
+// here; an agent's message is held by the peer's review gate; an action
+// in what comes back is made far; a key runs a message once; a :read
+// caller can't reach a :write function.
+func TestFar(t *testing.T) {
+	set(t, &peerWait, 20*time.Millisecond)
+	set(t, &peerWaitMost, 200*time.Millisecond)
+	dir, far, wd := tempDir(t), tempDir(t), tempDir(t)
+	writeServices(t, far, map[string]string{"box": `(service box
+  (on (where) :read "Where it runs." (ok (os/cwd)))
+  (on (put x) :write "Keeps x." (ok x))
+  (on (view) :read "Its view." (ok {:label "put" :action [:box/put 1]}))
+  (ask (q x) "A question."))`})
+	writeServices(t, dir, map[string]string{"asker": `(service asker
+  (on (go x) "Asks far's box." (call :box@far/q x))
+  (on (whiff/done id r) "Its answer." (call :me/tell (str "asker heard " (value/to-string r)))))`})
+	done := start(t, dir)
+	c := dial(t, dir)
+	start(t, far)
+	fc := dial(t, far)
+
+	call := func(c *rpc.Client, req rpc.Request) string {
+		t.Helper()
+		resp, err := c.Forward(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.Error != "" {
+			return "error: " + resp.Error
+		}
+		return resp.Value
+	}
+	here := func(target, args string) string {
+		t.Helper()
+		return call(c, rpc.Request{Op: "call", Target: target, Args: args})
+	}
+	// farID is the id of the message waiting in far's inbox addr.
+	farID := func(addr string) string {
+		t.Helper()
+		var text string
+		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+			if text, _ = fc.Inbox(addr); text != "" {
+				return strings.Fields(text)[0]
+			}
+		}
+		t.Fatalf("nothing waits in far's :%s", addr)
+		return ""
+	}
+	connected := func() {
+		t.Helper()
+		eventually(t, "far connects", func() string {
+			return fmt.Sprint(strings.Contains(here("peers/list", "[]"), ":status :connected"))
+		}, "true")
+	}
+
+	if got := here("box@far/where", "[]"); !strings.Contains(got, ":no-peer") {
+		t.Errorf("before far is added, box@far/where = %s", got)
+	}
+	bridge := fmt.Sprintf(`{:cmd ["env" "WHIFF_TEST_BRIDGE=%s" %q] :dir %q}`, rpc.SocketPath(far), os.Args[0], wd)
+	if got := here("peers/add", `["far" `+bridge+`]`); got != "(ok :done)" {
+		t.Fatalf("peers/add = %s", got)
+	}
+	connected()
+
+	// It runs in the peer's dir, or where -C says, never here.
+	if got := here("box@far/where", "[]"); got != fmt.Sprintf("(ok %q)", wd) {
+		t.Errorf("box@far/where = %s, want the peer's dir", got)
+	}
+	if got := call(c, rpc.Request{Op: "call", Target: "box@far/where", Args: "[]", Dir: dir, There: "sub"}); got != fmt.Sprintf("(ok %q)", wd+"/sub") {
+		t.Errorf("box@far/where -C sub = %s", got)
+	}
+	if got := call(c, rpc.Request{Op: "call", Target: "box@far/where", Args: "[]", There: "/srv"}); got != `(ok "/srv")` {
+		t.Errorf("box@far/where -C /srv = %s", got)
+	}
+	if got := here("box@far/view", "[]"); !strings.Contains(got, "[:box@far/put 1]") {
+		t.Errorf("box@far/view = %s, want its action far", got)
+	}
+	for target, want := range map[string]string{"box@nope/where": ":no-peer", "box@nope@far/where": "peer's peer", "box@far/nothing": ":no-function"} {
+		if got := here(target, "[]"); !strings.Contains(got, want) {
+			t.Errorf("%s = %s, want %s", target, got, want)
+		}
+	}
+
+	// A task there is one here: answered as it ends there.
+	id := pendingOf(t, here("box@far/q", `["hi"]`))
+	if got := call(fc, rpc.Request{Op: "reply", Args: "[" + farID("box") + " (ok 42)]"}); got != "(ok :done)" {
+		t.Fatalf("far's reply = %s", got)
+	}
+	if got := call(c, rpc.Request{Op: "wait", Args: "[" + id + "]"}); got != "(ok 42)" {
+		t.Errorf("wait %s = %s", id, got)
+	}
+	// A service hears of it as whiff/done.
+	here("asker/go", `["why"]`)
+	call(fc, rpc.Request{Op: "reply", Args: "[" + farID("box") + " (ok :because)]"})
+	eventually(t, "asker hears far's answer", func() string {
+		text, _ := c.Inbox("me")
+		return fmt.Sprint(strings.Contains(text, `asker heard (ok :because)`))
+	}, "true")
+
+	// One that ends while whiff is down is answered as it comes back.
+	id = pendingOf(t, here("box@far/q", `["later"]`))
+	n := farID("box")
+	stopDaemon(t, c, done)
+	call(fc, rpc.Request{Op: "reply", Args: "[" + n + " (ok :later)]"})
+	start(t, dir)
+	c = dial(t, dir)
+	if got := call(c, rpc.Request{Op: "wait", Args: "[" + id + "]"}); got != "(ok :later)" {
+		t.Errorf("after a restart, wait %s = %s", id, got)
+	}
+	connected()
+
+	// Cancelled here, it is cancelled there.
+	id = pendingOf(t, here("box@far/q", `["never"]`))
+	farID("box")
+	if got := call(c, rpc.Request{Op: "cancel-task", Args: "[" + id + "]"}); got != "(ok :done)" {
+		t.Errorf("cancel %s = %s", id, got)
+	}
+	eventually(t, "far's ask cancelled", func() string { text, _ := fc.Inbox("box"); return text }, "")
+
+	// An agent's write waits for review there, as a task here.
+	reviewer := dial(t, far)
+	if _, err := reviewer.Sub("review/pending"); err != nil {
+		t.Fatal(err)
+	}
+	ac := dial(t, dir)
+	ac.Agent = true
+	id = pendingOf(t, call(ac, rpc.Request{Op: "call", Target: "box@far/put", Args: "[7]"}))
+	held := farID("review")
+	if got := call(fc, rpc.Request{Op: "accept", Args: "[" + held + "]"}); got != "(ok 7)" {
+		t.Errorf("far's accept = %s", got)
+	}
+	if got := call(c, rpc.Request{Op: "wait", Args: "[" + id + "]"}); got != "(ok 7)" {
+		t.Errorf("the agent's put, wait %s = %s", id, got)
+	}
+	if got := here("box@far/put", "[8]"); got != "(ok 8)" {
+		t.Errorf("your box@far/put = %s", got)
+	}
+
+	// A key sent again gets the first's answer, without running again.
+	for range 2 {
+		if got := call(fc, rpc.Request{Op: "call", Target: "box/put", Args: "[9]", Key: "k1"}); got != "(ok 9)" {
+			t.Errorf("box/put with a key = %s", got)
+		}
+	}
+	h, _ := historyOf(fc)
+	if n := strings.Count(h, ":box/put 9"); n != 1 {
+		t.Errorf("box/put 9 ran %d times:\n%s", n, h)
+	}
+	// A :read caller's message to a :write function is refused.
+	if got := call(fc, rpc.Request{Op: "call", Target: "box/put", Args: "[1]", Read: "a view"}); !strings.Contains(got, ":write") {
+		t.Errorf("box/put from a :read caller = %s", got)
+	}
+}
