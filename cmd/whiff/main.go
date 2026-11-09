@@ -61,6 +61,11 @@ const usage = `usage:
   whiff mcp [--dir <path>]               serve whiff to an agent over MCP on stdin and stdout, as :agent/n, its calls from path
   whiff sandbox check                    say which container runtime confines sandboxed commands, and whether its image is built
   whiff sandbox build                    build the image sandboxed commands run in, with that runtime
+  whiff peer add <name> <user@host> [--dir <path>] [--whiff <path>]
+                                         reach another machine's whiff, over ssh, as you: its calls run in
+                                         dir there, and whiff is its path there if ssh doesn't find it
+  whiff peer ls                          list the peers: connected, connecting or offline, and why
+  whiff peer rm <name>                   disconnect a peer and forget it
   whiff bridge                           connect stdin and stdout to the daemon, starting it if need be:
                                          how another machine's whiff reaches this one, over ssh
   whiff stop                             stop the daemon
@@ -162,6 +167,8 @@ func run(args []string, dir, services string, stdout, stderr io.Writer) int {
 		return mcpRun(dir, stderr)
 	case len(args) == 2 && args[0] == "sandbox" && (args[1] == "check" || args[1] == "build"):
 		return sandboxCmd(args[1], stdout, stderr)
+	case len(args) >= 2 && args[0] == "peer":
+		return peerCmd(dir, args[1:], stdout, stderr)
 	case len(args) == 1 && args[0] == "bridge":
 		return bridge(dir, stdin, stdout, stderr)
 	case len(args) == 1 && args[0] == "stop":
@@ -770,6 +777,33 @@ func prettyWidth(w io.Writer) int {
 		return cols
 	}
 	return 80
+}
+
+// peerCmd is whiff peer add, ls and rm: calls to :peers.
+func peerCmd(dir string, args []string, stdout, stderr io.Writer) int {
+	switch {
+	case args[0] == "ls" && len(args) == 1:
+		return message(dir, "call", "peers/view", nil, stdout, stderr)
+	case args[0] == "rm" && len(args) == 2:
+		return message(dir, "call", "peers/rm", []string{puff.Print(puff.String(args[1]))}, stdout, stderr)
+	case args[0] == "add" && len(args) >= 3:
+		es := []puff.Entry{puff.Key("dest", puff.String(args[2]))}
+		for rest := args[3:]; len(rest) > 0; rest = rest[2:] {
+			if len(rest) < 2 || rest[0] != "--dir" && rest[0] != "--whiff" {
+				fmt.Fprint(stderr, usage)
+				return 2
+			}
+			es = append(es, puff.Key(strings.TrimPrefix(rest[0], "--"), puff.String(rest[1])))
+		}
+		m, err := puff.NewMap(es...)
+		if err != nil {
+			fmt.Fprintf(stderr, "whiff: %v\n", err)
+			return 2
+		}
+		return message(dir, "call", "peers/add", []string{puff.Print(puff.String(args[1])), puff.Print(m)}, stdout, stderr)
+	}
+	fmt.Fprint(stderr, usage)
+	return 2
 }
 
 // bridge connects in and out to the daemon, starting it if need be: what

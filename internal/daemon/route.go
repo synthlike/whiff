@@ -170,6 +170,7 @@ type state struct {
 	modes    map[string]*mode            // agent sessions that aren't gated, by address
 	grants   map[string]grant            // agent turns' session tokens: see grant
 	health   map[string]*health          // by service file's name: see whiff services
+	peers    map[string]*peer            // other machines' whiffs, by name: see peers.go
 }
 
 // grant is what a job's session token lets its whiff mcp claim: the
@@ -200,7 +201,7 @@ type watcher struct {
 func (d *daemon) route() {
 	kick, final := make(chan struct{}, 1), make(chan batch, 1)
 	d.wg.Go(func() { d.writeHistory(kick, final) })
-	st := &state{db: d.db, log: d.log, kick: kick, addrs: map[string]*service{}, jobs: map[int64]*job{}, waiters: map[int64][]chan puff.Value{},
+	st := &state{db: d.db, log: d.log, kick: kick, addrs: map[string]*service{}, jobs: map[int64]*job{}, waiters: map[int64][]chan puff.Value{}, peers: map[string]*peer{},
 		subs: map[*watcher]bool{}, tracers: map[*tracer]bool{}, modes: map[string]*mode{}, grants: map[string]grant{}, health: map[string]*health{}}
 	defer func() { final <- st.takeUnstored() }()
 	st.load()

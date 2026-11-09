@@ -144,6 +144,11 @@ func TestLs(t *testing.T) {
   ask (ask question [opts])  :read   Asks you question: pending now, your answer when you reply. opts, {:choices ["yes" "no"]}, offers answers to pick.
   (inbox)                    :read   (ok view): what waits in your inbox, oldest first: questions to answer and reports to dismiss.
   ask (tell text [opts])     :read   Tells you text, a report: it waits in your inbox until you reply, which dismisses it. opts, {:actions [{:label "Show the diff" :action [:address/fn args...]}]}, offers what to do about it.
+:peers
+  (add name peer)  :write  Adds peer name, another machine's whiff, and connects to it, by ssh dest whiff bridge, again whenever the connection goes: peer is {:dest "user@host"}, with :whiff, whiff's path there, if ssh doesn't find it, and :dir, where calls run there; or {:cmd [...]}, the command that reaches it. One of the same name is replaced. :done, or (err {:kind :bad-peer}).
+  (list)           :read   (ok peers): the other machines' whiffs this one reaches, by name, each {:name :dest :dir :status :since :seen :error}: :status :connecting, :connected or :offline, since when, when it was last connected, and why it isn't. :cmd instead of :dest for one reached by a command of its own.
+  (rm name)        :write  Disconnects peer name and forgets it: :done, or (err {:kind :no-peer}).
+  (view)           :read   (ok view): the peers as list gives them, as items, each with Remove; following :peers/changed, which is published as one is added, removed, connects or goes.
 :review
   (accept id)           :write  Deliver the held message id as it was sent, or run the code it holds; its result, which its sender gets too.
   (pending)             :read   (ok view): what waits for your review, as items to accept or reject, oldest first.

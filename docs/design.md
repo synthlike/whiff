@@ -468,6 +468,31 @@ credential written in a remote's URL. huff's own calls to its provider leave fro
 Agents on `claude -p` aren't sandboxed: their shell still reaches the
 socket.
 
+## Peers
+
+Another machine's whiff, a VPS say, is a peer: this whiff reaches it as
+a client, in the protocol it already speaks, by running `ssh <host>
+whiff bridge`, which connects ssh's stdin and stdout to that host's
+daemon, starting it if need be. No listener and no new protocol: what
+reaches the peer is what `whiff call` would send there, as you.
+
+- **Peers are kept in whiff.db.** `whiff peer add vps whiff@host` (with
+  `--whiff <path>` if ssh doesn't find whiff there, and `--dir <path>`
+  for where its calls run), `whiff peer ls`, `whiff peer rm vps`; or
+  `:peers/add`, `/list`, `/view` and `/rm`, whiff's own address. Adding
+  and removing one is yours only: an agent's call is refused.
+- **A peer stays connected.** A goroutine of its own connects it and
+  connects it again whenever the connection goes, waiting a second, then
+  twice as long each time up to a minute. `whiff peer ls` says whether
+  each is connected, connecting or offline, when it was last seen, and
+  why it isn't connected: what ssh said, as "Permission denied", or that
+  the two whiffs speak different protocols.
+- **This whiff drives.** A peer only answers what it is asked, so it
+  can't act as you here. ssh doesn't ask for a password, as no one is
+  there to type one: the peer needs your key.
+
+Calls to a peer's services, as `:pipeline@vps/build`, come next.
+
 ## History
 
 Every message is an entry: when, kind, origin, sender, target, arguments,

@@ -437,8 +437,8 @@ func hello(rwc io.ReadWriteCloser) (*Client, error) {
 // other end of its stdin and stdout, and exchanges protocol versions: how
 // a peer is reached, by ssh host whiff bridge, which pipes them to that
 // host's daemon. If the command ends before the daemon answers, as ssh
-// does when it can't log in, the error says the last of what it printed
-// on stderr. Closing the Client closes its stdin, so the command can end
+// does when it can't log in, the error is the last line it printed on
+// stderr, which says what it was, as ssh's do. Closing the Client closes its stdin, so the command can end
 // as the bridge does, and waits for it, killing it after waitGrace.
 func DialCommand(ctx context.Context, argv, env []string) (*Client, error) {
 	if len(argv) == 0 {
@@ -463,7 +463,7 @@ func DialCommand(ctx context.Context, argv, env []string) (*Client, error) {
 	c, err := hello(&cmdConn{cmd: cmd, r: stdout, w: stdin})
 	if err != nil {
 		if said := stderr.String(); said != "" {
-			return nil, fmt.Errorf("%s: %s", strings.Join(argv, " "), said)
+			return nil, errors.New(said)
 		}
 		return nil, fmt.Errorf("%s: %v", strings.Join(argv, " "), err)
 	}

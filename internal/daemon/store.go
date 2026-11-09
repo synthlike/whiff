@@ -66,7 +66,7 @@ func openStore(services string) (*bbolt.DB, error) {
 		return nil, err
 	}
 	err = db.Update(func(tx *bbolt.Tx) error {
-		for _, b := range [][]byte{stateBucket, metaBucket, inboxBucket, timersBucket, tasksBucket, historyBucket, modesBucket} {
+		for _, b := range [][]byte{stateBucket, metaBucket, inboxBucket, timersBucket, tasksBucket, historyBucket, modesBucket, peersBucket} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err
 			}
