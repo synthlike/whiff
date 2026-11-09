@@ -23,7 +23,7 @@ import (
 	"github.com/synthlike/whiff/internal/sandbox"
 )
 
-const usage = `usage: huff [flags] [prompt...]
+const usage = `usage: huff [flags] [<prompt>...]
 
 Runs a model on prompt, or stdin if there is none, and prints its answer.
 The model names its provider, with its key from the environment:
@@ -37,9 +37,9 @@ It bills per token to those keys. Its tools: -tools names claude -p's
 file tools it may use, acting only in -dir, and -allow the commands Bash
 may run, as -allow "go test ./..." -allow "go vet:*"; with -sandbox, they
 run in a container that sees only -dir, without the network unless -net.
-In a whiff job that
-holds an agent's session (WHIFF_SESSION), the whiff functions the agent
-may use, called as its session: a :write waits for your review.
+In a whiff job that holds an agent's session (WHIFF_SESSION), the whiff
+functions the agent may use, called as its session: a :write waits for
+your review.
 
 flags:
 `

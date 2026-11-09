@@ -89,7 +89,7 @@ The result is stored **when the task ends, before anyone is told**.
   fault again. History says so, and `whiff wait` still has the result.
 - **A service that isn't loaded** gets it when it is. Until then it waits, and
   history says so.
-- **A client** has nothing to deliver to: `whiff wait id` reads the result
+- **A client** has nothing to deliver to: `whiff wait <id>` reads the result
   whenever it asks, from any connection, after any restart.
 
 A result is kept for 30 days after it ended, with history, then deleted at
@@ -114,7 +114,7 @@ stay in services: to whiff, each of those is a new task.
 
 ## Cancelling
 
-`whiff cancel id` works on any task that hasn't ended, and is yours as `:review`
+`whiff cancel <id>` works on any task that hasn't ended, and is yours as `:review`
 is: an agent cancels only what its own session started.
 
 | Status | What happens | Result |

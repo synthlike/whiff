@@ -18,12 +18,12 @@ import (
 )
 
 const usage = `usage:
-  puff file.puff args...   evaluate a file and call its main with args
-  puff -e code             evaluate code and print its value
-  puff -t file.puff...     run the files' tests
-  puff -f file.puff...     format the files in place, naming each it changes
-  puff -l file.puff...     name the files that aren't formatted
-  puff                     evaluate forms from stdin as they're typed
+  puff <file.puff> [<arg>...]   evaluate a file and call its main with args
+  puff -e <code>                evaluate code and print its value
+  puff -t <file.puff>...        run the files' tests
+  puff -f <file.puff>...        format the files in place, naming each it changes
+  puff -l <file.puff>...        name the files that aren't formatted
+  puff                          evaluate forms from stdin as they're typed
 `
 
 func main() {

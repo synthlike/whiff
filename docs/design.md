@@ -205,7 +205,7 @@ open at once, or `:tasks`. Parents and children are in
 
 - **Supervised.** The daemon looks at `~/.whiff/services/` twice a second:
   a saved file reloads, a deleted one unloads, a fault restarts the service
-  from its file. `whiff try file.puff fn` loads a file under a scratch
+  from its file. `whiff try <file.puff> <fn>` loads a file under a scratch
   address, calls it once and unloads it. `whiff services` (`service/list`)
   says how each file is, a word and at most one note, what needs you
   first: `failed` to load and why, `faulting` (restarted in the last
@@ -214,7 +214,7 @@ open at once, or `:tasks`. Parents and children are in
   reports wait for nothing), `thinking` (with the attempt, if its turn
   runs again) or `busy` with jobs, an agent `busy` waiting on the tasks
   it handed out (`waiting on :pipeline (task 178) for 4m0s`), then
-  `idle` agents and `ok` services. `whiff services name`
+  `idle` agents and `ok` services. `whiff services <service>`
   (`service/status`) is one in full: its file, its load error, its
   faults today and the last one's message, the last message it handled,
   its inbox and timers, and for an agent its turns and dollars of the
@@ -240,7 +240,7 @@ open at once, or `:tasks`. Parents and children are in
   agent's eval can't, since its review would show only the `use`.
 - **Tested in place.** `(test "name" body...)` in a service file passes if
   its body is `#t`, or for `(= got want)`, if they are equal, and shows both
-  when not. Loading a service skips its tests; `whiff test file.puff` loads
+  when not. Loading a service skips its tests; `whiff test <file.puff>` loads
   it under a scratch address without its `:start` and runs them, as you,
   and so only from your connections. `puff -t` does the same for a plain
   puff file. Both also fail a file that isn't formatted as `puff -f`

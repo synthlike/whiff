@@ -25,47 +25,47 @@ import (
 )
 
 const usage = `usage:
-  whiff call address/fn args...   call a function and print its value
-  whiff send address/fn args...   send a message without waiting
-  whiff pub topic value           publish value to the topic's subscribers
-  whiff sub [topic...]            print what is published to the topics, every topic by default, until stopped
-  whiff try file.puff fn args...  load a service file, call its function once and unload it
-  whiff test file.puff...         run the tests in service files, without starting them
-  whiff act [line...]             send the action at the end of each line, an item as call prints it, or of stdin's
-  whiff inbox [address]           list the messages waiting for a reply: yours, :me's, by default
-  whiff reply id value            answer a message waiting for a reply
-  whiff wait id                   print the answer to a pending message or job, waiting for it
-  whiff cancel id                 cancel a task that hasn't ended: held, waiting for a reply or a running job
-  whiff pending                   list agents' messages that wait for your review
-  whiff accept id                 deliver a message that waits for review, and print its value
-  whiff reject id reason          answer a message that waits for review with (err {:kind :rejected})
-  whiff trust agent/n service...  let an agent session's messages to the services through, as if you accepted them
-  whiff free agent/n              let everything an agent session sends, publishes and evaluates through
-  whiff gate agent/n              hold an agent session's :write messages for review again, as by default
-  whiff session agent/n           what an agent session wrote, and how: held, accepted, trusted or free
-  whiff eval code                 evaluate puff code in the daemon and print its value
-  whiff repl                      evaluate forms as they're typed, in the daemon, keeping what they define
-  whiff history [query]           print every message, newest first; only what query matches, if given
-  whiff history -f [query]        print the last 10, oldest first, then each new one until stopped
-  whiff history -c [query]        print it as chains: each message that began one, newest first, then what it led to, indented
-                                  query: to:plan from:agent origin:user kind:err 'time:>500ms' mark:write
-                                  gate:held project:tally, a word, -term for what must not match
-  whiff services                  list the services, what needs you first: failed, faulting, waiting for you, busy, then the rest
-  whiff services service          one service in full: its file, last message, faults, inbox and timers; an agent's turns and spend
-  whiff ls                        list every address's functions and their marks, each agent session's mode, then the :read overrides
-  whiff state service             print a service's state, as it last committed it
-                                  (broken over lines to fit, on a terminal)
-  whiff dump [bucket]             list whiff.db's buckets, or print one's entries: key value,
-                                  a line each when piped, for grep; broken over lines on a terminal
-  whiff reset service             forget a service's stored state, so it starts from its :state again
-  whiff mcp [--dir path]          serve whiff to an agent over MCP on stdin and stdout, as :agent/<n>, its calls from path
-  whiff sandbox check             say which container runtime confines sandboxed commands, and whether its image is built
-  whiff sandbox build             build the image sandboxed commands run in, with that runtime
-  whiff stop                      stop the daemon
-  whiff daemon                    run the daemon in the foreground
+  whiff call <address/fn> [<arg>...]     call a function and print its value
+  whiff send <address/fn> [<arg>...]     send a message without waiting
+  whiff pub <topic> <value>              publish value to the topic's subscribers
+  whiff sub [<topic>...]                 print what is published to the topics, every topic by default, until stopped
+  whiff try <file.puff> <fn> [<arg>...]  load a service file, call its function once and unload it
+  whiff test <file.puff>...              run the tests in service files, without starting them
+  whiff act [<line>...]                  send the action at the end of each line, an item as call prints it, or of stdin's
+  whiff inbox [<address>]                list the messages waiting for a reply: yours, :me's, by default
+  whiff reply <id> <value>               answer a message waiting for a reply
+  whiff wait <id>                        print the answer to a pending message or job, waiting for it
+  whiff cancel <id>                      cancel a task that hasn't ended: held, waiting for a reply or a running job
+  whiff pending                          list agents' messages that wait for your review
+  whiff accept <id>                      deliver a message that waits for review, and print its value
+  whiff reject <id> <reason>             answer a message that waits for review with (err {:kind :rejected})
+  whiff trust <agent/n> <service>...     let an agent session's messages to the services through, as if you accepted them
+  whiff free <agent/n>                   let everything an agent session sends, publishes and evaluates through
+  whiff gate <agent/n>                   hold an agent session's :write messages for review again, as by default
+  whiff session <agent/n>                what an agent session wrote, and how: held, accepted, trusted or free
+  whiff eval <code>                      evaluate puff code in the daemon and print its value
+  whiff repl                             evaluate forms as they're typed, in the daemon, keeping what they define
+  whiff history [<query>]                print every message, newest first; only what query matches, if given
+  whiff history -f [<query>]             print the last 10, oldest first, then each new one until stopped
+  whiff history -c [<query>]             print it as chains: each message that began one, newest first, then what it led to, indented
+                                         query: to:plan from:agent origin:user kind:err 'time:>500ms' mark:write
+                                         gate:held project:tally, a word, -term for what must not match
+  whiff services                         list the services, what needs you first: failed, faulting, waiting for you, busy, then the rest
+  whiff services <service>               one service in full: its file, last message, faults, inbox and timers; an agent's turns and spend
+  whiff ls                               list every address's functions and their marks, each agent session's mode, then the :read overrides
+  whiff state <service>                  print a service's state, as it last committed it
+                                         (broken over lines to fit, on a terminal)
+  whiff dump [<bucket>]                  list whiff.db's buckets, or print one's entries: key value,
+                                         a line each when piped, for grep; broken over lines on a terminal
+  whiff reset <service>                  forget a service's stored state, so it starts from its :state again
+  whiff mcp [--dir <path>]               serve whiff to an agent over MCP on stdin and stdout, as :agent/n, its calls from path
+  whiff sandbox check                    say which container runtime confines sandboxed commands, and whether its image is built
+  whiff sandbox build                    build the image sandboxed commands run in, with that runtime
+  whiff stop                             stop the daemon
+  whiff daemon                           run the daemon in the foreground
 
-trust and free take --for 2h to end the mode after that long; else it lasts
-until the session ends.
+trust and free take --for <d>, as --for 2h, to end the mode after that long;
+else it lasts until the session ends.
 
 Each arg of call, send, pub, try and reply is read as a puff value, or taken as
 a string if it doesn't read as one: 12 is 12, ann is "ann", '"12"' is "12".
