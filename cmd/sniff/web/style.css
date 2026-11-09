@@ -509,6 +509,10 @@ svg.map { display: block; max-width: 100%; height: auto; font-family: var(--sans
 .map .band-sub { font-size: 11.5px; fill: var(--muted); }
 .map .band-ask { font-size: 11.5px; fill: hsl(var(--hue, 210) 60% var(--tag-fg)); cursor: pointer; }
 .map .band-ask:hover { text-decoration: underline; }
+/* A heading is in front of the arrows: a halo of its band's own color
+   keeps an arrow under it from running through its words. */
+.map .band-head text { paint-order: stroke; stroke-width: 5px; stroke-linejoin: round; stroke: var(--bg); }
+.map .band-head:not(.shared) text { stroke: color-mix(in srgb, hsl(var(--hue, 210) 70% var(--tag-bg)) 45%, var(--bg)); }
 .map .node.band-node rect { fill: color-mix(in srgb, var(--select) 60%, var(--panel)); stroke: var(--accent); stroke-dasharray: 5 3; }
 .map .node.band-node .node-name { fill: var(--accent); }
 .map .edge-label { font: 11px var(--mono); fill: var(--muted); paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round; }

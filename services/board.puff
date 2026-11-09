@@ -73,12 +73,24 @@
     (= [(run-of {:task "b"} [{:run 1 :task "b"} {:run 2 :task "a"} {:run 3 :task "b"}]) (run-of {} [{:run 1 :task "b"}])]
       [(some {:run 3 :task "b"}) (none)]))
 
+  ; short is who, a ticket's, with a developer's model by its own name:
+  ; "kimi-k2.6 dev", not "openrouter/moonshotai/kimi-k2.6 dev", as sniff
+  ; names it on its map; an agent, as agent/7, as it is.
+  (def (short who)
+    (if (string/ends-with? who " dev")
+      (unwrap (vector/last (string/split who "/")))
+      who))
+
+  (test "a ticket's developer is named by its model's own name"
+    (= (vector/map ["openrouter/moonshotai/kimi-k2.6 dev" "haiku dev" "agent/7" ""] short)
+      ["kimi-k2.6 dev" "haiku dev" "agent/7" ""]))
+
   ; own is the board's ticket id, t, as one of the board's: {:project :step
   ; :item}; once it started a run, r, (some run), at that run's step, its
   ; actions the run's.
   (def (own id t r)
     (let [{:project p :title title :step s} t
-          who (map/get-or t :who "")
+          who (short (map/get-or t :who ""))
           note (map/get-or t :note "")
           next (match s [:todo :doing] [:doing :review] [:review :done] [_ :none])
           detail (fn (more) (string/join (vector/filter (vector/concat [(str "#" id) who] more [note]) (fn (x) (not (= x "")))) " · "))

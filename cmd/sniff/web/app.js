@@ -717,7 +717,9 @@ function mapEl(is, projAt, perProject) {
   const bands = ["", ...[...members.keys()].sort((p, q) => Math.min(...[...first.keys()].filter((x) => bandOf.get(x) === p).map((x) => first.get(x)))
     - Math.min(...[...first.keys()].filter((x) => bandOf.get(x) === q).map((x) => first.get(x))))];
   const banded = bands.length > 1;
-  const bandsG = svgEl("g");
+  // Bands go behind the arrows, their headings in front, so an arrow into
+  // a band doesn't run through its words.
+  const bandsG = svgEl("g"), headsG = svgEl("g");
   let top = PAD;
   for (const b of bands) {
     const nodes = cols.map((col) => col.filter((x) => (bandOf.get(x) || "") === b));
@@ -727,7 +729,11 @@ function mapEl(is, projAt, perProject) {
     // Room on the left for what goes around a column.
     nodes.forEach((col, d) => col.forEach((x, r) => pos.set(x, { x: PAD + 70 + d * (NW + CG), y: y0 + r * (NH + RG) })));
     const h = (banded ? HEAD : 0) + n * (NH + RG) - RG + (banded ? 16 : 0);
-    if (banded) bandsG.append(bandEl(b, PAD - 12, top - 8, W - 2 * PAD + 24, h + 8, perProject.get(b), members.get(b) || 0));
+    if (banded) {
+      const [back, head] = bandEl(b, PAD - 12, top - 8, W - 2 * PAD + 24, h + 8, perProject.get(b), members.get(b) || 0);
+      bandsG.append(back);
+      headsG.append(head);
+    }
     top += h + GAP + (banded ? 0 : 28);
   }
   const H = top + 28;
@@ -820,7 +826,7 @@ function mapEl(is, projAt, perProject) {
         : placeName(x) + (st?.note ? ": " + st.note : "") + "\nclick for its functions, status and state"));
     nodesG.append(g);
   }
-  svg.append(bandsG, edgesG, nodesG);
+  svg.append(bandsG, edgesG, headsG, nodesG);
   const box = el("div", "map-box");
   box.append(svg, el("p", "hint map-hint", (showBg ? "Every message shown" : "The requests shown, not the background") +
     ": click an address for its details, an arrow for its messages. The filter narrows it too."));
@@ -884,17 +890,18 @@ function boardOf(b) {
   return "/view/board/for?args=" + encodeURIComponent(`[${JSON.stringify(b)}]`);
 }
 
-// bandEl draws a project's band behind its addresses, its heading saying
-// what of the requests shown are its and what they cost; for "", what the
-// projects share.
+// bandEl draws a project's band behind its addresses, and its heading,
+// saying what of the requests shown are its and what they cost; for "",
+// what the projects share: [band, heading], to go behind and in front of
+// the arrows.
 function bandEl(b, x, y, w, h, info, n) {
-  const g = svgEl("g", { class: "band" + (b ? "" : " shared") });
-  if (b) g.classList.add(hueOf(b));
-  g.append(svgEl("rect", { x, y, width: w, height: h, rx: 12 }));
+  const cls = "band" + (b ? " " + hueOf(b) : " shared");
+  const back = svgEl("g", { class: cls }), g = svgEl("g", { class: cls + " band-head" });
+  back.append(svgEl("rect", { x, y, width: w, height: h, rx: 12 }));
   if (!b) {
     g.append(svgEl("text", { x: x + 14, y: y + 22, class: "band-name" }, "shared"),
       svgEl("text", { x: x + 72, y: y + 22, class: "band-sub" }, "you, and what several projects use"));
-    return g;
+    return [back, g];
   }
   const folded = foldedBands.has(b);
   const caret = svgEl("text", { x: x + 14, y: y + 22, class: "band-caret" }, folded ? "▸" : "▾");
@@ -912,7 +919,7 @@ function bandEl(b, x, y, w, h, info, n) {
     ask.append(svgEl("title", {}, `open ${b}'s board, to ask its lead`));
     g.append(ask);
   }
-  return g;
+  return [back, g];
 }
 
 // setLayout shows Activity as cards or as the map, and remembers it.
