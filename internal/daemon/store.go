@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"maps"
@@ -14,6 +15,7 @@ import (
 	"go.etcd.io/bbolt"
 
 	"github.com/synthlike/whiff/internal/puff"
+	"github.com/synthlike/whiff/internal/sandbox"
 )
 
 // storeTimeout is how long openStore waits for a daemon that is stopping
@@ -456,6 +458,7 @@ func (d *daemon) resume() {
 			d.rerun(a.j, a.r)
 		}
 	}()
+	d.endStrays()
 	d.do(func(st *state) {
 		away := map[string]int{}
 		owed := st.owed
@@ -520,6 +523,41 @@ func (d *daemon) resume() {
 		}
 		st.timers = nil
 	})
+}
+
+// endStrays ends the containers of sandboxed jobs that were running when
+// whiff died. A container's name is its own, as a reused pid isn't, so
+// whiff can end what's left of one; then its client's group goes too, and
+// the job is lost as one that runs no more: its outcome is unknown, and it
+// may run again.
+func (d *daemon) endStrays() {
+	var strays []*job
+	d.do(func(st *state) {
+		for _, j := range st.lost {
+			if n := len(j.attempts); j.box != "" && n > 0 && j.attempts[n-1].ended.IsZero() {
+				strays = append(strays, j)
+			}
+		}
+	})
+	if len(strays) == 0 {
+		return
+	}
+	c, err := sandbox.Host()
+	if err != nil {
+		d.note("%d sandboxed jobs were running when whiff died, and their containers can't be checked: %v", len(strays), err)
+		return
+	}
+	for _, j := range strays {
+		ctx, cancel := context.WithTimeout(d.ctx, 30*time.Second)
+		if !c.Gone(ctx, j.box) {
+			c.End(ctx, j.box)
+			d.note("job %d's container %s still ran after whiff died, so whiff ended it", j.id, j.box)
+		}
+		cancel()
+		for deadline := time.Now().Add(stopGrace); groupThere(j.pid) && time.Now().Before(deadline); {
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
 }
 
 // timer is a send-after waiting for its time: m, for addr, built when it was
@@ -694,6 +732,9 @@ func (j *job) stored() puff.Value {
 			puff.Key("started", puff.NewTime(a.started)),
 			puff.Key("pid", puff.Int(a.pid)),
 		}
+		if a.box != "" {
+			es = append(es, puff.Key("container", puff.String(a.box)))
+		}
 		if !a.ended.IsZero() {
 			es = append(es,
 				puff.Key("ended", puff.NewTime(a.ended)),
@@ -723,6 +764,10 @@ func (j *job) stored() puff.Value {
 		if o.stream {
 			with("stream", puff.Bool(true))
 		}
+		if o.sandbox {
+			sb, _ := puff.NewMap(puff.Key("net", puff.Bool(o.net)))
+			with("sandbox", sb)
+		}
 	}
 	return v
 }
@@ -738,7 +783,12 @@ func storedJob(id int64, p string) (*job, error) {
 		return nil, fmt.Errorf("want :cmd as a vector, got %s", p)
 	}
 	pid, _ := get("pid").(puff.Int)
-	j := &job{ticket: storedTicket(id, get), cmd: cmd, pid: int(pid), opts: jobOpts{timeout: defaultJobTimeout}}
+	box, _ := get("container").(puff.String)
+	j := &job{ticket: storedTicket(id, get), cmd: cmd, pid: int(pid), box: string(box), opts: jobOpts{timeout: defaultJobTimeout}}
+	if sb, ok := get("sandbox").(puff.Map); ok {
+		net, _ := puff.Field(sb, "net").(puff.Bool)
+		j.opts.sandbox, j.opts.net = true, bool(net)
+	}
 	j.opts.dir = j.dir
 	if t, ok := get("timeout").(puff.Duration); ok && t > 0 {
 		j.opts.timeout = time.Duration(t)
@@ -763,7 +813,8 @@ func storedJob(id int64, p string) (*job, error) {
 		ended, isEnded := at("ended").(puff.Time)
 		outcome, _ := at("outcome").(puff.Keyword)
 		apid, _ := at("pid").(puff.Int)
-		a := attempt{started: started.Go(), outcome: string(outcome), pid: int(apid)}
+		abox, _ := at("container").(puff.String)
+		a := attempt{started: started.Go(), outcome: string(outcome), pid: int(apid), box: string(abox)}
 		if isEnded {
 			a.ended = ended.Go()
 		}

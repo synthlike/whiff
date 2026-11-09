@@ -265,7 +265,12 @@ open at once, or `:tasks`. Parents and children are in
   --output-format stream-json` so, and `:tasks/watch id` shows the turn's
   steps as they happen, what it says and calls and what answers. A job times out
   after 1h unless its `:timeout` says otherwise; `:timeout :none`, for a
-  server, runs until it ends or is stopped.
+  server, runs until it ends or is stopped. `:sandbox #t` runs it in a
+  container that sees only its `:dir`, without the network unless
+  `{:net #t}`: Apple's `container` on macOS, rootless Podman on Linux,
+  with the image `whiff sandbox build` makes. Where there's none, the job
+  fails to start rather than run unconfined. A container left running
+  when whiff died is ended at start, by its name.
 - **HTTP.** `(http/get url {:headers {...}})` answers the body of a 2xx, and
   `http/request` any method and the whole response. Both are `:write`: a
   request leaves the machine, and a GET can carry out in its URL whatever a

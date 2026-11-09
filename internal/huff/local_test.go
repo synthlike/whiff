@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/synthlike/whiff/internal/sandbox"
 )
 
 func call(t *testing.T, l *Local, fn string, args map[string]any) (string, bool) {
@@ -107,9 +109,12 @@ func TestLocalBash(t *testing.T) {
 // the command it was given and where.
 type wrap struct{}
 
-func (wrap) Command(ctx context.Context, dir string, argv []string) *exec.Cmd {
+func (wrap) Command(ctx context.Context, _, dir string, argv []string) *exec.Cmd {
 	return exec.CommandContext(ctx, "echo", append([]string{"in", dir + ":"}, argv...)...)
 }
+
+func (wrap) Gone(context.Context, string) bool { return true }
+func (wrap) End(context.Context, string)       {}
 
 // TestLocalRunner: Bash's allowed commands go through its Runner, as a
 // sandbox makes them; refused ones never reach it.
@@ -121,6 +126,18 @@ func TestLocalRunner(t *testing.T) {
 	}
 	if out, isErr := call(t, l, "Bash", map[string]any{"command": "rm -rf /"}); !isErr || !strings.Contains(out, "isn't allowed") {
 		t.Errorf("a refused command = %q %v", out, isErr)
+	}
+}
+
+// TestLocalSandbox runs Bash in a real sandbox, where there is one.
+func TestLocalSandbox(t *testing.T) {
+	c, err := sandbox.New(context.Background(), false)
+	if err != nil {
+		t.Skip(err)
+	}
+	l := &Local{Dir: t.TempDir(), Names: []string{"Bash"}, Allow: []string{"uname -s"}, Runner: c}
+	if out, isErr := call(t, l, "Bash", map[string]any{"command": "uname -s"}); isErr || out != "Linux\n" {
+		t.Errorf("Bash in a sandbox = %q %v", out, isErr)
 	}
 }
 

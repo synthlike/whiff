@@ -119,7 +119,12 @@ huff also runs on its own, as `claude -p` does:
 ```sh
 huff -m openrouter/moonshotai/kimi-k2 "a question"
 huff -m local/qwen3 -tools Read,Edit,Bash -allow "go test:*" "fix the failing test"
+huff -m local/qwen3 -tools Read,Edit,Bash -allow "go test:*" -sandbox "fix the failing test"
 ```
+
+With `-sandbox`, Bash's commands run in a container that sees only the
+directory, without the network unless `-net`; `whiff sandbox build`
+makes its image, and `whiff sandbox check` says what's missing.
 
 ## Review writes or grant trust
 

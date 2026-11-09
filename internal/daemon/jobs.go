@@ -49,6 +49,7 @@ type job struct {
 	cancel   context.CancelFunc
 	p        *proc     // the last attempt, whose output :jobs/output reads
 	pid      int       // the last attempt's process group, as it is the group's leader
+	box      string    // the last attempt's container, if it's sandboxed
 	attempts []attempt // oldest first
 }
 
@@ -62,6 +63,8 @@ type jobOpts struct {
 	retry      int    // how many times it may run again
 	idempotent bool   // running it twice does what running it once does
 	stream     bool   // each line it prints is published on :jobs/<id>; its result's :stdout is the last
+	sandbox    bool   // it runs in a container that sees only dir
+	net        bool   // sandboxed, it may reach the network
 	// can is, for :session, the functions the job's whiff mcp may call as
 	// its sender's agent session; nil without it. token is that session's,
 	// in the job's WHIFF_SESSION while it runs.
@@ -75,11 +78,14 @@ type attempt struct {
 	started, ended time.Time
 	outcome        string
 	pid            int
+	box            string // its container, if it's sandboxed
 }
 
 // proc is an attempt's process, running.
 type proc struct {
 	cmd            *exec.Cmd
+	runner         sandbox.Runner
+	box            string          // its container's name, if it's sandboxed
 	ctx            context.Context // ends at the attempt's timeout, or with its job's
 	cancel         context.CancelFunc
 	stdout, stderr tail
@@ -94,9 +100,9 @@ func (d *daemon) jobsService() *service {
 	return &service{name: "jobs", d: d, cur: caller{addr: "jobs"},
 		fns: map[string]handler{
 			"run": {params: []string{"cmd", "opts"}, optional: 1, mark: puff.MarkWrite, marked: true, native: d.runJob, cmd: true,
-				doc: "Run cmd, [program args...], here; pending now, {:exit :stdout :stderr} when done. Options: :timeout (1h), or :none for a server; :stdin, a string; :dir, where it runs; :as :text answers (ok stdout), or (err {:kind :exit}) unless it exits 0; :origin :agent, for a job whose output a model writes, answers as :agent's; :retry n runs it again, up to n times, under its id, if a timeout or whiff stopped it, or whiff died while it ran, and only if it is :read or :idempotent #t says running it twice is safe; :stream #t publishes each line it prints on :jobs/<id> as it comes, and its result's :stdout is the last line, as claude -p --output-format stream-json's result, and tasks/watch shows them; :session [:addr/fn ...], from a service: the job's whiff mcp acts as an agent session, :agent/<service> for an agent's turn or a new :agent/<n>, reaching only those functions, gated as any agent's. :read for a read-only command, as whiff ls lists them."},
+				doc: "Run cmd, [program args...], here; pending now, {:exit :stdout :stderr} when done. Options: :timeout (1h), or :none for a server; :stdin, a string; :dir, where it runs; :as :text answers (ok stdout), or (err {:kind :exit}) unless it exits 0; :origin :agent, for a job whose output a model writes, answers as :agent's; :retry n runs it again, up to n times, under its id, if a timeout or whiff stopped it, or whiff died while it ran, and only if it is :read or :idempotent #t says running it twice is safe; :stream #t publishes each line it prints on :jobs/<id> as it comes, and its result's :stdout is the last line, as claude -p --output-format stream-json's result, and tasks/watch shows them; :session [:addr/fn ...], from a service: the job's whiff mcp acts as an agent session, :agent/<service> for an agent's turn or a new :agent/<n>, reaching only those functions, gated as any agent's; :sandbox #t runs it in a container that sees only its :dir, without the network, or with it as :sandbox {:net #t}, and it fails to start where there's no sandbox (whiff sandbox check). :read for a read-only command, as whiff ls lists them."},
 			"list": {mark: puff.MarkRead, marked: true, native: d.listJobs,
-				doc: "The running jobs, each {:id :cmd :cwd :from}."},
+				doc: "The running jobs, each {:id :cmd :cwd :from}, and :container if it is sandboxed."},
 			"cancel": {params: []string{"id"}, mark: puff.MarkWrite, marked: true, native: d.cancelJob,
 				doc: "Stop job id and everything it started: SIGTERM, then SIGKILL for what's left after 3s."},
 			"output": {params: []string{"id"}, mark: puff.MarkRead, marked: true, native: d.jobOutput,
@@ -203,6 +209,15 @@ func jobArgs(m message, args []puff.Value) (puff.Vector, jobOpts, bool, error) {
 			o.idempotent = bool(b)
 		case puff.Equal(e.Key, puff.Keyword("stream")) && isBool:
 			o.stream = bool(b)
+		case puff.Equal(e.Key, puff.Keyword("sandbox")) && isBool:
+			o.sandbox = bool(b)
+		case puff.Equal(e.Key, puff.Keyword("sandbox")):
+			sb, isMap := e.Val.(puff.Map)
+			net, isNet := puff.Field(sb, "net").(puff.Bool)
+			if !isMap || sb.Len() != 1 || !isNet {
+				return cmdv, o, user, fmt.Errorf("want :sandbox #t, or {:net #t} for a sandbox with the network, got %s", puff.Print(e.Val))
+			}
+			o.sandbox, o.net = true, bool(net)
 		case puff.Equal(e.Key, puff.Keyword("session")):
 			can, err := canSet(e.Val)
 			if err != nil {
@@ -210,8 +225,12 @@ func jobArgs(m message, args []puff.Value) (puff.Vector, jobOpts, bool, error) {
 			}
 			o.can = can
 		default:
-			return cmdv, o, user, fmt.Errorf("want {:timeout d :stdin s :dir path :as :text :origin :agent :retry n :idempotent b :stream b :session [:addr/fn ...]}, a positive duration or :none, a count and strings, got %s", puff.Print(opts))
+			return cmdv, o, user, fmt.Errorf("want {:timeout d :stdin s :dir path :as :text :origin :agent :retry n :idempotent b :stream b :session [:addr/fn ...] :sandbox b}, a positive duration or :none, a count and strings, got %s", puff.Print(opts))
 		}
+	}
+	// A session's whiff mcp talks to the daemon, which a sandbox hides.
+	if o.sandbox && o.can != nil {
+		return cmdv, o, user, fmt.Errorf(":session and :sandbox don't go together: a session's agent talks to whiff, which a sandbox keeps out")
 	}
 	return cmdv, o, user, nil
 }
@@ -308,8 +327,16 @@ func (d *daemon) spawn(j *job) (*proc, error) {
 	} else {
 		p.ctx, p.cancel = context.WithCancel(j.ctx)
 	}
-	argv := j.argv()
-	cmd := sandbox.Direct{}.Command(p.ctx, j.opts.dir, argv)
+	p.runner = sandbox.Direct{}
+	if j.opts.sandbox {
+		c, err := sandbox.New(p.ctx, j.opts.net)
+		if err != nil {
+			p.cancel()
+			return nil, err
+		}
+		p.runner, p.box = c, sandbox.Name("job")
+	}
+	cmd := p.runner.Command(p.ctx, p.box, j.opts.dir, j.argv())
 	cmd.Stdout, cmd.Stderr = &p.stdout, &p.stderr
 	if p.stream {
 		// A first attempt has its id only once it has started, on the route
@@ -348,8 +375,8 @@ func (d *daemon) spawn(j *job) (*proc, error) {
 
 // began records p as j's new attempt.
 func (j *job) began(p *proc) {
-	j.p, j.pid = p, p.cmd.Process.Pid
-	j.attempts = append(j.attempts, attempt{started: time.Now(), pid: j.pid})
+	j.p, j.pid, j.box = p, p.cmd.Process.Pid, p.box
+	j.attempts = append(j.attempts, attempt{started: time.Now(), pid: j.pid, box: p.box})
 }
 
 // ended records how j's last attempt ended, as another follows it.
@@ -366,6 +393,12 @@ func (d *daemon) result(j *job, p *proc) puff.Value {
 	err := p.cmd.Wait()
 	defer p.cancel()
 	p.stop()
+	if p.box != "" && p.ctx.Err() != nil {
+		// Its client, stopped, may have left its container running.
+		end, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		p.runner.End(end, p.box)
+		cancel()
+	}
 	var exitErr *exec.ExitError
 	switch {
 	case errors.Is(p.ctx.Err(), context.DeadlineExceeded):
@@ -645,7 +678,8 @@ func (d *daemon) cancelJob(_ message, args []puff.Value) (puff.Value, error) {
 }
 
 // value is j as :jobs/list shows it: {:id 3 :cmd ["go" "test"] :cwd "..."
-// :from :gh}, without :from for a client.
+// :from :gh}, without :from for a client, and with :container, its
+// container's name, if it's sandboxed.
 func (j *job) value() puff.Value {
 	es := []puff.Entry{
 		puff.Key("id", puff.Int(j.id)),
@@ -654,6 +688,9 @@ func (j *job) value() puff.Value {
 	}
 	if j.from != "" {
 		es = append(es, puff.Key("from", puff.Keyword(j.from)))
+	}
+	if j.box != "" {
+		es = append(es, puff.Key("container", puff.String(j.box)))
 	}
 	m, _ := puff.NewMap(es...)
 	return m

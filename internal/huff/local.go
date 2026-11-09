@@ -479,7 +479,14 @@ func (l *Local) bash(ctx context.Context, command string) (string, bool) {
 	if runner == nil {
 		runner = sandbox.Direct{}
 	}
-	out, err := runner.Command(ctx, l.Dir, ws).CombinedOutput()
+	name := sandbox.Name("bash")
+	out, err := runner.Command(ctx, name, l.Dir, ws).CombinedOutput()
+	if ctx.Err() != nil {
+		// A client killed past its grace leaves its container running.
+		end, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		runner.End(end, name)
+		cancel()
+	}
 	s := string(out)
 	if len(s) > outputMax {
 		s = fmt.Sprintf("(its first %d characters are cut)\n", len(s)-outputMax) + s[len(s)-outputMax:]

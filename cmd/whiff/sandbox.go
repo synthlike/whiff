@@ -38,8 +38,16 @@ func sandboxCmd(sub string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		fmt.Fprintf(stdout, "image    %s\n", sandbox.Image)
+		if !b.HasNetwork(ctx) {
+			fmt.Fprintf(stdout, "network  the one commands run without a network on isn't there: whiff sandbox build\n")
+			return 1
+		}
 		return 0
 	default: // build
+		if err := b.MakeNetwork(ctx); err != nil {
+			fmt.Fprintf(stderr, "whiff: %v\n", err)
+			return 1
+		}
 		if err := b.Build(ctx, stdout, stderr); err != nil {
 			fmt.Fprintf(stderr, "whiff: %v\n", err)
 			return 1

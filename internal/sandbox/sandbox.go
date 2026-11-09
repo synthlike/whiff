@@ -34,18 +34,37 @@ type Backend struct {
 	Name   string   // "container" or "podman", also its binary
 	Status []string // argv that fails while the runtime can't run containers
 	Start  string   // what to run when Status fails
+	// NoNet is run's flags for a container without a network. Apple's
+	// container has no network "none": an --internal network, made by
+	// Network, reaches neither the internet nor the host.
+	NoNet   []string
+	Network []string // argv that makes NoNet's network, if it needs one
+	Run     []string // run's own flags, as Apple's to keep progress out of output
+	Inspect []string // argv, before a name, that fails if no container has it
+	Remove  []string // argv, before a name, that ends and deletes its container
 }
+
+// noNet is the network Apple's container runs commands without a network on.
+const noNet = "whiff-nonet"
 
 var backends = map[string]Backend{
 	"darwin": {
-		Name:   "container",
-		Status: []string{"container", "system", "status"},
-		Start:  "container system start",
+		Name:    "container",
+		Status:  []string{"container", "system", "status"},
+		Start:   "container system start",
+		NoNet:   []string{"--network", noNet},
+		Network: []string{"container", "network", "create", "--internal", noNet},
+		Run:     []string{"--progress", "none"},
+		Inspect: []string{"container", "inspect"},
+		Remove:  []string{"container", "delete", "--force"},
 	},
 	"linux": {
-		Name:   "podman",
-		Status: []string{"podman", "info"},
-		Start:  "podman info, as the user whiff runs as, for what's wrong",
+		Name:    "podman",
+		Status:  []string{"podman", "info"},
+		Start:   "podman info, as the user whiff runs as, for what's wrong",
+		NoNet:   []string{"--network", "none"},
+		Inspect: []string{"podman", "container", "inspect"},
+		Remove:  []string{"podman", "rm", "--force", "--time", "0"},
 	},
 }
 
@@ -84,6 +103,23 @@ func (b Backend) Ready(ctx context.Context) error {
 			msg = msg[:i]
 		}
 		return fmt.Errorf("%s isn't ready (%s): %s", b.Name, msg, b.Start)
+	}
+	return nil
+}
+
+// HasNetwork says whether NoNet's network is there, or needs none.
+func (b Backend) HasNetwork(ctx context.Context) bool {
+	return b.Network == nil || exec.CommandContext(ctx, b.Name, "network", "inspect", noNet).Run() == nil
+}
+
+// MakeNetwork makes NoNet's network, if it needs one that isn't there.
+func (b Backend) MakeNetwork(ctx context.Context) error {
+	if b.HasNetwork(ctx) {
+		return nil
+	}
+	out, err := exec.CommandContext(ctx, b.Network[0], b.Network[1:]...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s: %v: %s", strings.Join(b.Network, " "), err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }

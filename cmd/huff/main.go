@@ -20,6 +20,7 @@ import (
 
 	"github.com/synthlike/whiff/internal/huff"
 	"github.com/synthlike/whiff/internal/puff"
+	"github.com/synthlike/whiff/internal/sandbox"
 )
 
 const usage = `usage: huff [flags] [prompt...]
@@ -34,7 +35,9 @@ The model names its provider, with its key from the environment:
 
 It bills per token to those keys. Its tools: -tools names claude -p's
 file tools it may use, acting only in -dir, and -allow the commands Bash
-may run, as -allow "go test ./..." -allow "go vet:*". In a whiff job that
+may run, as -allow "go test ./..." -allow "go vet:*"; with -sandbox, they
+run in a container that sees only -dir, without the network unless -net.
+In a whiff job that
 holds an agent's session (WHIFF_SESSION), the whiff functions the agent
 may use, called as its session: a :write waits for your review.
 
@@ -68,6 +71,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	toolNames := fs.String("tools", "", "the file tools it may use, of "+strings.Join(huff.LocalTools, ",")+", as claude -p's --tools")
 	var allow list
 	fs.Var(&allow, "allow", "a command Bash may run, as \"go test ./...\", or what follows a prefix, as \"go vet:*\"; again for more")
+	box := fs.Bool("sandbox", false, "run Bash's commands in a container that sees only -dir (whiff sandbox check); huff fails where there's none")
+	net := fs.Bool("net", false, "with -sandbox, Bash's commands may reach the network")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -112,10 +117,20 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	if wd == "" {
 		wd, _ = os.Getwd()
 	}
+	if wd, err = filepath.Abs(wd); err != nil {
+		return fail("%v", err)
+	}
 	var boxes huff.Toolboxes
 	var local *huff.Local
 	if *toolNames != "" {
 		local = &huff.Local{Dir: wd, Allow: allow}
+		if *box {
+			c, err := sandbox.New(ctx, *net)
+			if err != nil {
+				return fail("-sandbox: %v", err)
+			}
+			local.Runner = c
+		}
 		for _, n := range strings.Split(*toolNames, ",") {
 			if n = strings.TrimSpace(n); n == "" {
 				continue
