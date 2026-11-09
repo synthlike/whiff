@@ -197,6 +197,8 @@ func TestJobs(t *testing.T) {
 	// A send has nobody waiting for its answer, so there is nobody to hand on to.
 	c.Eval(`(send :hander/cat "x")`, dir)
 	inHistory(`send  user   client -> :hander/cat "x"  (err {:kind :no-id :message "only a call's handler can hand on: nobody waits for this message's answer"})`)
+	// Its job may still run, on a slow machine.
+	eventually(t, "no jobs", func() string { r, _ := c.Eval(`(call :jobs/list)`, dir); return r.Value }, "(ok [])")
 
 	id = run(`(call :jobs/run ["sleep" "10"])`)
 	resp, err = c.Eval(`(call :jobs/list)`, dir)
