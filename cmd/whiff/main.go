@@ -55,6 +55,8 @@ const usage = `usage:
   whiff state service             print a service's state, as it last committed it
   whiff reset service             forget a service's stored state, so it starts from its :state again
   whiff mcp [--dir path]          serve whiff to an agent over MCP on stdin and stdout, as :agent/<n>, its calls from path
+  whiff sandbox check             say which container runtime confines sandboxed commands, and whether its image is built
+  whiff sandbox build             build the image sandboxed commands run in, with that runtime
   whiff stop                      stop the daemon
   whiff daemon                    run the daemon in the foreground
 
@@ -150,6 +152,8 @@ func run(args []string, dir, services string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		return mcpRun(dir, stderr)
+	case len(args) == 2 && args[0] == "sandbox" && (args[1] == "check" || args[1] == "build"):
+		return sandboxCmd(args[1], stdout, stderr)
 	case len(args) == 1 && args[0] == "stop":
 		return stop(dir, stderr)
 	case len(args) == 1 && args[0] == "daemon":

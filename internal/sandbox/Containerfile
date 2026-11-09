@@ -1,0 +1,14 @@
+# The image whiff runs sandboxed commands in. Built by `whiff sandbox
+# build`, which tags it with a hash of this file. No agent CLI and no
+# credentials: commands get the job's directory and nothing else.
+FROM docker.io/library/golang:1.27-trixie
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends nodejs npm \
+ && rm -rf /var/lib/apt/lists/*
+
+# The network is off unless a job asks: use the image's Go, never fetch one.
+ENV GOTOOLCHAIN=local
+
+# The mounted directory's owner may not be the container's user.
+RUN git config --system --add safe.directory '*'
