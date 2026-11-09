@@ -266,11 +266,7 @@ open at once, or `:tasks`. Parents and children are in
   steps as they happen, what it says and calls and what answers. A job times out
   after 1h unless its `:timeout` says otherwise; `:timeout :none`, for a
   server, runs until it ends or is stopped. `:sandbox #t` runs it in a
-  container that sees only its `:dir`, without the network unless
-  `{:net #t}`: Apple's `container` on macOS, rootless Podman on Linux,
-  with the image `whiff sandbox build` makes. Where there's none, the job
-  fails to start rather than run unconfined. A container left running
-  when whiff died is ended at start, by its name.
+  container that sees only its `:dir`: see [Sandbox](#sandbox).
 - **HTTP.** `(http/get url {:headers {...}})` answers the body of a 2xx, and
   `http/request` any method and the whole response. Both are `:write`: a
   request leaves the machine, and a GET can carry out in its URL whatever a
@@ -365,9 +361,11 @@ the gate treated each of an agent's writes (`held 5`, `accepted 5`,
 the end of a run instead of one per message.
 
 **What it doesn't cover.** The gate covers what reaches whiff. An agent
-with a shell runs as your OS user and can run `whiff accept` as you; what
-closes that is a sandbox that keeps its shell off the socket. A job's
-program, `claude` with edit tools say, does what its own permissions let it:
+with a shell runs as your OS user and can run `whiff accept` as you: a
+`claude -p` agent's does. huff has no shell, and its Bash's commands can
+run in the [sandbox](#sandbox), which keeps them off the socket. A job's
+program, `claude` with edit tools say, does what its own permissions let it,
+unless it is sandboxed:
 whiff decides when it runs and where, not what it does to files. The table
 of read-only commands narrows the trust rather than removing it: a
 program's config and hooks (git's `core.fsmonitor`, a diff driver) or a
@@ -417,6 +415,53 @@ not "I've asked". The turn that started a task is the last before it, as
 jobs and tasks share their ids, and `session/tasks` says which of the
 agent's are still open. A loop of asks between agents is bounded
 by their `:limits`, each turn costing its dollars of each one's day.
+
+## Sandbox
+
+What runs code an agent wrote is a command: huff's Bash, and jobs such as
+a pipeline's check. The sandbox runs those in a container and leaves the
+agent out: huff's model loop, its key and its file tools stay on the
+host, the file tools confined to their directory as before. So nothing in
+the container needs whiff, and nothing of whiff's is there. A job asks
+with `:sandbox #t`, huff with `-sandbox`, a pipeline run or a board team
+with `:sandbox #t` (for a developer on huff); `{:net #t}` and `-net` give
+it the network.
+
+- **Runtimes.** Apple's `container` on macOS, a small Linux VM per
+  container, and rootless Podman on Linux. Both run one image, from the
+  Containerfile embedded in whiff: Go, git and node, no agent CLI and no
+  credentials, tagged with the file's hash, so a whiff whose Containerfile
+  changed asks for a new build. `whiff sandbox build` builds it, and makes
+  the network commands without one run on where the runtime needs that;
+  `whiff sandbox check` says what's missing.
+- **What a command sees.** Its directory, read-write, at the same path,
+  so paths in its output are the host's. Go's module cache read-only, if
+  the host has one, so builds need no network for modules it has, and
+  Go's build cache in a volume of the runtime's that only sandboxed
+  commands share. Not your home, other repositories, whiff's socket or the
+  agent's key; no network unless asked; `GOTOOLCHAIN=local`, so go never
+  fetches a toolchain.
+- **Failing closed.** A command that asks for the sandbox where there is
+  no runtime, or no image, doesn't start, and says what to run.
+- **Lifetime.** A container per command, removed as it ends: it starts in
+  about a second on macOS, as a VM boots, and faster on Linux. A cancel
+  sends the runtime's client SIGTERM, which `--init` passes on to the
+  command, then ends the container by name, as a client can leave it
+  running (Apple's exits without passing SIGTERM on while its VM boots).
+  A container's name is random, so unlike a pid it can't be another's:
+  one still running after whiff died is ended at start, and its job is
+  lost as one that runs no more.
+
+**What it doesn't cover.** With the network on, a command reaches the
+internet and, under Podman, the host's servers that listen on every
+interface. What a command writes in its directory is the agent's work, as
+its file tools' is: the review gate and git cover that, not the sandbox,
+and a repository's own hooks or config written there run on the host
+when you use git in it. In a git worktree, as a pipeline run's, the
+repository's `.git` isn't mounted, so git commands in the container
+fail. huff's own calls to its provider leave from the host, by design.
+Agents on `claude -p` aren't sandboxed: their shell still reaches the
+socket.
 
 ## History
 
