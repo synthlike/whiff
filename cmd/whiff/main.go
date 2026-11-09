@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -60,6 +61,8 @@ const usage = `usage:
   whiff mcp [--dir <path>]               serve whiff to an agent over MCP on stdin and stdout, as :agent/n, its calls from path
   whiff sandbox check                    say which container runtime confines sandboxed commands, and whether its image is built
   whiff sandbox build                    build the image sandboxed commands run in, with that runtime
+  whiff bridge                           connect stdin and stdout to the daemon, starting it if need be:
+                                         how another machine's whiff reaches this one, over ssh
   whiff stop                             stop the daemon
   whiff daemon                           run the daemon in the foreground
 
@@ -159,6 +162,8 @@ func run(args []string, dir, services string, stdout, stderr io.Writer) int {
 		return mcpRun(dir, stderr)
 	case len(args) == 2 && args[0] == "sandbox" && (args[1] == "check" || args[1] == "build"):
 		return sandboxCmd(args[1], stdout, stderr)
+	case len(args) == 1 && args[0] == "bridge":
+		return bridge(dir, stdin, stdout, stderr)
 	case len(args) == 1 && args[0] == "stop":
 		return stop(dir, stderr)
 	case len(args) == 1 && args[0] == "daemon":
@@ -765,6 +770,35 @@ func prettyWidth(w io.Writer) int {
 		return cols
 	}
 	return 80
+}
+
+// bridge connects in and out to the daemon, starting it if need be: what
+// another machine's whiff runs over ssh to reach this one, as a client
+// whose calls are the user's own. It checks the daemon speaks this whiff's
+// protocol, then copies bytes both ways on a connection of their own,
+// whose hello comes from the other end, until in ends and the daemon has
+// answered what came before, or the daemon goes.
+func bridge(dir string, in io.Reader, out, stderr io.Writer) int {
+	c := connect(dir, stderr)
+	if c == nil {
+		return 1
+	}
+	c.Close()
+	nc, err := net.Dial("unix", rpc.SocketPath(dir))
+	if err != nil {
+		fmt.Fprintf(stderr, "whiff: %v\n", err)
+		return 1
+	}
+	defer nc.Close()
+	go func() {
+		io.Copy(nc, in)
+		nc.(*net.UnixConn).CloseWrite()
+	}()
+	if _, err := io.Copy(out, nc); err != nil {
+		fmt.Fprintf(stderr, "whiff: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 // stop stops the daemon, whatever protocol it speaks.

@@ -3,12 +3,15 @@
 package rpc
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -318,15 +321,16 @@ type Delivery struct {
 	Dir    string `json:"dir,omitempty"`  // the sender's working directory
 }
 
-// Conn sends and receives JSON lines. Send is safe for concurrent use.
+// Conn sends and receives JSON lines, over a unix socket or a command's
+// stdin and stdout (DialCommand). Send is safe for concurrent use.
 type Conn struct {
-	c   net.Conn
+	c   io.ReadWriteCloser
 	mu  sync.Mutex // held while sending
 	enc *json.Encoder
 	dec *json.Decoder
 }
 
-func NewConn(c net.Conn) *Conn {
+func NewConn(c io.ReadWriteCloser) *Conn {
 	return &Conn{c: c, enc: json.NewEncoder(c), dec: json.NewDecoder(c)}
 }
 
@@ -410,7 +414,13 @@ func Dial(dir string, start func() error) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := &Client{conn: NewConn(nc), resps: make(chan Response),
+	return hello(nc)
+}
+
+// hello is a Client over rwc, once the daemon at its other end has said
+// which protocol it speaks.
+func hello(rwc io.ReadWriteCloser) (*Client, error) {
+	c := &Client{conn: NewConn(rwc), resps: make(chan Response),
 		deliveries: make(chan Delivery, 100), events: make(chan Event, 100), entries: make(chan Entry, 100),
 		done: make(chan struct{})}
 	go c.read()
@@ -423,6 +433,97 @@ func Dial(dir string, start func() error) (*Client, error) {
 	return c, nil
 }
 
+// DialCommand runs argv, with env added to whiff's own, as a daemon at the
+// other end of its stdin and stdout, and exchanges protocol versions: how
+// a peer is reached, by ssh host whiff bridge, which pipes them to that
+// host's daemon. If the command ends before the daemon answers, as ssh
+// does when it can't log in, the error says the last of what it printed
+// on stderr. Closing the Client closes its stdin, so the command can end
+// as the bridge does, and waits for it, killing it after waitGrace.
+func DialCommand(ctx context.Context, argv, env []string) (*Client, error) {
+	if len(argv) == 0 {
+		return nil, errors.New("no command to reach the daemon by")
+	}
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Env = append(os.Environ(), env...)
+	cmd.WaitDelay = waitGrace
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	stderr := &tailBuffer{}
+	cmd.Stderr = stderr
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	c, err := hello(&cmdConn{cmd: cmd, r: stdout, w: stdin})
+	if err != nil {
+		if said := stderr.String(); said != "" {
+			return nil, fmt.Errorf("%s: %s", strings.Join(argv, " "), said)
+		}
+		return nil, fmt.Errorf("%s: %v", strings.Join(argv, " "), err)
+	}
+	return c, nil
+}
+
+// waitGrace is how long a closed command has to end before it is killed.
+const waitGrace = 2 * time.Second
+
+// cmdConn is a command's stdout and stdin as one connection.
+type cmdConn struct {
+	cmd  *exec.Cmd
+	r    io.Reader
+	w    io.WriteCloser
+	once sync.Once
+}
+
+func (c *cmdConn) Read(p []byte) (int, error)  { return c.r.Read(p) }
+func (c *cmdConn) Write(p []byte) (int, error) { return c.w.Write(p) }
+
+// Close closes the command's stdin and waits for it to end.
+func (c *cmdConn) Close() error {
+	c.once.Do(func() {
+		c.w.Close()
+		go func() {
+			time.Sleep(waitGrace)
+			c.cmd.Process.Kill()
+		}()
+		c.cmd.Wait()
+	})
+	return nil
+}
+
+// tailBuffer keeps the last 2KiB written to it, for a command's stderr.
+type tailBuffer struct {
+	mu  sync.Mutex
+	buf []byte
+}
+
+func (b *tailBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf = append(b.buf, p...)
+	if n := len(b.buf) - 2048; n > 0 {
+		b.buf = b.buf[n:]
+	}
+	return len(p), nil
+}
+
+// String is the last line written, trimmed.
+func (b *tailBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	s := strings.TrimSpace(string(b.buf))
+	if i := strings.LastIndexByte(s, '\n'); i >= 0 {
+		s = s[i+1:]
+	}
+	return s
+}
+
 // Compatible says what to do when the daemon speaks another protocol. name
 // is the client's, as you start it: a long-running one (sniff, whiff mcp)
 // may be older than the binary installed since.
@@ -432,6 +533,15 @@ func (c *Client) Compatible(name string) error {
 		return fmt.Errorf("the daemon speaks protocol %d, this %s %d: run `whiff stop` and try again", c.Daemon, name, Version)
 	case c.Daemon > Version:
 		return fmt.Errorf("the daemon speaks protocol %d, this %s only %d: reinstall whiff and start %s again", c.Daemon, name, Version, name)
+	}
+	return nil
+}
+
+// PeerCompatible says what to do when peer, a daemon reached by
+// DialCommand, speaks another protocol than this whiff.
+func (c *Client) PeerCompatible(peer string) error {
+	if c.Daemon != Version {
+		return fmt.Errorf("%s speaks protocol %d, this whiff %d: install the same whiff on both", peer, c.Daemon, Version)
 	}
 	return nil
 }
