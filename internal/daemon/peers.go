@@ -50,6 +50,18 @@ type peer struct {
 	ids map[int64]int64
 }
 
+// storedCursor is the peer name's cursor as tx has it; none if it has
+// none.
+func storedCursor(tx *bbolt.Tx, name string) rpc.Entry {
+	get, err := fields(string(tx.Bucket(metaBucket).Get(cursorKey(name))))
+	if err != nil {
+		return rpc.Entry{}
+	}
+	at, _ := get("at").(puff.Time)
+	id, _ := get("id").(puff.Int)
+	return rpc.Entry{At: at.Go(), ID: int64(id)}
+}
+
 // cursorKey is where the meta bucket keeps the peer name's cursor.
 func cursorKey(name string) []byte { return []byte("cursor/" + name) }
 
@@ -144,11 +156,7 @@ func (d *daemon) storedPeers() []*peer {
 			opts, err := puff.ReadValue(string(v))
 			if err == nil {
 				if p, err := newPeer(string(k), opts); err == nil {
-					if get, err := fields(string(tx.Bucket(metaBucket).Get(cursorKey(p.name)))); err == nil {
-						at, _ := get("at").(puff.Time)
-						id, _ := get("id").(puff.Int)
-						p.cursor = rpc.Entry{At: at.Go(), ID: int64(id)}
-					}
+					p.cursor = storedCursor(tx, p.name)
 					ps = append(ps, p)
 				}
 			}
@@ -336,7 +344,11 @@ func (d *daemon) addPeer(name string, opts puff.Value) puff.Value {
 		return puff.Errorf("bad-peer", "%v", err)
 	}
 	err = d.db.Update(func(tx *bbolt.Tx) error {
-		return tx.Bucket(peersBucket).Put([]byte(name), []byte(puff.Print(p.stored())))
+		if err := tx.Bucket(peersBucket).Put([]byte(name), []byte(puff.Print(p.stored()))); err != nil {
+			return err
+		}
+		p.cursor = storedCursor(tx, name)
+		return nil
 	})
 	if err != nil {
 		return puff.Errorf("store", "%v", err)
@@ -348,12 +360,20 @@ func (d *daemon) addPeer(name string, opts puff.Value) puff.Value {
 // removePeer disconnects the peer name and forgets it.
 func (d *daemon) removePeer(name string) puff.Value {
 	found := false
-	err := d.db.Update(func(tx *bbolt.Tx) error {
-		b := tx.Bucket(peersBucket)
-		found = b.Get([]byte(name)) != nil
-		if err := tx.Bucket(metaBucket).Delete(cursorKey(name)); err != nil {
-			return err
+	var err error
+	d.do(func(st *state) {
+		if p := st.peers[name]; p != nil {
+			err = storeCursor(st.db, p)
 		}
+	})
+	if err != nil {
+		return puff.Errorf("store", "%v", err)
+	}
+	err = d.db.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket(peersBucket)
+		// Its cursor stays: added again, it goes on where it was rather
+		// than mirroring its history twice.
+		found = b.Get([]byte(name)) != nil
 		return b.Delete([]byte(name))
 	})
 	if err != nil {

@@ -88,6 +88,15 @@ func TestBridgeFails(t *testing.T) {
 	if _, err := rpc.DialCommand(context.Background(), []string{"no-such-command-whiff"}, nil); err == nil {
 		t.Error("a command that isn't there connected")
 	}
+	// One that waits, as ssh for an agent's approval, is given up on.
+	was := rpc.HelloWait
+	rpc.HelloWait = 100 * time.Millisecond
+	defer func() { rpc.HelloWait = was }()
+	began := time.Now()
+	_, err = rpc.DialCommand(context.Background(), []string{"sleep", "30"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "no answer within 100ms") || time.Since(began) > 5*time.Second {
+		t.Errorf("a command that never answers: %v after %v", err, time.Since(began))
+	}
 }
 
 // TestPeerProtocol reaches a peer that speaks another protocol: it says

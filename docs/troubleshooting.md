@@ -163,6 +163,27 @@ daemon with `whiff stop` and let the next command start the installed
 version. If the client is older, reinstall all four binaries from the
 same checkout with `go install ./cmd/...` and restart sniff.
 
+## A peer doesn't connect
+
+`whiff peer ls` says why, in what ssh or the peer said:
+
+- **Permission denied (publickey).** The peer's account doesn't have
+  your key, or no longer has it. Check that `ssh <host> whiff bridge`
+  works by hand. whiff can't type a password or passphrase: ssh runs with
+  `BatchMode`.
+- **Host key verification failed.** ssh doesn't know the host's key, or
+  it changed. Connect once by hand to check and accept it.
+- **No answer within 1m.** ssh is waiting for something no one is there
+  to give, such as an agent that asks you to approve each use of a key.
+  Approve it, or give the peer a key of its own in `~/.ssh/config`
+  (`IdentityFile`, with `IdentityAgent none`).
+- **Speaks protocol N.** The two machines run different versions of
+  whiff: install the same one on both, then `whiff stop` on the peer.
+
+A call to a peer that is still connecting, as whiff has just started,
+waits up to 15 seconds for it. One to a peer that is offline fails at
+once with `(err {:kind :offline})`, which says why.
+
 ## A command's argument has the wrong type
 
 The CLI reads each argument as a puff value, falling back to a string

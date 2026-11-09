@@ -302,7 +302,7 @@ func inboxes(c *rpc.Client, addr string) (string, error) {
 		m, _ := peers.At(i).(puff.Map)
 		name, _ := puff.Field(m, "name").(puff.String)
 		status, _ := puff.Field(m, "status").(puff.Keyword)
-		if status != "connected" {
+		if status != "connected" && status != "connecting" {
 			text += fmt.Sprintf("peer %s is %s: its inbox isn't shown\n", name, status)
 			continue
 		}

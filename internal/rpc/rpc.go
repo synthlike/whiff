@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -477,8 +478,19 @@ func DialCommand(ctx context.Context, argv, env []string) (*Client, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
+	// ssh can wait on what no one is there to give, as an agent that
+	// asks you to approve each use of a key.
+	var late atomic.Bool
+	timer := time.AfterFunc(HelloWait, func() {
+		late.Store(true)
+		cmd.Process.Kill()
+	})
 	c, err := hello(&cmdConn{cmd: cmd, r: stdout, w: stdin})
+	timer.Stop()
 	if err != nil {
+		if late.Load() {
+			return nil, fmt.Errorf("no answer within %v: is ssh waiting for a passphrase, or an agent's approval?", HelloWait)
+		}
 		if said := stderr.String(); said != "" {
 			return nil, errors.New(said)
 		}
@@ -486,6 +498,9 @@ func DialCommand(ctx context.Context, argv, env []string) (*Client, error) {
 	}
 	return c, nil
 }
+
+// HelloWait is how long DialCommand's command has to answer hello.
+var HelloWait = time.Minute
 
 // waitGrace is how long a closed command has to end before it is killed.
 const waitGrace = 2 * time.Second

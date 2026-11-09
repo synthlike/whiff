@@ -208,7 +208,16 @@ func (d *daemon) route() {
 	d.wg.Go(func() { d.writeHistory(kick, final) })
 	st := &state{db: d.db, log: d.log, kick: kick, addrs: map[string]*service{}, jobs: map[int64]*job{}, waiters: map[int64][]chan puff.Value{}, peers: map[string]*peer{}, keyed: map[string]chan struct{}{},
 		subs: map[*watcher]bool{}, tracers: map[*tracer]bool{}, modes: map[string]*mode{}, grants: map[string]grant{}, health: map[string]*health{}}
-	defer func() { final <- st.takeUnstored() }()
+	defer func() {
+		// Where each peer's history is up to: followFar can't store it
+		// once whiff stops.
+		for _, p := range st.peers {
+			if err := storeCursor(st.db, p); err != nil {
+				st.note(fmt.Sprintf("peer %s's place in its history isn't stored, so some of it may come again: %v", p.name, err))
+			}
+		}
+		final <- st.takeUnstored()
+	}()
 	st.load()
 	for {
 		select {

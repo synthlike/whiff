@@ -66,6 +66,10 @@ func splitFar(name string) (local, peer string, ok bool) {
 // goes before it answers: it has a submission key, so it runs there once.
 const farTries = 3
 
+// farConnectWait is how long a message waits for a peer that is
+// connecting, before it goes.
+var farConnectWait = 15 * time.Second
+
 // farSendWait bounds how long a send waits for its peer to come back;
 // a call waits as long as its caller does.
 var farSendWait = time.Minute
@@ -86,7 +90,7 @@ func (d *daemon) forward(st *state, addr string, m message) puff.Value {
 		res = puff.Errorf("no-address", "%s can't go to a peer", m.to(addr))
 	case p == nil:
 		res = puff.Errorf("no-peer", "no peer %s, for :%s: whiff peer add %s user@host", name, m.to(addr), name)
-	case p.client == nil:
+	case p.client == nil && p.status != "connecting":
 		why := ""
 		if p.err != "" {
 			why = ": " + p.err
@@ -152,6 +156,7 @@ func (d *daemon) atPeer(req rpc.Request) rpc.Response {
 	req.Peer = ""
 	var c *rpc.Client
 	var why string
+	connecting := false
 	d.do(func(st *state) {
 		switch p := st.peers[name]; {
 		case p == nil:
@@ -161,10 +166,18 @@ func (d *daemon) atPeer(req rpc.Request) rpc.Response {
 			if p.err != "" {
 				why += ": " + p.err
 			}
+			connecting = p.status == "connecting"
 		default:
 			c = p.client
 		}
 	})
+	// One still connecting, as whiff has just started, is waited for.
+	if connecting {
+		ctx, cancel := context.WithTimeout(d.ctx, farConnectWait)
+		c = d.peerConn(ctx, name, nil)
+		cancel()
+		why = fmt.Sprintf("peer %s didn't connect within %v", name, farConnectWait)
+	}
 	if c == nil {
 		return rpc.Response{Error: why}
 	}
@@ -188,9 +201,18 @@ func newKey() string {
 func (d *daemon) submit(ctx context.Context, name string, req rpc.Request) puff.Value {
 	var last *rpc.Client
 	var err error
-	for range farTries {
-		c := d.peerConn(ctx, name, last)
-		if c == nil {
+	for try := range farTries {
+		var c *rpc.Client
+		if try == 0 {
+			// A peer still connecting, as whiff has just started, is
+			// waited for, a while.
+			first, cancel := context.WithTimeout(ctx, farConnectWait)
+			c = d.peerConn(first, name, nil)
+			cancel()
+			if c == nil {
+				return failed("offline", "not-started", "peer %s didn't connect within %v", name, farConnectWait)
+			}
+		} else if c = d.peerConn(ctx, name, last); c == nil {
 			break
 		}
 		var resp rpc.Response
@@ -316,22 +338,32 @@ var cursorEvery = 5 * time.Second
 // and returns the one stored now.
 func (d *daemon) saveCursor(p *peer, saved rpc.Entry) rpc.Entry {
 	var cur rpc.Entry
-	d.do(func(st *state) { cur = p.cursor })
-	if cur.At.IsZero() || cur.At.Equal(saved.At) && cur.ID == saved.ID {
-		return saved
-	}
-	m, _ := puff.NewMap(puff.Key("at", puff.NewTime(cur.At)), puff.Key("id", puff.Int(cur.ID)))
-	err := d.db.Update(func(tx *bbolt.Tx) error {
-		if tx.Bucket(peersBucket).Get([]byte(p.name)) == nil {
-			return nil // removed
+	var err error
+	d.do(func(st *state) {
+		if cur = p.cursor; !cur.At.Equal(saved.At) || cur.ID != saved.ID {
+			err = storeCursor(st.db, p)
 		}
-		return tx.Bucket(metaBucket).Put(cursorKey(p.name), []byte(puff.Print(m)))
 	})
 	if err != nil {
 		d.note("peer %s's place in its history isn't stored, so some of it may come again: %v", p.name, err)
 		return saved
 	}
 	return cur
+}
+
+// storeCursor stores p's cursor, unless it has none or p was removed. On
+// the route goroutine, which owns it.
+func storeCursor(db *bbolt.DB, p *peer) error {
+	if p.cursor.At.IsZero() {
+		return nil
+	}
+	m, _ := puff.NewMap(puff.Key("at", puff.NewTime(p.cursor.At)), puff.Key("id", puff.Int(p.cursor.ID)))
+	return db.Update(func(tx *bbolt.Tx) error {
+		if tx.Bucket(peersBucket).Get([]byte(p.name)) == nil {
+			return nil
+		}
+		return tx.Bucket(metaBucket).Put(cursorKey(p.name), []byte(puff.Print(m)))
+	})
 }
 
 // farIDs bounds the ids a peer's messages keep here: past it they start

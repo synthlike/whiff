@@ -246,6 +246,14 @@ func TestFar(t *testing.T) {
 	call(fc, rpc.Request{Op: "reply", Args: "[" + n + " (ok :later)]"})
 	start(t, dir)
 	c = dial(t, dir)
+	// A call as whiff starts waits for the peer to connect, and so does
+	// one for its inbox.
+	if got := call(c, rpc.Request{Op: "inbox", Target: ":box", Peer: "far"}); strings.HasPrefix(got, "error:") {
+		t.Errorf("far's inbox as whiff starts = %s", got)
+	}
+	if got := here("box@far/where", "[]"); !strings.HasPrefix(got, "(ok ") {
+		t.Errorf("box@far/where as whiff starts = %s", got)
+	}
 	if got := call(c, rpc.Request{Op: "wait", Args: "[" + id + "]"}); got != "(ok :later)" {
 		t.Errorf("after a restart, wait %s = %s", id, got)
 	}
@@ -309,7 +317,8 @@ func TestFar(t *testing.T) {
 func TestFarSync(t *testing.T) {
 	set(t, &peerWait, 20*time.Millisecond)
 	set(t, &peerWaitMost, 200*time.Millisecond)
-	set(t, &cursorEvery, 10*time.Millisecond)
+	// Not now and then: as whiff stops.
+	set(t, &cursorEvery, time.Hour)
 	dir, far := tempDir(t), tempDir(t)
 	writeServices(t, far, map[string]string{"box": `(service box (on (put x) :write "Keeps x." (ok x)))`})
 	writeServices(t, dir, map[string]string{"watch": `(service watch
@@ -346,7 +355,6 @@ func TestFarSync(t *testing.T) {
 	}, "true")
 
 	// While whiff is down: it comes as whiff comes back, once.
-	time.Sleep(50 * time.Millisecond) // the cursor is stored
 	stopDaemon(t, c, done)
 	call(fc, "call", "box/put", "[2]")
 	start(t, dir)
@@ -354,6 +362,15 @@ func TestFarSync(t *testing.T) {
 	eventually(t, "what far did meanwhile", func() string { return count("client -> :box@far/put 2  (ok 2)") }, "1")
 	if n := count("client -> :box@far/put 1  (ok 1)"); n != "1" {
 		t.Errorf("box@far/put 1 is in history %s times after a restart", n)
+	}
+
+	// Removed and added again, it goes on where it was.
+	call(c, "call", "peers/rm", `["far"]`)
+	call(c, "call", "peers/add", `["far" `+bridge+`]`)
+	call(fc, "call", "box/put", "[3]")
+	eventually(t, "far's next call", func() string { return count("client -> :box@far/put 3  (ok 3)") }, "1")
+	if n := count("client -> :box@far/put 2  (ok 2)"); n != "1" {
+		t.Errorf("box@far/put 2 is in history %s times after far was added again", n)
 	}
 
 	stopDaemon(t, fc, farDone)

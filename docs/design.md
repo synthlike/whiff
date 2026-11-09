@@ -495,8 +495,10 @@ reaches the peer is what `whiff call` would send there, as you.
   ...)`, `whiff call pipeline@vps/build`, `send`, and `pub` to
   `:git@vps/changed` go to the peer: the peer's name after the address,
   before the last `/`. One hop only: a peer's peers aren't
-  reached through it. A peer that isn't connected answers `(err {:kind
-  :offline})` at once, saying why.
+  reached through it. A peer that is offline answers `(err {:kind
+  :offline})` at once, saying why; one still connecting is waited for a
+  while. A connection that doesn't answer within a minute, as ssh waiting
+  for an agent's approval, is given up and tried again.
 - **It goes in its origin.** An agent's message reaches the peer as an
   agent's, so the peer's review gate holds a write for review there, as it
   would one sent on that machine; one you let through here goes on as
@@ -525,7 +527,8 @@ reaches the peer is what `whiff call` would send there, as you.
   :box@vps/put 1`) and its message given an id here, so `whiff history`,
   its queries and sniff show both machines. whiff keeps its place in the
   peer's history, so what happened there while it was away comes once as
-  it connects again, while the peer still holds it.
+  it connects again, while the peer still holds it, even after the peer
+  is removed and added again.
 - **What it publishes is published here.** `:pipeline/changed` there is
   `:pipeline@vps/changed` here, so a service follows it with `(on
   :pipeline@vps/changed (v) ...)`, and a sniff page of the peer's view,
