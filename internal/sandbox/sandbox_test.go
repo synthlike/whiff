@@ -154,3 +154,95 @@ func TestContainer(t *testing.T) {
 		t.Error("the container outlived End")
 	}
 }
+
+// git runs git in dir, failing the test if it fails.
+func git(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main"}, args...)...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
+	}
+}
+
+// repo makes a repository with a commit and a worktree of it, wt, as a
+// pipeline run's: relative says whether the worktree's .git names its
+// gitdir by a relative path. It returns them and the repository's .git as
+// git names it (macOS's temporary directories are under a symlink).
+func repo(t *testing.T, relative bool) (string, string, string) {
+	t.Helper()
+	top := t.TempDir()
+	r, wt := filepath.Join(top, "repo"), filepath.Join(top, "wt")
+	git(t, top, "init", "-q", r)
+	os.WriteFile(filepath.Join(r, "f"), []byte("a\n"), 0o644)
+	git(t, r, "add", "f")
+	git(t, r, "commit", "-qm", "one")
+	git(t, r, "-c", "worktree.useRelativePaths="+strconv.FormatBool(relative), "worktree", "add", "-q", "-b", "run", wt)
+	common, err := filepath.EvalSymlinks(filepath.Join(r, ".git"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if relative {
+		common = filepath.Join(r, ".git")
+	}
+	return r, wt, common
+}
+
+func TestGitDirs(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	r, wt, common := repo(t, false)
+	if got := gitDirs(wt); len(got) != 1 || got[0] != common {
+		t.Errorf("a worktree's gitDirs = %q; want [%s]", got, common)
+	}
+	if got := gitDirs(r); got != nil {
+		t.Errorf("a repository's own gitDirs = %q; want none", got)
+	}
+	if got := gitDirs(t.TempDir()); got != nil {
+		t.Errorf("outside a repository, gitDirs = %q", got)
+	}
+	_, wt, common = repo(t, true)
+	if b, _ := os.ReadFile(filepath.Join(wt, ".git")); strings.Contains(string(b), "gitdir: /") {
+		t.Skip("this git writes absolute gitdirs only")
+	}
+	if got := gitDirs(wt); len(got) != 1 || got[0] != common {
+		t.Errorf("a relative worktree's gitDirs = %q; want [%s]", got, common)
+	}
+	c := &Container{Backend: backends["linux"]}
+	if got := strings.Join(c.Args("n", wt, []string{"ls"}), " "); !strings.Contains(got, " -v "+common+":"+common+":ro ") {
+		t.Errorf("a worktree's Args don't mount its .git read-only: %s", got)
+	}
+}
+
+// TestContainerGit runs git in a sandboxed worktree where there is a
+// sandbox: it reads, as a pipeline's dev and check do, and can't write
+// the repository's .git.
+func TestContainerGit(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	c, err := New(ctx, false)
+	if err != nil {
+		t.Skip(err)
+	}
+	_, wt, common := repo(t, false)
+	os.WriteFile(filepath.Join(wt, "f"), []byte("a\nb\n"), 0o644)
+	out, err := c.Command(ctx, Name("test"), wt, []string{"sh", "-c",
+		"git status --short && git diff --stat && git log --oneline && git rev-parse --abbrev-ref HEAD"}).CombinedOutput()
+	if err != nil {
+		t.Fatalf("git in a sandboxed worktree: %v\n%s", err, out)
+	}
+	for _, want := range []string{" M f", "1 insertion", "one", "run"} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("git's output lacks %q:\n%s", want, out)
+		}
+	}
+	hook := filepath.Join(common, "hooks", "post-checkout")
+	out, err = c.Command(ctx, Name("test"), wt, []string{"sh", "-c", "touch " + hook + " && git add f"}).CombinedOutput()
+	if err == nil {
+		t.Errorf("wrote the repository's .git from a sandbox:\n%s", out)
+	}
+	if _, err := os.Stat(hook); err == nil {
+		t.Error("a sandboxed command left a hook in the repository")
+	}
+}

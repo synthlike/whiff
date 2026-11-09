@@ -438,8 +438,11 @@ it the network.
   so paths in its output are the host's. Go's module cache read-only, if
   the host has one, so builds need no network for modules it has, and
   Go's build cache in a volume of the runtime's that only sandboxed
-  commands share. Not your home, other repositories, whiff's socket or the
-  agent's key; no network unless asked; `GOTOOLCHAIN=local`, so go never
+  commands share. In a git worktree, as a pipeline run's, the
+  repository's `.git` read-only, so status, diff and log work there,
+  while a commit fails and nothing in the container can write the
+  repository's hooks, config or refs. Not your home, other repositories,
+  whiff's socket or the agent's key; no network unless asked; `GOTOOLCHAIN=local`, so go never
   fetches a toolchain.
 - **Failing closed.** A command that asks for the sandbox where there is
   no runtime, or no image, doesn't start, and says what to run.
@@ -457,9 +460,9 @@ internet and, under Podman, the host's servers that listen on every
 interface. What a command writes in its directory is the agent's work, as
 its file tools' is: the review gate and git cover that, not the sandbox,
 and a repository's own hooks or config written there run on the host
-when you use git in it. In a git worktree, as a pipeline run's, the
-repository's `.git` isn't mounted, so git commands in the container
-fail. huff's own calls to its provider leave from the host, by design.
+when you use git in it. A worktree's command can read all of its
+repository's `.git`: other branches, and its config, with any
+credential written in a remote's URL. huff's own calls to its provider leave from the host, by design.
 Agents on `claude -p` aren't sandboxed: their shell still reaches the
 socket.
 

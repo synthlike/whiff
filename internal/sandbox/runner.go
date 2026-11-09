@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -56,7 +57,8 @@ const cacheVolume = "whiff-gocache:/root/.cache/go-build"
 
 // Container runs each command in a new container of Image, removed as it
 // ends, that sees only its dir, at the same path, so paths in its output
-// are the host's. Go's module cache, if the host has one, is there
+// are the host's, and, if dir is a git worktree, its repository's .git
+// read-only (gitDirs). Go's module cache, if the host has one, is there
 // read-only, so a build doesn't need the network for modules it has.
 type Container struct {
 	Backend
@@ -111,6 +113,52 @@ func modCache() string {
 	return dir
 }
 
+// gitDirs is what a worktree at dir needs mounted for git to work in it:
+// its .git is a file naming its gitdir (<repo>/.git/worktrees/<name>),
+// which names the repository's own .git as commondir. Both are outside
+// dir, so a container would see the worktree as no repository. They go
+// in read-only at the paths git finds them by: status, diff and log work,
+// while nothing in the container can write hooks, config or refs the host
+// runs or trusts. A commit fails, as it can't lock the index; whiff
+// commits on the host. None for a repository's own checkout, whose .git
+// is in dir, or outside one.
+func gitDirs(dir string) []string {
+	b, err := os.ReadFile(filepath.Join(dir, ".git"))
+	if err != nil {
+		return nil // no .git, or a directory, in dir
+	}
+	gitdir, ok := strings.CutPrefix(strings.TrimSpace(string(b)), "gitdir: ")
+	if !ok {
+		return nil
+	}
+	if !filepath.IsAbs(gitdir) {
+		gitdir = filepath.Join(dir, gitdir)
+	}
+	gitdir = filepath.Clean(gitdir)
+	common := gitdir
+	if b, err := os.ReadFile(filepath.Join(gitdir, "commondir")); err == nil {
+		common = strings.TrimSpace(string(b))
+		if !filepath.IsAbs(common) {
+			common = filepath.Join(gitdir, common)
+		}
+		common = filepath.Clean(common)
+	}
+	// Not inside dir, which is mounted already, and not over it.
+	var dirs []string
+	for _, d := range []string{common, gitdir} {
+		if !within(d, dir) && !within(dir, d) && (len(dirs) == 0 || !within(d, dirs[0])) {
+			dirs = append(dirs, d)
+		}
+	}
+	return dirs
+}
+
+// within says whether path is dir or in it.
+func within(path, dir string) bool {
+	rel, err := filepath.Rel(dir, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 // endGrace is how long a container's command has to end after SIGTERM.
 const endGrace = 5 * time.Second
 
@@ -118,6 +166,9 @@ const endGrace = 5 * time.Second
 func (c *Container) Args(name, dir string, argv []string) []string {
 	args := append([]string{c.Name, "run"}, c.Run...)
 	args = append(args, "--rm", "--init", "--name", name, "-v", dir+":"+dir, "-w", dir, "-v", cacheVolume)
+	for _, d := range gitDirs(dir) {
+		args = append(args, "-v", d+":"+d+":ro")
+	}
 	if c.ModCache != "" {
 		args = append(args, "-v", c.ModCache+":/go/pkg/mod:ro")
 	}

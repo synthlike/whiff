@@ -154,7 +154,8 @@ func TestSandboxStray(t *testing.T) {
 
 // TestPipelineSandbox runs a sandboxed pipeline run with its dev on huff
 // and a fake model: the dev's Bash and the check both answer Linux, as a
-// container does on any host, and the run ends ready.
+// container does on any host, git works in the run's worktree for both,
+// and the run ends ready.
 func TestPipelineSandbox(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -175,8 +176,8 @@ func TestPipelineSandbox(t *testing.T) {
 	dir := tempDir(t)
 	withHuff(t, dir)
 
-	// The model: a dev (it has tools) writes a file and runs uname -s, then
-	// says so; a reviewer approves.
+	// The model: a dev (it has tools) writes a file and runs uname -s and
+	// git status, then says so; a reviewer approves.
 	var mu sync.Mutex
 	var bashSaid string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -200,11 +201,17 @@ func TestPipelineSandbox(t *testing.T) {
 		case last.Role == "user":
 			io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[
 				{"id":"c1","type":"function","function":{"name":"Write","arguments":"{\"file_path\":\"f.txt\",\"content\":\"x\\n\"}"}},
-				{"id":"c2","type":"function","function":{"name":"Bash","arguments":"{\"command\":\"uname -s\"}"}}]},
+				{"id":"c2","type":"function","function":{"name":"Bash","arguments":"{\"command\":\"sh -c uname\"}"}},
+				{"id":"c3","type":"function","function":{"name":"Bash","arguments":"{\"command\":\"git status --short\"}"}}]},
 				"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":9,"completion_tokens":3,"cost":0.001}}`)
 		default:
 			mu.Lock()
-			bashSaid = *last.Content
+			bashSaid = ""
+			for _, m := range req.Messages {
+				if m.Role == "tool" && m.Content != nil {
+					bashSaid += *m.Content + "\n"
+				}
+			}
 			mu.Unlock()
 			reply("Wrote f.txt.")
 		}
@@ -239,7 +246,8 @@ func TestPipelineSandbox(t *testing.T) {
 	if err != nil || !strings.Contains(resp.Value, ":no-sandbox") {
 		t.Errorf("a sandboxed run on claude = %s %v", resp.Value, err)
 	}
-	resp, err = c.Message("call", "pipeline/start-on", `["`+repo+`" "main" "add f.txt" ["uname" "-s"] {:dev "local/fake" :reviewer "local/fake" :sandbox #t}]`, repo)
+	check := `["sh" "-c" "uname -s && git rev-parse --abbrev-ref HEAD"]`
+	resp, err = c.Message("call", "pipeline/start-on", `["`+repo+`" "main" "add f.txt" `+check+` {:dev "local/fake" :reviewer "local/fake" :sandbox #t}]`, repo)
 	if err != nil || resp.Value != "(ok 1)" {
 		t.Fatalf("start-on = %s %s %v", resp.Value, resp.Error, err)
 	}
@@ -257,5 +265,8 @@ func TestPipelineSandbox(t *testing.T) {
 	if !strings.Contains(bashSaid, "Linux") {
 		t.Errorf("the dev's Bash said %q, want Linux, from a container", bashSaid)
 	}
-	historyHas(t, c, `(ok {:exit 0 :stderr "" :stdout "Linux\n"})`)
+	if !strings.Contains(bashSaid, "?? f.txt") {
+		t.Errorf("the dev's git status said %q, want f.txt untracked", bashSaid)
+	}
+	historyHas(t, c, `(ok {:exit 0 :stderr "" :stdout "Linux\nwhiff/1\n"})`)
 }
