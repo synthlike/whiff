@@ -260,6 +260,12 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 				continue
 			}
 		}
+		if req.Peer != "" {
+			if err := conn.Send(d.atPeer(req)); err != nil {
+				return
+			}
+			continue
+		}
 		switch req.Op {
 		case "hello":
 			resp.Version = rpc.Version

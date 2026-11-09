@@ -531,6 +531,13 @@ reaches the peer is what `whiff call` would send there, as you.
   :pipeline@vps/changed (v) ...)`, and a sniff page of the peer's view,
   `/view/pipeline@vps/show`, keeps up with it. A page fetches a peer's
   function only if the peer says it is `:read`.
+- **Its queues are yours here.** `whiff pending` and `whiff inbox` list
+  each connected peer's review queue and `:me` inbox after this whiff's,
+  each id with the peer's name, `12@vps`; `whiff inbox me@vps` lists only
+  that peer's. `whiff accept`, `reject`, `reply` and `cancel` take such
+  an id and act there, as the peer's client, so the peer decides as it
+  would on its own: an agent can't accept there either. A peer that
+  isn't connected says its queue isn't shown.
 - **Stale is said.** A peer that isn't connected shows in `whiff
   services` and `whiff peer ls` with when it was last seen and how old the
   last of its history here is.

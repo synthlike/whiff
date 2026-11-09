@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -102,4 +104,111 @@ func TestPeerProtocol(t *testing.T) {
 	if err := c.PeerCompatible("vps"); err == nil || err.Error() != want {
 		t.Errorf("PeerCompatible = %v; want %s", err, want)
 	}
+}
+
+// TestPeerQueues lists a peer's review queue and inbox beside this
+// whiff's, each id with the peer's name, and accepts, replies and cancels
+// there by it; a peer that isn't connected says so.
+func TestPeerQueues(t *testing.T) {
+	daemon := func(files map[string]string) string {
+		dir, err := os.MkdirTemp("/tmp", "whiff-q-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.RemoveAll(dir) })
+		os.Mkdir(filepath.Join(dir, "services"), 0o700)
+		for name, src := range files {
+			os.WriteFile(filepath.Join(dir, "services", name+".puff"), []byte(src), 0o600)
+		}
+		cmd := exec.Command(os.Args[0], "daemon")
+		cmd.Env = append(os.Environ(), "WHIFF_TEST_DIR="+dir)
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if c, err := rpc.Dial(dir, nil); err == nil {
+				c.Stop()
+				c.Close()
+			}
+			cmd.Wait()
+		})
+		return dir
+	}
+	dial := func(dir string) *rpc.Client {
+		for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+			c, err := rpc.Dial(dir, nil)
+			if err == nil {
+				t.Cleanup(func() { c.Close() })
+				return c
+			}
+			if time.Now().After(deadline) {
+				t.Fatal(err)
+			}
+		}
+	}
+	here, far := daemon(nil), daemon(map[string]string{"box": `(service box (on (put x) :write "Keeps x." (ok x)))`})
+	c, fc := dial(here), dial(far)
+	whiff := func(args ...string) (int, string, string) {
+		var out, errs strings.Builder
+		code := run(args, here, filepath.Join(here, "services"), &out, &errs)
+		return code, out.String(), errs.String()
+	}
+	eventually := func(what string, ok func() bool) {
+		t.Helper()
+		for deadline := time.Now().Add(10 * time.Second); !ok(); time.Sleep(20 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatal(what)
+			}
+		}
+	}
+
+	bridge := fmt.Sprintf(`["far" {:cmd ["env" "WHIFF_TEST_DIR=%s" %q "bridge"]}]`, far, os.Args[0])
+	if resp, err := c.Message("call", "peers/add", bridge, ""); err != nil || resp.Value != "(ok :done)" {
+		t.Fatalf("peers/add = %s %v", resp.Value, err)
+	}
+	eventually("far doesn't connect", func() bool {
+		resp, _ := c.Message("call", "peers/list", "[]", "")
+		return strings.Contains(resp.Value, ":status :connected")
+	})
+
+	// An agent's write held there, and a question to you there.
+	reviewer := dial(far)
+	reviewer.Sub("review/pending")
+	agent := dial(far)
+	agent.Agent = true
+	held, _ := agent.Message("call", "box/put", "[7]", "")
+	asked, _ := fc.Message("call", "me/ask", `["go?"]`, "")
+	idOf := func(r string) string { return strings.Fields(strings.TrimPrefix(r, "(err {:id "))[0] }
+	heldID, askedID := idOf(held.Value), idOf(asked.Value)
+
+	if _, out, _ := whiff("pending"); !strings.Contains(out, heldID+"@far  client -> :box/put 7") {
+		t.Errorf("whiff pending:\n%s", out)
+	}
+	if code, out, errs := whiff("accept", heldID+"@far"); code != 0 || out != "7\n" {
+		t.Errorf("whiff accept %s@far = %d %q %q", heldID, code, out, errs)
+	}
+	if _, out, _ := whiff("inbox"); !strings.Contains(out, askedID+"@far  client -> :me/ask \"go?\"") {
+		t.Errorf("whiff inbox:\n%s", out)
+	}
+	if code, _, errs := whiff("reply", askedID+"@far", "yes"); code != 0 {
+		t.Errorf("whiff reply %s@far = %d %s", askedID, code, errs)
+	}
+	if r, _ := fc.Message("wait", "", "["+askedID+"]", ""); r.Value != `(ok "yes")` {
+		t.Errorf("far's wait %s = %s", askedID, r.Value)
+	}
+	if _, out, _ := whiff("inbox", "me@far"); out != "" {
+		t.Errorf("whiff inbox me@far, all answered:\n%s", out)
+	}
+	if code, _, _ := whiff("wait", askedID+"@far"); code != 2 {
+		t.Errorf("whiff wait %s@far = %d, want 2", askedID, code)
+	}
+	if code, _, errs := whiff("accept", "1@nope"); code != 1 || !strings.Contains(errs, "no peer nope") {
+		t.Errorf("whiff accept 1@nope = %d %s", code, errs)
+	}
+
+	fc.Stop()
+	eventually("far doesn't go", func() bool {
+		_, out, _ := whiff("pending")
+		return strings.Contains(out, "peer far is offline: its inbox isn't shown") || strings.Contains(out, "peer far is connecting")
+	})
 }

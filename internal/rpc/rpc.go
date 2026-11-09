@@ -63,6 +63,9 @@ type Request struct {
 	// begins after, as a peer last saw it: its At and ID.
 	After   time.Time `json:"after,omitzero"`
 	AfterID int64     `json:"after_id,omitempty"`
+	// Peer is, for inbox, reply, accept, reject and cancel-task, the peer
+	// it is for: the daemon sends it there, as its client.
+	Peer string `json:"peer,omitempty"`
 }
 
 // Response is the daemon's answer to one Request; or, with Delivery set, a

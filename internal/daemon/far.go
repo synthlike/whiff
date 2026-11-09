@@ -137,6 +137,44 @@ func (d *daemon) forward(st *state, addr string, m message) puff.Value {
 	return nil
 }
 
+// atPeer sends req, an inbox, reply, accept, reject or cancel-task for
+// its peer, there, as this whiff's client, in req's origin, so the peer
+// decides as it would on one of its own clients': an agent can't accept
+// there either. Once: they have no key, and one sent again says the
+// message has gone.
+func (d *daemon) atPeer(req rpc.Request) rpc.Response {
+	switch req.Op {
+	case "inbox", "reply", "accept", "reject", "cancel-task":
+	default:
+		return rpc.Response{Error: fmt.Sprintf("%s isn't for a peer: of these, only inbox, reply, accept, reject and cancel", req.Op)}
+	}
+	name := req.Peer
+	req.Peer = ""
+	var c *rpc.Client
+	var why string
+	d.do(func(st *state) {
+		switch p := st.peers[name]; {
+		case p == nil:
+			why = fmt.Sprintf("no peer %s", name)
+		case p.client == nil:
+			why = fmt.Sprintf("peer %s is %s", name, p.status)
+			if p.err != "" {
+				why += ": " + p.err
+			}
+		default:
+			c = p.client
+		}
+	})
+	if c == nil {
+		return rpc.Response{Error: why}
+	}
+	resp, err := c.Forward(req)
+	if err != nil {
+		return rpc.Response{Error: fmt.Sprintf("peer %s went before it answered: %v", name, err)}
+	}
+	return resp
+}
+
 // newKey is a new submission key.
 func newKey() string {
 	b := make([]byte, 16)

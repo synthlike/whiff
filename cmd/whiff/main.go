@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -36,12 +37,13 @@ const usage = `usage:
   whiff try <file.puff> <fn> [<arg>...]  load a service file, call its function once and unload it
   whiff test <file.puff>...              run the tests in service files, without starting them
   whiff act [<line>...]                  send the action at the end of each line, an item as call prints it, or of stdin's
-  whiff inbox [<address>]                list the messages waiting for a reply: yours, :me's, by default
-  whiff reply <id> <value>               answer a message waiting for a reply
+  whiff inbox [<address>]                list the messages waiting for a reply: yours, :me's, by default, and each peer's
+                                         as 12@vps; address@peer for only that peer's
+  whiff reply <id> <value>               answer a message waiting for a reply; a peer's by its id there, 12@vps
   whiff wait <id>                        print the answer to a pending message or job, waiting for it
   whiff cancel <id>                      cancel a task that hasn't ended: held, waiting for a reply or a running job
-  whiff pending                          list agents' messages that wait for your review
-  whiff accept <id>                      deliver a message that waits for review, and print its value
+  whiff pending                          list agents' messages that wait for your review, here and on each peer, as 12@vps
+  whiff accept <id>                      deliver a message that waits for review, and print its value; 12@vps on a peer
   whiff reject <id> <reason>             answer a message that waits for review with (err {:kind :rejected})
   whiff trust <agent/n> <service>...     let an agent session's messages to the services through, as if you accepted them
   whiff free <agent/n>                   let everything an agent session sends, publishes and evaluates through
@@ -132,14 +134,14 @@ func run(args []string, dir, services string, stdout, stderr io.Writer) int {
 	case len(args) >= 1 && args[0] == "act":
 		return act(dir, args[1:], stdin, stdout, stderr)
 	case len(args) == 1 && args[0] == "pending":
-		pending := func(c *rpc.Client) (string, error) { return c.Inbox("review") }
+		pending := func(c *rpc.Client) (string, error) { return inboxes(c, "review") }
 		return text(dir, pending, stdout, stderr)
 	case len(args) <= 2 && len(args) >= 1 && args[0] == "inbox":
 		addr := "me"
 		if len(args) == 2 {
 			addr = args[1]
 		}
-		inbox := func(c *rpc.Client) (string, error) { return c.Inbox(addr) }
+		inbox := func(c *rpc.Client) (string, error) { return inboxes(c, addr) }
 		return text(dir, inbox, stdout, stderr)
 	case len(args) == 1 && args[0] == "repl":
 		return repl(dir, stdin, stdout, stderr)
@@ -228,6 +230,22 @@ func messageThere(dir, op, target, there string, args []string, stdout, stderr i
 			vals[1] = puff.Ok(vals[1])
 		}
 	}
+	// 12@vps is a peer's message, as whiff inbox and pending show it.
+	peer := ""
+	if target == "" && len(args) > 0 {
+		if id, p, ok := strings.Cut(args[0], "@"); ok {
+			if op == "wait" {
+				fmt.Fprintf(stderr, "whiff: wait for a peer's task by the id it has here, which whiff call printed\n")
+				return 2
+			}
+			n, err := strconv.ParseInt(id, 10, 64)
+			if err != nil || p == "" {
+				fmt.Fprintf(stderr, "whiff: want a message id, as 12 or 12@vps, got %s\n", args[0])
+				return 2
+			}
+			vals[0], peer = puff.Int(n), p
+		}
+	}
 	wd, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintf(stderr, "whiff: %v\n", err)
@@ -238,7 +256,7 @@ func messageThere(dir, op, target, there string, args []string, stdout, stderr i
 		return 1
 	}
 	defer c.Close()
-	resp, err := c.Forward(rpc.Request{Op: op, Target: target, Args: puff.Print(puff.NewVector(vals...)), Dir: wd, There: there})
+	resp, err := c.Forward(rpc.Request{Op: op, Target: target, Args: puff.Print(puff.NewVector(vals...)), Dir: wd, There: there, Peer: peer})
 	if err == nil && resp.Error != "" {
 		err = errors.New(resp.Error)
 	}
@@ -247,6 +265,54 @@ func messageThere(dir, op, target, there string, args []string, stdout, stderr i
 		return 1
 	}
 	return result(op, resp, stdout, stderr)
+}
+
+// inboxes is addr's inbox as text, a message a line; with every connected
+// peer's addr's after it, for :me and :review, each id with the peer's
+// name, 12@vps, as reply, accept, reject and cancel take it, and a line
+// for each peer that isn't connected. addr@peer is only that peer's.
+func inboxes(c *rpc.Client, addr string) (string, error) {
+	addr = strings.TrimPrefix(addr, ":")
+	far := func(addr, peer string) (string, error) {
+		resp, err := c.Forward(rpc.Request{Op: "inbox", Target: addr, Peer: peer})
+		if err == nil && resp.Error != "" {
+			err = errors.New(resp.Error)
+		}
+		var b strings.Builder
+		for line := range strings.Lines(resp.Out) {
+			id, rest, _ := strings.Cut(line, "  ")
+			b.WriteString(id + "@" + peer + "  " + rest)
+		}
+		return b.String(), err
+	}
+	if at := strings.LastIndexByte(addr, '@'); at > 0 {
+		return far(addr[:at], addr[at+1:])
+	}
+	text, err := c.Inbox(addr)
+	if err != nil || addr != "me" && addr != "review" {
+		return text, err
+	}
+	resp, err := c.Message("call", "peers/list", "[]", "")
+	if err != nil {
+		return text, err
+	}
+	v, _ := puff.ReadValue(resp.Value)
+	peers, _ := puff.OkValue(v).(puff.Vector)
+	for i := range peers.Len() {
+		m, _ := peers.At(i).(puff.Map)
+		name, _ := puff.Field(m, "name").(puff.String)
+		status, _ := puff.Field(m, "status").(puff.Keyword)
+		if status != "connected" {
+			text += fmt.Sprintf("peer %s is %s: its inbox isn't shown\n", name, status)
+			continue
+		}
+		t, err := far(addr, string(name))
+		if err != nil {
+			t = fmt.Sprintf("peer %s: %v\n", name, err)
+		}
+		text += t
+	}
+	return text, nil
 }
 
 // try loads file under a scratch address, calls its function fn with args
