@@ -29,6 +29,7 @@ type resource interface {
 type common struct {
 	as       string   // the user it runs as; "" for root
 	restarts []string // units to restart once at the end if it changed: the user's, with as
+	absent   bool     // removed, not made
 }
 
 func (c *common) opts() *common { return c }
@@ -95,16 +96,34 @@ func parseHost(base string, v puff.Value) (host, error) {
 		return h, fmt.Errorf("want host's setup as a vector of resources, got %s", puff.Print(t.At(1)))
 	}
 	rs, err := parseResources(base, t.At(1), "")
-	// Packages go first, together.
-	var p *pkg
+	// Packages go first, together: those installed, then those removed.
+	var pkgs [2]*pkg
 	for _, r := range rs {
-		if _, ok := r.(*pkg); ok && p == nil {
-			p = &pkg{}
-			h.resources = append(h.resources, p)
+		q, ok := r.(*pkg)
+		if !ok {
+			continue
 		}
-		if q, ok := r.(*pkg); ok {
-			p.names = append(p.names, slices.DeleteFunc(slices.Clone(q.names), func(n string) bool { return slices.Contains(p.names, n) })...)
-			p.restarts = append(p.restarts, q.restarts...)
+		i := 0
+		if q.absent {
+			i = 1
+		}
+		if pkgs[i] == nil {
+			pkgs[i] = &pkg{common: common{absent: q.absent}}
+		}
+		p := pkgs[i]
+		p.names = append(p.names, slices.DeleteFunc(slices.Clone(q.names), func(n string) bool { return slices.Contains(p.names, n) })...)
+		p.restarts = append(p.restarts, q.restarts...)
+	}
+	if pkgs[0] != nil && pkgs[1] != nil {
+		for _, n := range pkgs[1].names {
+			if slices.Contains(pkgs[0].names, n) {
+				return h, fmt.Errorf("pkg %s is both installed and :absent", n)
+			}
+		}
+	}
+	for _, p := range pkgs {
+		if p != nil {
+			h.resources = append(h.resources, p)
 		}
 	}
 	for _, r := range rs {
@@ -152,6 +171,9 @@ func parseResources(base string, v puff.Value, as string) ([]resource, error) {
 	if !ok || u.setup == nil {
 		return []resource{res}, nil
 	}
+	if u.absent {
+		return nil, fmt.Errorf("user %s is :absent, and its setup goes with its home: leave the setup out", u.name)
+	}
 	setup, err := parseResources(base, u.setup, u.name)
 	if err != nil {
 		return nil, fmt.Errorf("user %s: %v", u.name, err)
@@ -179,6 +201,9 @@ func parsePkg(_ string, args []puff.Value) (resource, error) {
 func (p *pkg) String() string { return "pkg " + strings.Join(p.names, " ") }
 
 func (p *pkg) check(ctx context.Context, r runner) ([]string, error) {
+	if p.absent {
+		return p.gone(ctx, r)
+	}
 	out, err := probe(ctx, r, "", `for p in `+quoteAll(p.names)+`; do
 dpkg-query -W -f='${db:Status-Status}\n' "$p" 2>/dev/null | grep -qx installed || echo "$p"
 done`)
@@ -220,6 +245,9 @@ func parseUser(base string, args []puff.Value) (resource, error) {
 func (u *user) String() string { return "user " + u.name }
 
 func (u *user) check(ctx context.Context, r runner) ([]string, error) {
+	if u.absent {
+		return u.gone(ctx, r)
+	}
 	n := quote(u.name)
 	out, err := probe(ctx, r, "", `getent passwd `+n+` | cut -d: -f7
 id -nG `+n+` 2>/dev/null || echo
@@ -339,6 +367,9 @@ func parseDir(_ string, args []puff.Value) (resource, error) {
 func (d *dir) String() string { return "dir " + d.path }
 
 func (d *dir) check(ctx context.Context, r runner) ([]string, error) {
+	if d.absent {
+		return d.gone(ctx, r)
+	}
 	p := shPath(d.path)
 	out, err := probe(ctx, r, d.as, `[ ! -d `+p+` ] || stat -c '%U %a' `+p)
 	var fix []string
@@ -360,13 +391,13 @@ func parseFile(base string, args []puff.Value) (resource, error) {
 	f := &file{}
 	err = first(err, optStr(o, "from", &f.from), optMode(o, &f.mode), optStr(o, "owner", &f.owner),
 		optValid(o, &f.valid), f.common.set(o))
-	if err == nil && len(args) != 2 && (f.from == "" || len(args) != 1) {
+	if err == nil && len(args) != 2 && (f.from == "" && !f.absent || len(args) != 1) {
 		err = fmt.Errorf("file takes a path, its content and options, or a path and {:from path}")
 	}
 	if err == nil {
 		f.path, err = str(args[0], "file's path")
 	}
-	if err == nil && f.from == "" {
+	if err == nil && f.from == "" && len(args) == 2 {
 		// Content may be empty, as an empty file.
 		c, ok := args[1].(puff.String)
 		if !ok {
@@ -383,6 +414,9 @@ func parseFile(base string, args []puff.Value) (resource, error) {
 func (f *file) String() string { return "file " + f.path }
 
 func (f *file) check(ctx context.Context, r runner) ([]string, error) {
+	if f.absent {
+		return f.gone(ctx, r)
+	}
 	if f.from != "" {
 		data, err := os.ReadFile(f.from)
 		if err != nil {
@@ -440,6 +474,9 @@ func parseLine(_ string, args []puff.Value) (resource, error) {
 func (l *line) String() string { return "line " + l.path + ": " + l.text }
 
 func (l *line) check(ctx context.Context, r runner) ([]string, error) {
+	if l.absent {
+		return l.gone(ctx, r)
+	}
 	p := shPath(l.path)
 	// A mark first, so an empty file isn't a missing one.
 	out, err := probe(ctx, r, l.as, `[ ! -f `+p+` ] || { echo .; cat `+p+`; }`)
@@ -498,7 +535,11 @@ func parseCmd(_ string, args []puff.Value) (resource, error) {
 	if err == nil && o["unless"] == nil {
 		err = fmt.Errorf("cmd needs :unless, a script that exits 0 once it has run")
 	}
-	return c, first(err, optStr(o, "unless", &c.unless), optStr(o, "name", &c.name), c.common.set(o))
+	err = first(err, optStr(o, "unless", &c.unless), optStr(o, "name", &c.name), c.common.set(o))
+	if err == nil && c.absent {
+		err = fmt.Errorf("cmd can't be :absent: say what undoes it in another cmd")
+	}
+	return c, err
 }
 
 func (c *cmd) String() string {
@@ -527,16 +568,17 @@ type repo struct {
 func parseRepo(_ string, args []puff.Value) (resource, error) {
 	args, o, err := splitOpts(args, "as", "ref")
 	g := &repo{}
-	if err == nil && len(args) != 2 {
+	err = first(err, optStr(o, "ref", &g.ref), g.common.set(o))
+	if err == nil && len(args) != 2 && (!g.absent || len(args) != 1) {
 		err = fmt.Errorf("repo takes a path, a git URL and options")
 	}
 	if err == nil {
 		g.path, err = str(args[0], "repo's path")
 	}
-	if err == nil {
+	if err == nil && len(args) == 2 {
 		g.url, err = str(args[1], "repo's URL")
 	}
-	return g, first(err, optStr(o, "ref", &g.ref), g.common.set(o))
+	return g, err
 }
 
 func (g *repo) String() string { return "repo " + g.path }
@@ -546,6 +588,9 @@ func (g *repo) String() string { return "repo " + g.path }
 const gitSSH = "GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=accept-new' "
 
 func (g *repo) check(ctx context.Context, r runner) ([]string, error) {
+	if g.absent {
+		return g.gone(ctx, r)
+	}
 	p := shPath(g.path)
 	out, err := probe(ctx, r, g.as, `[ -d `+p+`/.git ] || exit 0
 git -C `+p+` remote get-url origin
@@ -651,7 +696,7 @@ func splitOpts(args []puff.Value, allowed ...string) ([]puff.Value, map[string]p
 	if !ok {
 		return args, map[string]puff.Value{}, nil
 	}
-	o, err := fields(m, "options", append(allowed, "restarts")...)
+	o, err := fields(m, "options", append(allowed, "restarts", "absent")...)
 	return args[:n-1], o, err
 }
 
@@ -671,7 +716,7 @@ func fields(m puff.Map, what string, allowed ...string) (map[string]puff.Value, 
 
 func (c *common) set(o map[string]puff.Value) error {
 	var unit string
-	err := first(optStr(o, "as", &c.as), optStr(o, "restarts", &unit))
+	err := first(optStr(o, "as", &c.as), optStr(o, "restarts", &unit), optBool(o, "absent", &c.absent))
 	if unit != "" {
 		c.restarts = append(c.restarts, unit)
 	}

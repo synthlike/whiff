@@ -36,6 +36,9 @@ func (k *key) String() string { return "ssh-key ~/.ssh/id_ed25519" }
 func (k *key) note() string { return k.pub }
 
 func (k *key) check(ctx context.Context, r runner) ([]string, error) {
+	if k.absent {
+		return k.gone(ctx, r)
+	}
 	out, err := probe(ctx, r, k.as, `[ ! -f "$HOME/.ssh/id_ed25519" ] || cat "$HOME/.ssh/id_ed25519.pub"`)
 	if err != nil || out != "" {
 		k.pub = out
@@ -61,26 +64,38 @@ var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 var commit = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
 
 func parseEnv(_ string, args []puff.Value) (resource, error) {
-	// The vars are a map too: options only follow them.
+	// The vars are a map too, with strings for keys: options, with
+	// keywords, follow them, or follow the path alone.
 	o, err := map[string]puff.Value{}, error(nil)
-	if len(args) == 3 {
+	if n := len(args); n == 3 || n == 2 && hasKeyword(args[1]) {
 		args, o, err = splitOpts(args, "as")
 	}
 	e := &env{}
-	if err == nil && len(args) != 2 {
+	err = first(err, e.common.set(o))
+	if err == nil && len(args) != 2 && (!e.absent || len(args) != 1) {
 		err = fmt.Errorf("env takes a path, its vars and options")
 	}
 	if err == nil {
 		e.path, err = str(args[0], "env's path")
 	}
-	if err == nil {
+	if err == nil && len(args) == 2 {
 		err = entries(args[1], "env's vars", func(name string, v puff.Value) error {
 			ev, err := parseEnvVar(name, v)
 			e.vars = append(e.vars, ev)
 			return err
 		})
 	}
-	return e, first(err, e.common.set(o))
+	return e, err
+}
+
+// hasKeyword is whether v is a map with a keyword key: options, not vars.
+func hasKeyword(v puff.Value) bool {
+	m, ok := v.(puff.Map)
+	if ok && m.Len() > 0 {
+		_, ok = m.Entry(m.Len() - 1).Key.(puff.Keyword)
+		return ok
+	}
+	return false
 }
 
 func parseEnvVar(name string, v puff.Value) (envVar, error) {
@@ -107,6 +122,9 @@ func (e *env) String() string { return "env " + e.path }
 func (e *env) input() []byte { return e.content }
 
 func (e *env) check(ctx context.Context, r runner) ([]string, error) {
+	if e.absent {
+		return e.gone(ctx, r)
+	}
 	if err := e.read(ctx); err != nil {
 		return nil, err
 	}
@@ -193,6 +211,9 @@ func parseGoBin(_ string, args []puff.Value) (resource, error) {
 func (g *goBin) String() string { return "go-bin " + g.pkg + "@" + g.version }
 
 func (g *goBin) check(ctx context.Context, r runner) ([]string, error) {
+	if g.absent {
+		return g.gone(ctx, r)
+	}
 	bin := `"$HOME"/go/bin/` + quote(path.Base(g.pkg))
 	out, err := probe(ctx, r, g.as, `[ ! -f `+bin+` ] || go version -m `+bin)
 	if err != nil {

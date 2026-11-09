@@ -142,9 +142,29 @@ If the check fails, apply stops with its output, before anything restarts.
 `:restarts` names a systemd unit restarted once, at the end, if the
 resource changed; for a resource run as a user, it's that user's unit.
 
+## Removing things
+
+A resource you delete from the file stays on the host: waft changes only
+what the file names. To remove something, say so with `:absent #t`:
+
+```lisp
+(host "admin@203.0.113.7"
+  [(pkg "telnet" {:absent #t})
+   (file "/etc/motd" {:absent #t})
+   (line "/etc/hosts" "10.0.0.5 old-db" {:absent #t})
+   (user "ben" {:absent #t})])
+```
+
+A file, dir, repo or env needs only its path. A plan shows each as
+`(absent)`, with the command that removes it. A dir and a repo go with
+everything in them, unpushed work too. A user goes with its home: waft
+turns off linger, ends its session and waits for its processes, as
+`userdel` refuses a user still running something; an absent user can't
+have a setup. `cmd` can't be absent: write the command that undoes it.
+
 ## What waft won't do
 
-- Remove anything. A resource you delete from the file stays on the host.
+- Remove what the file doesn't name, as above.
 - Pull a repo. `repo` clones a missing one and checks out `:ref`, but
   never updates one, so work on the host is safe.
 - Upgrade `latest`. `go-bin` with a version that isn't a tag or a commit

@@ -49,7 +49,9 @@ Resources:
 Each takes :as, a user to run as (except pkg and user), and :restarts, a
 systemd unit restarted once at the end if it changed: the :as user's own.
 :valid is a command with %s, as "sshd -t -f %s", that must pass on the new
-file before it replaces the old one.
+file before it replaces the old one. :absent #t, on any but cmd, removes
+it instead: a file, dir, repo or env by its path alone, a user with its
+home once what it runs has ended; what the file doesn't name stays.
 Local paths are from the host file's folder. plan exits 0 if each host
 matches, 2 if one differs, 1 on an error. The file runs :read, so it
 can't change anything itself. whiff comes from whiff.puff in waft's lib
@@ -146,6 +148,9 @@ func converge(ctx context.Context, w io.Writer, r runner, h host, apply bool) (c
 		name := res.String()
 		if o.as != "" {
 			name += " (as " + o.as + ")"
+		}
+		if o.absent {
+			name += " (absent)"
 		}
 		fix, err := res.check(ctx, r)
 		if err != nil && (apply || !changed) {

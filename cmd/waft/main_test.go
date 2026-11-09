@@ -531,3 +531,75 @@ cmd ufw --force enable []`
 		t.Errorf("unless %q", c.unless)
 	}
 }
+
+// TestAbsent removes what's there and leaves what isn't; a user goes after
+// what it runs.
+func TestAbsent(t *testing.T) {
+	gone := func(c common) common { c.absent = true; return c }
+	for _, tc := range []struct {
+		name string
+		res  resource
+		out  result
+		want []string
+	}{
+		{"file there", &file{common: gone(common{}), path: "/etc/motd"}, result{out: "y\n"}, []string{"rm -f '/etc/motd'"}},
+		{"file gone", &file{common: gone(common{}), path: "/etc/motd"}, result{}, nil},
+		{"dir", &dir{common: gone(common{}), path: "~/old"}, result{out: "y\n"}, []string{`rm -r "$HOME"/'old'`}},
+		{"repo", &repo{common: gone(common{}), path: "~/src/m"}, result{out: "y\n"}, []string{`rm -rf "$HOME"/'src/m'`}},
+		{"env", &env{common: gone(common{}), path: "~/.env"}, result{out: "y\n"}, []string{`rm -f "$HOME"/'.env'`}},
+		{"go-bin", &goBin{common: gone(common{}), pkg: "golang.org/x/tools/gopls"}, result{out: "y\n"}, []string{`rm -f "$HOME"/go/bin/'gopls'`}},
+		{"ssh-key", &key{common: gone(common{})}, result{out: "y\n"}, []string{`rm -f "$HOME/.ssh/id_ed25519" "$HOME/.ssh/id_ed25519.pub"`}},
+		{"pkg", &pkg{common: gone(common{}), names: []string{"telnet", "ftp"}}, result{out: "ftp\n"},
+			[]string{"DEBIAN_FRONTEND=noninteractive apt-get remove -y -q 'ftp'"}},
+		{"pkg gone", &pkg{common: gone(common{}), names: []string{"telnet"}}, result{}, nil},
+		{"line", &line{common: gone(common{}), path: "/x", text: "b", match: regexp.MustCompile("^#?b")}, result{out: ".\na\n#b\nb\n"},
+			[]string{writeCmd("a\n", "'/x'")}},
+		{"line gone", &line{common: gone(common{}), path: "/x", text: "b"}, result{out: ".\na\n"}, nil},
+		{"line, no file", &line{common: gone(common{}), path: "/x", text: "b"}, result{}, nil},
+		{"user gone", &user{common: gone(common{}), name: "old"}, result{}, nil},
+	} {
+		got, err := tc.res.check(context.Background(), &fake{results: []result{tc.out}})
+		if err != nil || strings.Join(got, "\n") != strings.Join(tc.want, "\n") {
+			t.Errorf("%s: check = %q, %v\nwant %q", tc.name, got, err, tc.want)
+		}
+	}
+	u := &user{common: gone(common{}), name: "old"}
+	fix, _ := u.check(context.Background(), &fake{results: []result{{out: "y\n"}}})
+	if len(fix) != 5 || fix[0] != "loginctl disable-linger 'old' 2>/dev/null || true" || fix[4] != "userdel -r 'old' || ! getent passwd 'old' >/dev/null" {
+		t.Errorf("user fix = %q", fix)
+	}
+
+	hosts, err := load(context.Background(), write(t, `(host "admin@a"
+  [(pkg "git") (pkg "telnet" {:absent #t}) (file "/etc/motd" {:absent #t}) (user "old" {:absent #t})
+   (repo "~/src/m" {:absent #t}) (env "~/.env" {:absent #t})])`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, r := range hosts[0].resources {
+		names = append(names, fmt.Sprint(r, r.opts().absent))
+	}
+	if g := strings.Join(names, "|"); g != "pkg git false|pkg telnet true|file /etc/motd true|user old true|repo ~/src/m true|env ~/.env true" {
+		t.Errorf("resources: %s", g)
+	}
+	h := host{dest: "admin@a", resources: hosts[0].resources[2:3]}
+	var out strings.Builder
+	converge(context.Background(), &out, &fake{results: []result{{out: "y\n"}}}, h, false)
+	if !strings.Contains(out.String(), "  change  file /etc/motd (absent)\n            rm -f '/etc/motd'\n") {
+		t.Errorf("plan:\n%s", out.String())
+	}
+
+	for _, tc := range []struct{ src, err string }{
+		{`(host "a" [(cmd "x" {:unless "true" :absent #t})])`, "cmd can't be :absent"},
+		{`(host "a" [(user "u" {:absent #t} [(dir "~/x")])])`, "user u is :absent"},
+		{`(host "a" [(pkg "git") (pkg "git" {:absent #t})])`, "pkg git is both installed and :absent"},
+		{`(host "a" [(file "/x" "" {:absent "yes"})])`, ":absent: want #t or #f"},
+		{`(host "a" [(file "/x")])`, "file takes 2 to 3 arguments"},
+		{`(host "a" [(repo "/x")])`, "repo takes 2 to 3 arguments"},
+		{`(host "a" [(env "/x" {:as "u"})])`, "env takes a path, its vars"},
+	} {
+		if _, err := load(context.Background(), write(t, tc.src)); err == nil || !strings.Contains(err.Error(), tc.err) {
+			t.Errorf("load %s = %v, want %q", tc.src, err, tc.err)
+		}
+	}
+}
