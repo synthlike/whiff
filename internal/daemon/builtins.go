@@ -95,6 +95,20 @@ func (d *daemon) builtins(cur *caller) []*puff.Builtin {
 				}
 				return d.stateOf(addr)
 			}},
+		{Name: "store/buckets", Mark: puff.MarkRead,
+			Doc: "Every bucket in whiff.db, whiff's durable store, by name, with how many entries it holds: [{:name :entries}].",
+			Fn: func(*puff.Call, []puff.Value) (puff.Value, error) {
+				return d.storeBuckets()
+			}},
+		{Name: "store/dump", Args: "bucket", Mark: puff.MarkRead,
+			Doc: "(ok entries): bucket's entries in whiff.db, a string, in its keys' order, each [key value]: a key is a string (a service's name), an int (an id) or [due id] (a timer's); a value is the puff value stored, else its text. (err {:kind :no-bucket}) if there is none.",
+			Fn: func(_ *puff.Call, args []puff.Value) (puff.Value, error) {
+				name, ok := args[0].(puff.String)
+				if !ok {
+					return nil, fmt.Errorf("store/dump wants a bucket's name, a string like \"tasks\", not %s", puff.Print(args[0]))
+				}
+				return d.storeDump(string(name))
+			}},
 		{Name: "inbox", Args: "[fn]", Mark: puff.MarkRead,
 			Doc: "This service's messages waiting for a reply, oldest first, each {:id :fn :args :from :cwd :at}, and :session, the agent session whose work it is, if one's; only fn's, a keyword, if given.",
 			Fn: func(_ *puff.Call, args []puff.Value) (puff.Value, error) {

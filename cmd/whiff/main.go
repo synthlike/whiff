@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"syscall"
+	"text/tabwriter"
 	"time"
 
 	"golang.org/x/term"
@@ -53,6 +54,7 @@ const usage = `usage:
   whiff services service          one service in full: its file, last message, faults, inbox and timers; an agent's turns and spend
   whiff ls                        list every address's functions and their marks, each agent session's mode, then the :read overrides
   whiff state service             print a service's state, as it last committed it
+  whiff dump [bucket]             list whiff.db's buckets, or print one's entries, a line each: key value
   whiff reset service             forget a service's stored state, so it starts from its :state again
   whiff mcp [--dir path]          serve whiff to an agent over MCP on stdin and stdout, as :agent/<n>, its calls from path
   whiff sandbox check             say which container runtime confines sandboxed commands, and whether its image is built
@@ -143,6 +145,8 @@ func run(args []string, dir, services string, stdout, stderr io.Writer) int {
 		return text(dir, (*rpc.Client).Ls, stdout, stderr)
 	case len(args) == 2 && (args[0] == "reset" || args[0] == "state"):
 		return serviceOp(dir, args[0], args[1], stdout, stderr)
+	case len(args) <= 2 && len(args) >= 1 && args[0] == "dump":
+		return text(dir, func(c *rpc.Client) (string, error) { return dump(c, args[1:]) }, stdout, stderr)
 	case len(args) == 1 && args[0] == "mcp":
 		return mcpRun(dir, stderr)
 	case len(args) == 3 && args[0] == "mcp" && args[1] == "--dir":
@@ -676,6 +680,51 @@ func text(dir string, get func(*rpc.Client) (string, error), stdout, stderr io.W
 	}
 	io.WriteString(stdout, h)
 	return 0
+}
+
+// dump is whiff dump's output: with no bucket, each bucket in whiff.db
+// and how many entries it holds; with one, its entries, a line each, its
+// key and its value printed as puff, for grep.
+func dump(c *rpc.Client, bucket []string) (string, error) {
+	expr := "(store/buckets)"
+	if len(bucket) == 1 {
+		expr = "(store/dump " + puff.Print(puff.String(bucket[0])) + ")"
+	}
+	resp, err := c.Eval(expr, "")
+	if err != nil {
+		return "", err
+	}
+	if resp.Error != "" {
+		return "", errors.New(resp.Error)
+	}
+	v, err := puff.ReadValue(resp.Value)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	if len(bucket) == 0 {
+		w := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
+		for i := range v.(puff.Vector).Len() {
+			m := v.(puff.Vector).At(i).(puff.Map)
+			name, _ := m.Get(puff.Keyword("name"))
+			n, _ := m.Get(puff.Keyword("entries"))
+			fmt.Fprintf(w, "%s\t%s\n", name.(puff.String), puff.Print(n))
+		}
+		w.Flush()
+		return b.String(), nil
+	}
+	r := v.(puff.Tag)
+	if r.Name() == "err" {
+		e := r.At(0).(puff.Map)
+		msg, _ := e.Get(puff.Keyword("message"))
+		return "", errors.New(string(msg.(puff.String)))
+	}
+	entries := r.At(0).(puff.Vector)
+	for i := range entries.Len() {
+		kv := entries.At(i).(puff.Vector)
+		b.WriteString(puff.Print(kv.At(0)) + " " + puff.Print(kv.At(1)) + "\n")
+	}
+	return b.String(), nil
 }
 
 // stop stops the daemon, whatever protocol it speaks.

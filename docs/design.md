@@ -497,7 +497,10 @@ its chain's project with `(project/name)`, and that of a directory with
 pipeline runs each in its project so.
 History is stored in whiff.db for 30 days; clients get the last
 1000 entries, and `whiff history -f` and sniff follow it live, with
-nothing missed between the snapshot and the stream.
+nothing missed between the snapshot and the stream. Older entries, and
+whatever else whiff.db holds, are in `whiff dump history` (`whiff dump`
+lists its buckets), an entry a line, its key then its value as puff, for
+grep.
 
 ## Limits, for now
 

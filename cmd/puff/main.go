@@ -86,7 +86,7 @@ func cancelOn(interrupts <-chan os.Signal) (context.Context, context.CancelFunc)
 // whiff's, without the puff binary depending on whiff.
 var whiffFunctions = []string{
 	"address/describe", "address/list", "call", "hand-on", "inbox", "project/enter", "project/name", "publish", "reply", "self",
-	"send", "send-after", "service/list", "service/reset", "service/state", "service/status", "session/cancel", "session/mode", "session/tasks",
+	"send", "send-after", "service/list", "service/reset", "service/state", "service/status", "session/cancel", "session/mode", "session/tasks", "store/buckets", "store/dump",
 	"submitted", "view/board", "view/items", "view/locations", "view/text",
 }
 

@@ -964,3 +964,21 @@ func TestAgentModeSurvivesRestart(t *testing.T) {
 		})
 	})
 }
+
+func TestStoredKey(t *testing.T) {
+	timer := append(idKey(1700000000000000000), idKey(7)...)
+	for _, c := range []struct {
+		key  []byte
+		want string
+	}{
+		{[]byte("gh"), `"gh"`},
+		{idKey(42), "42"},
+		{timer, "[1700000000000000000 7]"},
+		{[]byte{1, 2, 3}, `"010203"`},
+		{[]byte("a\x00b"), `"610062"`},
+	} {
+		if got := puff.Print(storedKey(c.key)); got != c.want {
+			t.Errorf("storedKey(%q) = %s; want %s", c.key, got, c.want)
+		}
+	}
+}
