@@ -51,11 +51,39 @@
   ; or {:dev :reviewer}, each's; "" for the default.
   (def (models model)
     (if (= (value/type model) :map)
-      {:model (map/get-or model :dev "") :reviewer-model (map/get-or model :reviewer "")}
+      (let [m {:model (map/get-or model :dev "") :reviewer-model (map/get-or model :reviewer "")}]
+        (match (map/get model :sandbox)
+          [(some s) (map/set m :sandbox s)]
+          [(none) m]))
       {:model model}))
 
-  (test "a build names the dev's model, or the dev's and reviewer's"
-    (= [(models "haiku") (models {:reviewer "sonnet"})] [{:model "haiku"} {:model "" :reviewer-model "sonnet"}]))
+  (test "a build names the dev's model, or the dev's and reviewer's, and whether it is sandboxed"
+    (= [(models "haiku") (models {:reviewer "sonnet"}) (models {:dev "openrouter/x/y" :sandbox #t})]
+      [{:model "haiku"} {:model "" :reviewer-model "sonnet"} {:model "openrouter/x/y" :reviewer-model "" :sandbox #t}]))
+
+  ; sandboxable says whether a run with extra's fields can be sandboxed as
+  ; it asks: its dev's commands run in huff's Bash, which a sandbox wraps,
+  ; so a sandboxed run needs a dev on huff.
+  (def (sandboxable extra)
+    (match (map/get-or extra :sandbox #f)
+      [#f (ok :done)]
+      [s when (not (vector/contains? [#t {:net #t} {:net #f}] s))
+       (err {:kind :bad-sandbox :message (str ":sandbox wants #t, or {:net #t} for one with the network, got " (value/to-string s))})]
+      [_ when (not (huff? (map/get-or extra :model "")))
+       (err {:kind :no-sandbox :message "a sandboxed run needs its dev on huff, a provider's model as openrouter/moonshotai/kimi-k2"})]
+      [_ (ok :done)]))
+
+  (test "a sandboxed run needs its dev on huff"
+    (= (vector/map [{} {:model "haiku" :sandbox #t} {:model "openrouter/x/y" :sandbox {:net #t}} {:model "openrouter/x/y" :sandbox "yes"}]
+         (fn (e) (match (sandboxable e) [(ok _) :ok] [(err {:kind k}) k])))
+      [:ok :no-sandbox :ok :bad-sandbox]))
+
+  ; sandbox-flags are huff's flags for run's :sandbox.
+  (def (sandbox-flags run)
+    (match (map/get-or run :sandbox #f)
+      [#f []]
+      [{:net #t} ["-sandbox" "-net"]]
+      [_ ["-sandbox"]]))
 
   ; agent-of is the agent whose build id is, still in the inbox: its
   ; sender, or the session it is the work of, as when :board/build asks
@@ -173,6 +201,7 @@
        (vector/concat
          ["huff" "-json" "-m" model "-s" dev-system "-t" (transcript s) "-calls" "60"
           "-tools" "Read,Edit,Write,Glob,Grep,Bash"]
+         (sandbox-flags run)
          (vector/reduce [(string/join check " ") (str (check-prefix check) ":*") "go vet:*" "go build:*" "gofmt:*"
                          "git status:*" "git diff:*" "git log:*"]
            [] (fn (args c) (vector/concat args ["-allow" c]))))]))
@@ -180,6 +209,13 @@
   (test "a dev on a provider's model runs on huff, with the tools and commands claude's has"
     (= (vector/slice (dev-cmd {:session "s1" :check ["go" "test" "./..."] :model "openrouter/x/y"}) 0 4)
       ["huff" "-json" "-m" "openrouter/x/y"]))
+
+  (test "a sandboxed run's huff dev runs its commands sandboxed"
+    (let [run {:session "s1" :check ["go" "test" "./..."] :model "openrouter/x/y"}
+          has? (fn (r flag) (vector/contains? (dev-cmd r) flag))]
+      (= [(has? run "-sandbox") (has? (map/set run :sandbox #t) "-sandbox") (has? (map/set run :sandbox #t) "-net")
+          (has? (map/set run :sandbox {:net #t}) "-net")]
+        [#f #t #f #t])))
 
   (def (dev state n input)
     (let [run (run-of state n)
@@ -190,8 +226,11 @@
       (ok (waiting state n :dev id))))
 
   (def (check state n)
-    (let [{:check cmd :dir dir} (run-of state n)
-          id (try (submitted (call :jobs/run cmd {:dir dir :timeout 10m})))]
+    (let [run (run-of state n)
+          {:check cmd :dir dir} run
+          opts {:dir dir :timeout 10m}
+          opts (match (map/get-or run :sandbox #f) [#f opts] [s (map/set opts :sandbox s)])
+          id (try (submitted (call :jobs/run cmd opts)))]
       (ok (waiting state n :check id))))
 
   (def (passed? checked) (match checked [{:exit 0} #t] [_ #f]))
@@ -522,6 +561,7 @@
   ; fields beyond those, as :model and :asker.
   (def (begin state repo base task check quiet extra)
     (let [_ (try (command? check))
+          _ (try (sandboxable extra))
           bases (if (= (value/type base) :vector) base [base])
           base (string/trim (try (git repo ["rev-parse" (unwrap (vector/first bases))])))
           _ (try (file/mkdir home))
@@ -549,11 +589,11 @@
     (begin state (string/trim (try (proc/output ["git" "rev-parse" "--show-toplevel"]))) "HEAD" task check #f {}))
 
   (on (start-on state repo base task check model) :write :update
-    "Starts a run as start does, in the repository at repo, from base, a commit or branch such as an earlier run's, with the dev on model (\"\" for the default) or {:dev :reviewer}, each's, as build takes them, without telling you how it ends (:pipeline/done still does): how a planner stacks runs. (ok n)."
+    "Starts a run as start does, in the repository at repo, from base, a commit or branch such as an earlier run's, with the dev on model (\"\" for the default) or {:dev :reviewer :sandbox}, as build takes them, without telling you how it ends (:pipeline/done still does): how a planner stacks runs. (ok n)."
     (begin state repo base task check #t (models model)))
 
   (ask (build repo base task check model)
-    "Runs task as start-on does, in the repository at repo, from base (a commit or branch, or a vector of them, merged), with the dev Claude on model (\"\" for the default), or with {:dev :reviewer}, each's model: pending at once, and once the run ends (ok {:run :status :branch :dir :note :cost :actions}), :status :ready, :gave-up or :failed, :cost what its dev and reviewer turns cost in dollars, :actions what you can do about it, as Merge or Retry. How an agent hands work to smaller ones and hears back.")
+    "Runs task as start-on does, in the repository at repo, from base (a commit or branch, or a vector of them, merged), with the dev Claude on model (\"\" for the default), or with {:dev :reviewer}, each's model, and :sandbox #t to run the dev's commands and the check in a container that sees only the run's worktree, without the network unless {:net #t}, for a dev on huff: pending at once, and once the run ends (ok {:run :status :branch :dir :note :cost :actions}), :status :ready, :gave-up or :failed, :cost what its dev and reviewer turns cost in dollars, :actions what you can do about it, as Merge or Retry. How an agent hands work to smaller ones and hears back.")
 
   (on (whiff/asked state id) :update
     "A build waits in the inbox: its run starts now, unless it has. whiff's own; call build instead."

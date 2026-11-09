@@ -49,8 +49,9 @@ Or try one without installing it: `whiff try services/git.puff status`.
   has a team, `set-team project {:dev "haiku" :most 3}`: the `:lead`
   `tell project text` tells, in its `:repo`; the `:dev`'s and
   `:reviewer`'s models and the `:models` runs may use; the `:check`; how
-  many runs go at once, `:most` (4); and what its runs and its lead's
-  turns for it may spend a `:day`.
+  many runs go at once, `:most` (4); what its runs and its lead's
+  turns for it may spend a `:day`; and whether its devs' commands and
+  checks run in a `:sandbox`, for devs on huff.
   `:default` puts a role back, `reset-team project` all of them. `team project` says it, and the
   board shows it first. `show` is every project's, `for project` one's;
   sniff's sidebar opens it, for the project shown if one is.

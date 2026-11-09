@@ -1,11 +1,18 @@
 package daemon
 
 import (
+	"cmp"
 	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -143,4 +150,112 @@ func TestSandboxStray(t *testing.T) {
 		t.Errorf("container %s still runs", box)
 	}
 	historyHas(t, cl, "job 900's container "+box+" still ran after whiff died, so whiff ended it")
+}
+
+// TestPipelineSandbox runs a sandboxed pipeline run with its dev on huff
+// and a fake model: the dev's Bash and the check both answer Linux, as a
+// container does on any host, and the run ends ready.
+func TestPipelineSandbox(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	if _, err := sandbox.New(ctx, false); err != nil {
+		t.Skip(err)
+	}
+	src, err := os.ReadFile(filepath.Join("..", "..", "services", "pipeline.puff"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// withHuff moves HOME; rootless Podman keeps its images under it.
+	home, _ := os.UserHomeDir()
+	t.Setenv("XDG_DATA_HOME", cmp.Or(os.Getenv("XDG_DATA_HOME"), filepath.Join(home, ".local", "share")))
+	t.Setenv("XDG_CONFIG_HOME", cmp.Or(os.Getenv("XDG_CONFIG_HOME"), filepath.Join(home, ".config")))
+	dir := tempDir(t)
+	withHuff(t, dir)
+
+	// The model: a dev (it has tools) writes a file and runs uname -s, then
+	// says so; a reviewer approves.
+	var mu sync.Mutex
+	var bashSaid string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		var req struct {
+			Messages []struct {
+				Role    string
+				Content *string
+			}
+			Tools []struct{ Function struct{ Name string } }
+		}
+		json.Unmarshal(b, &req)
+		last := req.Messages[len(req.Messages)-1]
+		reply := func(content string) {
+			text, _ := json.Marshal(content)
+			io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":`+string(text)+`},"finish_reason":"stop"}],"usage":{"prompt_tokens":9,"completion_tokens":3,"cost":0.001}}`)
+		}
+		switch {
+		case len(req.Tools) == 0:
+			reply("Fine.\nSUBJECT: Add f.txt\nVERDICT: approve")
+		case last.Role == "user":
+			io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[
+				{"id":"c1","type":"function","function":{"name":"Write","arguments":"{\"file_path\":\"f.txt\",\"content\":\"x\\n\"}"}},
+				{"id":"c2","type":"function","function":{"name":"Bash","arguments":"{\"command\":\"uname -s\"}"}}]},
+				"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":9,"completion_tokens":3,"cost":0.001}}`)
+		default:
+			mu.Lock()
+			bashSaid = *last.Content
+			mu.Unlock()
+			reply("Wrote f.txt.")
+		}
+	}))
+	defer srv.Close()
+	t.Setenv("WHIFF_LOCAL_URL", srv.URL)
+
+	writeServices(t, dir, map[string]string{"pipeline": string(src)})
+	start(t, dir)
+	c := dial(t, dir)
+	if _, err := c.Sub("pipeline/done"); err != nil {
+		t.Fatal(err)
+	}
+	repo := filepath.Join(dir, "repo")
+	os.Mkdir(repo, 0o700)
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"commit", "-q", "--allow-empty", "-m", "first"}} {
+		cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	for _, k := range []string{"GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"} {
+		t.Setenv(k, "t")
+	}
+	for _, k := range []string{"GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"} {
+		t.Setenv(k, "t@example.com")
+	}
+
+	// Without huff, the run can't be sandboxed.
+	resp, err := c.Message("call", "pipeline/start-on", `["`+repo+`" "main" "add f.txt" ["uname" "-s"] {:dev "haiku" :sandbox #t}]`, repo)
+	if err != nil || !strings.Contains(resp.Value, ":no-sandbox") {
+		t.Errorf("a sandboxed run on claude = %s %v", resp.Value, err)
+	}
+	resp, err = c.Message("call", "pipeline/start-on", `["`+repo+`" "main" "add f.txt" ["uname" "-s"] {:dev "local/fake" :reviewer "local/fake" :sandbox #t}]`, repo)
+	if err != nil || resp.Value != "(ok 1)" {
+		t.Fatalf("start-on = %s %s %v", resp.Value, resp.Error, err)
+	}
+	select {
+	case e := <-c.Events():
+		if !strings.Contains(e.Value, ":status :ready") {
+			t.Errorf("done = %s", e.Value)
+		}
+	case <-time.After(2 * time.Minute):
+		h, _ := historyOf(c)
+		t.Fatalf("no :pipeline/done; history:\n%s", h)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !strings.Contains(bashSaid, "Linux") {
+		t.Errorf("the dev's Bash said %q, want Linux, from a container", bashSaid)
+	}
+	historyHas(t, c, `(ok {:exit 0 :stderr "" :stdout "Linux\n"})`)
 }

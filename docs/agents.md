@@ -112,7 +112,10 @@ named and used as Claude's (Read, Write, Edit, Glob, Grep and Bash),
 acting only in its worktree, and Bash runs only what its Claude could:
 the check and go vet, go build, gofmt and git status, diff and log,
 without a shell. Its conversation is kept in `~/.whiff/huff/`, so a
-retry goes on from it.
+retry goes on from it. With `:sandbox #t` in the team, or in the map
+`build` takes, the developer's Bash commands and the check run in a
+container that sees only the worktree, without the network unless
+`{:net #t}`; a run that asks for it needs its developer on huff.
 
 huff also runs on its own, as `claude -p` does:
 

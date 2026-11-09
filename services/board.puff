@@ -10,6 +10,7 @@
 ; its state; plans' and runs' are asked of :plan and :pipeline each time
 ; it is shown.
 ;   whiff call board/set-team tally '{:dev "haiku" :reviewer "sonnet" :most 3 :day 5.0}'
+;   whiff call board/set-team tally '{:dev "openrouter/moonshotai/kimi-k2" :sandbox #t}'   ; its devs' commands and checks sandboxed
 ;   whiff call board/set-team tally '{:dev :default}'   ; back to the default
 ;   whiff call board/reset-team tally
 ;   whiff call board/team tally           ; tally's team, and what it runs and spent today
@@ -186,7 +187,7 @@
   ; [] for the one the lead names; at most :most runs going; :day dollars
   ; a day, 0.0 for no limit; :models those a run may use, [] for any; and
   ; :repo, the repository tell names, "" for none.
-  (def team-defaults {:lead "lead" :dev "" :reviewer "" :check [] :most 4 :day 0.0 :models [] :repo ""})
+  (def team-defaults {:lead "lead" :dev "" :reviewer "" :check [] :most 4 :day 0.0 :models [] :repo "" :sandbox #f})
 
   (def (team-of state project) (map/merge team-defaults (map/get-or (map/get-or state :teams {}) project {})))
 
@@ -252,20 +253,35 @@
        (ok {:dev "" :reviewer "" :check ["go" "test" "./..."]})
        :bad-check]))
 
+  ; models-of is what :pipeline/build takes for a run of team's on dev and
+  ; reviewer: dev's model alone, unless there's more to say.
+  (def (models-of team dev reviewer)
+    (let [sandbox (map/get-or team :sandbox #f)]
+      (cond
+        [(not (= sandbox #f)) {:dev dev :reviewer reviewer :sandbox sandbox}]
+        [(= reviewer "") dev]
+        [_ {:dev dev :reviewer reviewer}])))
+
+  (test "a team's runs are sandboxed if it says so"
+    (= [(models-of team-defaults "haiku" "") (models-of team-defaults "haiku" "opus")
+        (models-of (map/set team-defaults :sandbox #t) "openrouter/x/y" "")]
+      ["haiku" {:dev "haiku" :reviewer "opus"} {:dev "openrouter/x/y" :reviewer "" :sandbox #t}]))
+
   ; set-role is team with role k set to v, as set-team takes them, or
   ; why it can't be: :default for its default, a string for :lead, :dev,
   ; :reviewer and :repo, strings for :check and :models, a count for
-  ; :most and dollars for :day.
+  ; :most, dollars for :day, and #t, #f or {:net #t} for :sandbox.
   (def (set-role team k v)
     (let [strings? (fn (x) (and (= (value/type x) :vector) (vector/all? x (fn (y) (= (value/type y) :string)))))
           bad (fn (want) (err {:kind :bad-team :message (str k " wants " want ", got " (value/to-string v))}))]
       (cond
         [(not (vector/contains? (map/keys team-defaults) k))
-         (err {:kind :bad-team :message (str "a team has :lead :dev :reviewer :repo :check :models :most and :day, not " (value/to-string k))})]
+         (err {:kind :bad-team :message (str "a team has :lead :dev :reviewer :repo :check :models :most :day and :sandbox, not " (value/to-string k))})]
         [(= v :default) (ok (map/set team k (unwrap (map/get team-defaults k))))]
         [(vector/contains? [:lead :dev :reviewer :repo] k) (if (= (value/type v) :string) (ok (map/set team k v)) (bad "a string"))]
         [(vector/contains? [:check :models] k) (if (strings? v) (ok (map/set team k v)) (bad "a vector of strings"))]
         [(= k :most) (if (and (= (value/type v) :int) (> v 0)) (ok (map/set team k v)) (bad "a count"))]
+        [(= k :sandbox) (if (vector/contains? [#t #f {:net #t}] v) (ok (map/set team k v)) (bad "#t, #f or {:net #t}"))]
         [_ (match (value/type v)
              [:int when (>= v 0) (ok (map/set team k (float/from-int v)))]
              [:float when (>= v 0.0) (ok (map/set team k v))]
@@ -281,8 +297,11 @@
         (set-roles (map/set team-defaults :most 2) {:most :default})
         (match (set-roles team-defaults {:most "3"}) [(err {:kind k}) k])
         (match (set-roles team-defaults {:boss "me"}) [(err {:kind k}) k])
-        (match (set-roles team-defaults {:models "haiku"}) [(err {:kind k}) k])]
-      [(ok (map/merge team-defaults {:dev "haiku" :most 3 :day 5.0 :check ["make"]})) (ok team-defaults) :bad-team :bad-team :bad-team]))
+        (match (set-roles team-defaults {:models "haiku"}) [(err {:kind k}) k])
+        (set-roles team-defaults {:sandbox #t})
+        (match (set-roles team-defaults {:sandbox "yes"}) [(err {:kind k}) k])]
+      [(ok (map/merge team-defaults {:dev "haiku" :most 3 :day 5.0 :check ["make"]})) (ok team-defaults) :bad-team :bad-team :bad-team
+       (ok (map/set team-defaults :sandbox #t)) :bad-team]))
 
   ; usd is dollars, x, as "$1.20"; "under $0.01" for a spend that rounds
   ; to nothing, as a cheap model's turn does.
@@ -353,7 +372,7 @@
              [(>= n most) (err {:kind :busy :message (str p " has " n " runs going, at most " most ": start this one once one ends")})]
              [(and (> day 0.0) (>= cost day)) (err {:kind :over-budget :message (str p "'s runs and its lead's turns cost " (usd cost) " in the last 24 hours, of " (usd day) " a day")})]
              [_ (let [{:dev dev :reviewer reviewer :check check} (try (choose team model check))
-                      r (call :pipeline/build repo base task check (if (= reviewer "") dev {:dev dev :reviewer reviewer}))]
+                      r (call :pipeline/build repo base task check (models-of team dev reviewer))]
                   (do (send :board/assign id (if (= dev "") "dev" (str dev " dev")))
                     (hand-on r)))]))]
         [_ (err {:kind :no-ticket :message (str "ticket " id " has no task to build: plan it with board/plan")})])))
@@ -404,7 +423,7 @@
       (ok (map/merge team {:going (going runs project) :spent (day-spent team runs project (time/now))}))))
 
   (on (set-team state project changes) :write :update
-    "Sets the roles of project's team that changes, a map, names, keeping the rest: {:dev \"haiku\" :reviewer \"sonnet\"}, the developers' and reviewers' models; :models [\"haiku\" \"sonnet\"], those its runs may use, [] for any; :check [\"go\" \"test\" \"./...\"]; :most 3, runs going at once; :day 5.0, dollars a day for its runs and its lead's turns for it, 0.0 for no limit; :lead \"lead\", the agent tell tells; :repo \"~/src/tally\", its repository. :default puts a role back to its default. changes may be that map printed, as sniff's Change sends it. (ok team)."
+    "Sets the roles of project's team that changes, a map, names, keeping the rest: {:dev \"haiku\" :reviewer \"sonnet\"}, the developers' and reviewers' models; :models [\"haiku\" \"sonnet\"], those its runs may use, [] for any; :check [\"go\" \"test\" \"./...\"]; :most 3, runs going at once; :day 5.0, dollars a day for its runs and its lead's turns for it, 0.0 for no limit; :lead \"lead\", the agent tell tells; :repo \"~/src/tally\", its repository; :sandbox #t, its devs' commands and checks in a container that sees only the run's worktree, {:net #t} with the network, for devs on huff. :default puts a role back to its default. changes may be that map printed, as sniff's Change sends it. (ok team)."
     (let [changes (if (= (value/type changes) :string) (try (value/from-string changes)) changes)]
       (if (not (= (value/type changes) :map))
         (err {:kind :bad-team :message (str "want the roles to set, as {:dev \"haiku\" :most 3}, got " (value/to-string changes))})
