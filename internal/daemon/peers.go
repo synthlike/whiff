@@ -40,7 +40,18 @@ type peer struct {
 	err    string    // why it isn't connected, if it isn't
 	client *rpc.Client
 	stop   context.CancelFunc
+
+	// cursor is the last entry of the peer's history mirrored here, as
+	// it sent it, where the next connection's history begins; stored
+	// under cursorKey.
+	cursor rpc.Entry
+	// ids are the ids given here to the peer's messages, by theirs, so
+	// what one led to is in its chain here too.
+	ids map[int64]int64
 }
+
+// cursorKey is where the meta bucket keeps the peer name's cursor.
+func cursorKey(name string) []byte { return []byte("cursor/" + name) }
 
 // argv is the command that reaches p: its cmd, or ssh to its dest running
 // whiff bridge there, without asking for a password, as no one is there to
@@ -133,6 +144,11 @@ func (d *daemon) storedPeers() []*peer {
 			opts, err := puff.ReadValue(string(v))
 			if err == nil {
 				if p, err := newPeer(string(k), opts); err == nil {
+					if get, err := fields(string(tx.Bucket(metaBucket).Get(cursorKey(p.name)))); err == nil {
+						at, _ := get("at").(puff.Time)
+						id, _ := get("id").(puff.Int)
+						p.cursor = rpc.Entry{At: at.Go(), ID: int64(id)}
+					}
 					ps = append(ps, p)
 				}
 			}
@@ -173,11 +189,21 @@ func (d *daemon) keepPeer(ctx context.Context, p *peer) {
 	for {
 		d.setPeer(p, "connecting", "", nil)
 		c, err := rpc.DialCommand(ctx, p.argv(), nil)
+		var hist []rpc.Entry
 		if err == nil {
 			if err = c.PeerCompatible(p.name); err == nil {
-				// Before anything is sent on it, so no task it begins
-				// there ends unseen.
-				_, err = c.Sub("tasks/changed")
+				// Every topic, before anything is sent on it, so no task
+				// it begins there ends unseen.
+				_, err = c.Sub()
+			}
+			if err == nil {
+				var cursor rpc.Entry
+				d.do(func(st *state) { cursor = p.cursor })
+				if cursor.At.IsZero() {
+					hist, err = c.Trace()
+				} else {
+					hist, err = c.TraceAfter(cursor)
+				}
 			}
 			if err != nil {
 				c.Close()
@@ -186,7 +212,7 @@ func (d *daemon) keepPeer(ctx context.Context, p *peer) {
 		if err == nil {
 			began := time.Now()
 			d.setPeer(p, "connected", "", c)
-			d.wg.Go(func() { d.followFar(ctx, p.name, c) })
+			d.wg.Go(func() { d.followFar(ctx, p, c, hist) })
 			select {
 			case <-c.Done():
 				err = errors.New("the connection ended")
@@ -259,6 +285,9 @@ func (d *daemon) peerValues() []puff.Value {
 		if !p.seen.IsZero() {
 			es = append(es, puff.Key("seen", puff.NewTime(p.seen)))
 		}
+		if !p.cursor.At.IsZero() {
+			es = append(es, puff.Key("history", puff.NewTime(p.cursor.At)))
+		}
 		add("error", p.err)
 		vs[i], _ = puff.NewMap(es...)
 	}
@@ -281,6 +310,10 @@ func peerItem(v puff.Value, now time.Time) puff.Value {
 			parts = append(parts, "seen "+roughly(now.Sub(seen.Go()))+" ago")
 		} else {
 			parts = append(parts, "never connected")
+		}
+		// What it shows of the peer is as old as this.
+		if h, ok := puff.Field(m, "history").(puff.Time); ok {
+			parts = append(parts, "its history up to "+roughly(now.Sub(h.Go()))+" ago")
 		}
 	}
 	if e := str("error"); e != "" {
@@ -318,6 +351,9 @@ func (d *daemon) removePeer(name string) puff.Value {
 	err := d.db.Update(func(tx *bbolt.Tx) error {
 		b := tx.Bucket(peersBucket)
 		found = b.Get([]byte(name)) != nil
+		if err := tx.Bucket(metaBucket).Delete(cursorKey(name)); err != nil {
+			return err
+		}
 		return b.Delete([]byte(name))
 	})
 	if err != nil {
@@ -348,7 +384,7 @@ func (d *daemon) peersService() *service {
 	return &service{name: "peers", d: d, cur: caller{addr: "peers"},
 		fns: map[string]handler{
 			"list": {mark: puff.MarkRead, marked: true,
-				doc: "(ok peers): the other machines' whiffs this one reaches, by name, each {:name :dest :dir :status :since :seen :error}: :status :connecting, :connected or :offline, since when, when it was last connected, and why it isn't. :cmd instead of :dest for one reached by a command of its own.",
+				doc: "(ok peers): the other machines' whiffs this one reaches, by name, each {:name :dest :dir :status :since :seen :history :error}: :status :connecting, :connected or :offline, since when, when it was last connected, when the last of its history here happened, and why it isn't connected. :cmd instead of :dest for one reached by a command of its own.",
 				native: func(message, []puff.Value) (puff.Value, error) {
 					return puff.Ok(puff.NewVector(d.peerValues()...)), nil
 				}},

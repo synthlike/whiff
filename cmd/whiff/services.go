@@ -67,6 +67,28 @@ func listServices(dir string, stdout, stderr io.Writer) int {
 		text := fmt.Sprintf("%-*s  %-*s  %s", nameW, l.name, stateW, l.state, l.note)
 		fmt.Fprintln(stdout, strings.TrimRight(text, " "))
 	}
+	// A peer that isn't connected: what whiff shows of it is stale.
+	if v, err := c.EvalValue("(call :peers/view)", ""); err == nil {
+		items, _ := puff.OkValue(v).(puff.Tag)
+		var away []string
+		if items.Len() > 0 {
+			vec, _ := items.At(0).(puff.Vector)
+			for i := range vec.Len() {
+				m, _ := vec.At(i).(puff.Map)
+				label, _ := puff.Field(m, "label").(puff.String)
+				detail, _ := puff.Field(m, "detail").(puff.String)
+				if !strings.HasSuffix(string(label), " connected") {
+					away = append(away, "peer "+string(label)+"  "+string(detail))
+				}
+			}
+		}
+		if len(away) > 0 {
+			fmt.Fprintln(stdout)
+			for _, l := range away {
+				fmt.Fprintln(stdout, l)
+			}
+		}
+	}
 	return 0
 }
 

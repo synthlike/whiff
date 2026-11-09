@@ -316,7 +316,7 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 				resp.Error = "this connection traces history already"
 				break
 			}
-			tr, resp = d.trace(l)
+			tr, resp = d.trace(l, req)
 		case "ls":
 			resp.Out = d.marker().ls()
 		case "inbox":

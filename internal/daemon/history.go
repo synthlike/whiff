@@ -289,6 +289,14 @@ func (st *state) entries() []rpc.Entry {
 // entries in memory after the last stored one, matched by how it is
 // stored. One it can't read is left out.
 func (d *daemon) allHistory() ([]rpc.Entry, error) {
+	var recent []entry
+	d.do(func(st *state) { recent = slices.Clone(st.history) })
+	return d.allHistoryWith(recent)
+}
+
+// allHistoryWith is allHistory with recent, the entries in memory, as
+// they were taken.
+func (d *daemon) allHistoryWith(recent []entry) ([]rpc.Entry, error) {
 	var es []rpc.Entry
 	last := ""
 	err := d.db.View(func(tx *bbolt.Tx) error {
@@ -303,8 +311,6 @@ func (d *daemon) allHistory() ([]rpc.Entry, error) {
 	if err != nil {
 		return nil, err
 	}
-	var recent []entry
-	d.do(func(st *state) { recent = slices.Clone(st.history) })
 	from := 0
 	if last != "" {
 		for i := len(recent) - 1; i >= 0; i-- {
@@ -320,16 +326,55 @@ func (d *daemon) allHistory() ([]rpc.Entry, error) {
 	return es, nil
 }
 
+// historyAfter is the history after the entry at, with id, from recent,
+// the entries in memory, or from all whiff.db holds if it is older than
+// they are; every entry after at if neither has it any more. Entries are
+// recorded as they end, not in the order they began, so the one at is
+// found rather than compared with.
+func (d *daemon) historyAfter(recent []entry, at time.Time, id int64) ([]rpc.Entry, error) {
+	after := func(es []rpc.Entry) ([]rpc.Entry, bool) {
+		for i := len(es) - 1; i >= 0; i-- {
+			if es[i].At.Equal(at) && es[i].ID == id {
+				return es[i+1:], true
+			}
+		}
+		return nil, false
+	}
+	es := make([]rpc.Entry, len(recent))
+	for i, e := range recent {
+		es[i] = e.rpc()
+	}
+	if got, ok := after(es); ok {
+		return got, nil
+	}
+	es, err := d.allHistoryWith(recent)
+	if err != nil {
+		return nil, err
+	}
+	if got, ok := after(es); ok {
+		return got, nil
+	}
+	return slices.DeleteFunc(es, func(e rpc.Entry) bool { return !e.At.After(at) }), nil
+}
+
 // trace sends l's client each new entry of history until the connection
 // ends. The Response holds history so far: taken with the subscription in
 // one step, so no entry is missed or repeated between them.
-func (d *daemon) trace(l *link) (*tracer, rpc.Response) {
+func (d *daemon) trace(l *link, req rpc.Request) (*tracer, rpc.Response) {
 	t := &tracer{ch: make(chan rpc.Entry, mailboxSize)}
 	var resp rpc.Response
+	var recent []entry
 	d.do(func(st *state) {
 		resp.History = st.entries()
+		recent = slices.Clone(st.history)
 		st.tracers[t] = true
 	})
+	if !req.After.IsZero() {
+		var err error
+		if resp.History, err = d.historyAfter(recent, req.After, req.AfterID); err != nil {
+			resp = rpc.Response{Error: err.Error()}
+		}
+	}
 	go func() {
 		for {
 			select {

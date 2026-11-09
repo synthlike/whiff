@@ -59,6 +59,10 @@ type Request struct {
 	// Read is, for a call or send, what runs under a :read mark at the
 	// sender, as a peer's view: a :write target is refused.
 	Read string `json:"read,omitempty"`
+	// After and AfterID are, for a trace, the entry history so far
+	// begins after, as a peer last saw it: its At and ID.
+	After   time.Time `json:"after,omitzero"`
+	AfterID int64     `json:"after_id,omitempty"`
 }
 
 // Response is the daemon's answer to one Request; or, with Delivery set, a
@@ -663,6 +667,14 @@ func (c *Client) AllHistory() ([]Entry, error) {
 func (c *Client) Trace() ([]Entry, error) {
 	var resp Response
 	err := c.roundTrip(Request{Op: "trace"}, &resp)
+	return resp.History, err
+}
+
+// TraceAfter is Trace with the history after the entry e, as a peer last
+// saw it: with none missed or repeated, while whiff.db still holds e.
+func (c *Client) TraceAfter(e Entry) ([]Entry, error) {
+	var resp Response
+	err := c.roundTrip(Request{Op: "trace", After: e.At, AfterID: e.ID}, &resp)
 	return resp.History, err
 }
 

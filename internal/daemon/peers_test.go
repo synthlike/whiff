@@ -288,8 +288,76 @@ func TestFar(t *testing.T) {
 	if n := strings.Count(h, ":box/put 9"); n != 1 {
 		t.Errorf("box/put 9 ran %d times:\n%s", n, h)
 	}
-	// A :read caller's message to a :write function is refused.
+	// A :read caller's message to a :write function is refused: a page
+	// here, or a caller there.
+	if got := call(c, rpc.Request{Op: "call", Target: "box@far/put", Args: "[1]", Read: "a page"}); !strings.Contains(got, ":write") {
+		t.Errorf("box@far/put from a page = %s", got)
+	}
+	if got := here("box@far/where", "[]"); !strings.HasPrefix(got, "(ok ") {
+		t.Errorf("box@far/where = %s", got)
+	}
 	if got := call(fc, rpc.Request{Op: "call", Target: "box/put", Args: "[1]", Read: "a view"}); !strings.Contains(got, ":write") {
 		t.Errorf("box/put from a :read caller = %s", got)
 	}
+}
+
+// TestFarSync keeps up with a peer: what happens there is in history
+// here, its addresses far, and what happened while whiff was down comes
+// once as it comes back; what it publishes is published here, under far
+// topics a service can follow; offline, its peers view says how old what
+// whiff has of it is.
+func TestFarSync(t *testing.T) {
+	set(t, &peerWait, 20*time.Millisecond)
+	set(t, &peerWaitMost, 200*time.Millisecond)
+	set(t, &cursorEvery, 10*time.Millisecond)
+	dir, far := tempDir(t), tempDir(t)
+	writeServices(t, far, map[string]string{"box": `(service box (on (put x) :write "Keeps x." (ok x)))`})
+	writeServices(t, dir, map[string]string{"watch": `(service watch
+  (on :box@far/changed (v) (call :me/tell (str "heard " (value/to-string v)))))`})
+	done := start(t, dir)
+	c := dial(t, dir)
+	farDone := start(t, far)
+	fc := dial(t, far)
+	call := func(c *rpc.Client, op, target, args string) string {
+		t.Helper()
+		resp, err := c.Message(op, target, args, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.Value
+	}
+	bridge := fmt.Sprintf(`{:cmd ["env" "WHIFF_TEST_BRIDGE=%s" %q]}`, rpc.SocketPath(far), os.Args[0])
+	call(c, "call", "peers/add", `["far" `+bridge+`]`)
+	eventually(t, "far connects", func() string {
+		return fmt.Sprint(strings.Contains(call(c, "call", "peers/list", "[]"), ":status :connected"))
+	}, "true")
+	count := func(s string) string {
+		h, _ := historyOf(c)
+		return fmt.Sprint(strings.Count(h, s))
+	}
+
+	call(fc, "call", "box/put", "[1]")
+	eventually(t, "far's call in history here", func() string { return count("client -> :box@far/put 1  (ok 1)") }, "1")
+
+	call(fc, "pub", "box/changed", "[5]")
+	eventually(t, "watch hears far's publish", func() string {
+		text, _ := c.Inbox("me")
+		return fmt.Sprint(strings.Contains(text, `"heard 5"`))
+	}, "true")
+
+	// While whiff is down: it comes as whiff comes back, once.
+	time.Sleep(50 * time.Millisecond) // the cursor is stored
+	stopDaemon(t, c, done)
+	call(fc, "call", "box/put", "[2]")
+	start(t, dir)
+	c = dial(t, dir)
+	eventually(t, "what far did meanwhile", func() string { return count("client -> :box@far/put 2  (ok 2)") }, "1")
+	if n := count("client -> :box@far/put 1  (ok 1)"); n != "1" {
+		t.Errorf("box@far/put 1 is in history %s times after a restart", n)
+	}
+
+	stopDaemon(t, fc, farDone)
+	eventually(t, "offline, how old", func() string {
+		return fmt.Sprint(strings.Contains(call(c, "call", "peers/view", "[]"), "its history up to"))
+	}, "true")
 }

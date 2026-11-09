@@ -493,7 +493,8 @@ reaches the peer is what `whiff call` would send there, as you.
 
 - **A peer's address is `:address@peer`.** `(call :pipeline@vps/build
   ...)`, `whiff call pipeline@vps/build`, `send`, and `pub` to
-  `:topic@vps` go to the peer. One hop only: a peer's peers aren't
+  `:git@vps/changed` go to the peer: the peer's name after the address,
+  before the last `/`. One hop only: a peer's peers aren't
   reached through it. A peer that isn't connected answers `(err {:kind
   :offline})` at once, saying why.
 - **It goes in its origin.** An agent's message reaches the peer as an
@@ -518,6 +519,21 @@ reaches the peer is what `whiff call` would send there, as you.
 - **What comes back is made far.** An `:action` in a view from the peer,
   `[:review/accept 3]`, comes back as `[:review@vps/accept 3]`, so
   `whiff act` and sniff act on the peer.
+
+- **What happens there is in history here.** Each entry of the peer's
+  history comes as it is recorded, its addresses far (`client ->
+  :box@vps/put 1`) and its message given an id here, so `whiff history`,
+  its queries and sniff show both machines. whiff keeps its place in the
+  peer's history, so what happened there while it was away comes once as
+  it connects again, while the peer still holds it.
+- **What it publishes is published here.** `:pipeline/changed` there is
+  `:pipeline@vps/changed` here, so a service follows it with `(on
+  :pipeline@vps/changed (v) ...)`, and a sniff page of the peer's view,
+  `/view/pipeline@vps/show`, keeps up with it. A page fetches a peer's
+  function only if the peer says it is `:read`.
+- **Stale is said.** A peer that isn't connected shows in `whiff
+  services` and `whiff peer ls` with when it was last seen and how old the
+  last of its history here is.
 
 A peer's connection carries one request at a time, so a slow call there
 holds up the next.

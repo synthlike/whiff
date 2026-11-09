@@ -33,6 +33,35 @@ func farAddr(addr string) (far, peer string, ok bool) {
 	return addr[:at], addr[at+1:], true
 }
 
+// farName is name, a peer's address/fn or topic, as this whiff names it:
+// the peer after its address, :pipeline/changed of vps is
+// :pipeline@vps/changed, :agent/1/inbox :agent/1@vps/inbox, and one
+// without a slash ends in it, :box@vps.
+func farName(name, peer string) string {
+	if i := strings.LastIndexByte(name, '/'); i > 0 {
+		return name[:i] + "@" + peer + name[i:]
+	}
+	return name + "@" + peer
+}
+
+// splitFar is a far topic's name on its peer, and the peer's: the
+// reverse of farName. ok is false for a name of this whiff's, or of a
+// peer's peer, or one without a peer's name.
+func splitFar(name string) (local, peer string, ok bool) {
+	at := strings.IndexByte(name, '@')
+	if at <= 0 || strings.Count(name, "@") > 1 {
+		return "", "", false
+	}
+	end := len(name)
+	if i := strings.IndexByte(name[at:], '/'); i >= 0 {
+		end = at + i
+	}
+	if end == at+1 {
+		return "", "", false
+	}
+	return name[:at] + name[end:], name[at+1 : end], true
+}
+
 // farTries is how many times a message is sent to a peer whose connection
 // goes before it answers: it has a submission key, so it runs there once.
 const farTries = 3
@@ -189,30 +218,122 @@ func (d *daemon) farTask(st *state, addr string, m message, n int64) puff.Value 
 // should an event that one ended have been dropped.
 var farCheckEvery = 5 * time.Minute
 
-// followFar answers the tasks followed here of the peer name, as they end
-// there: each as c connects, then each its :tasks/changed says changed,
-// until c goes or ctx ends.
-func (d *daemon) followFar(ctx context.Context, name string, c *rpc.Client) {
-	d.checkFar(name, c, nil)
-	tick := time.NewTicker(farCheckEvery)
-	defer tick.Stop()
+// followFar keeps up with the peer p on c, from as it connects until c
+// goes or ctx ends: hist, its history since it was last seen, and each
+// new entry, are mirrored into history here; what it publishes is
+// published here, its topics made far; and the tasks followed here are
+// answered as they end there, each checked as it connects and every
+// farCheckEvery. Its cursor is stored as it goes, now and then.
+func (d *daemon) followFar(ctx context.Context, p *peer, c *rpc.Client, hist []rpc.Entry) {
+	d.do(func(st *state) {
+		for _, e := range hist {
+			st.mirror(p, e)
+		}
+	})
+	saved := d.saveCursor(p, rpc.Entry{})
+	defer d.saveCursor(p, saved)
+	d.checkFar(p.name, c, nil)
+	check, save := time.NewTicker(farCheckEvery), time.NewTicker(cursorEvery)
+	defer check.Stop()
+	defer save.Stop()
 	for {
 		select {
+		case e, ok := <-c.Entries():
+			if !ok {
+				return
+			}
+			d.do(func(st *state) { st.mirror(p, e) })
 		case e, ok := <-c.Events():
 			if !ok {
 				return
 			}
+			if strings.Contains(e.Topic, "@") {
+				continue
+			}
+			from := e.From
+			if from != "" {
+				from += "@" + p.name
+			}
+			d.publish(message{from: from, topic: farName(e.Topic, p.name), args: "[" + e.Value + "]", lineage: lineage{user: e.Origin == "user"}})
 			// A published value comes as itself: the task's id.
 			v, _ := puff.ReadValue(e.Value)
 			if n, ok := v.(puff.Int); ok && e.Topic == "tasks/changed" {
-				d.checkFar(name, c, []int64{int64(n)})
+				d.checkFar(p.name, c, []int64{int64(n)})
 			}
-		case <-tick.C:
-			d.checkFar(name, c, nil)
+		case <-check.C:
+			d.checkFar(p.name, c, nil)
+		case <-save.C:
+			saved = d.saveCursor(p, saved)
 		case <-ctx.Done():
 			return
 		}
 	}
+}
+
+// cursorEvery is how often a peer's cursor is stored while its history
+// comes: should whiff die, what came since comes again.
+var cursorEvery = 5 * time.Second
+
+// saveCursor stores p's cursor if it isn't saved, the one stored last,
+// and returns the one stored now.
+func (d *daemon) saveCursor(p *peer, saved rpc.Entry) rpc.Entry {
+	var cur rpc.Entry
+	d.do(func(st *state) { cur = p.cursor })
+	if cur.At.IsZero() || cur.At.Equal(saved.At) && cur.ID == saved.ID {
+		return saved
+	}
+	m, _ := puff.NewMap(puff.Key("at", puff.NewTime(cur.At)), puff.Key("id", puff.Int(cur.ID)))
+	err := d.db.Update(func(tx *bbolt.Tx) error {
+		if tx.Bucket(peersBucket).Get([]byte(p.name)) == nil {
+			return nil // removed
+		}
+		return tx.Bucket(metaBucket).Put(cursorKey(p.name), []byte(puff.Print(m)))
+	})
+	if err != nil {
+		d.note("peer %s's place in its history isn't stored, so some of it may come again: %v", p.name, err)
+		return saved
+	}
+	return cur
+}
+
+// farIDs bounds the ids a peer's messages keep here: past it they start
+// again, and what an older one led to begins a chain of its own.
+const farIDs = 10000
+
+// mirror records e, an entry of the peer p's history, in history here,
+// its addresses made far and its message given an id here, and moves p's
+// cursor past it. What the peer has from its own peers isn't: only one
+// hop.
+func (st *state) mirror(p *peer, re rpc.Entry) {
+	p.cursor = re
+	if strings.Contains(re.From+re.To, "@") {
+		return
+	}
+	e := entry{at: re.At, kind: re.Kind, user: re.Origin == "user", args: re.Args, reply: re.Reply, took: re.Took, gate: re.Gate, project: re.Project}
+	if re.Kind == "note" {
+		e.note = p.name + ": " + re.Note
+		st.record(e)
+		return
+	}
+	if p.ids == nil || len(p.ids) >= farIDs {
+		p.ids = map[int64]int64{}
+	}
+	e.id = st.msgID()
+	p.ids[re.ID] = e.id
+	e.cause = p.ids[re.Cause]
+	if re.From != "" {
+		e.from = re.From + "@" + p.name
+	}
+	switch addr, topic, on := strings.Cut(re.To, " on :"); {
+	case on:
+		e.to = addr + "@" + p.name + " on :" + farName(topic, p.name)
+		if addr == "" {
+			e.to = "on :" + farName(topic, p.name)
+		}
+	case re.To != "":
+		e.to = farName(re.To, p.name)
+	}
+	st.record(e)
 }
 
 // checkFar answers each task followed here of the peer name whose task
@@ -264,11 +385,11 @@ func (d *daemon) cancelFar(a *asked) {
 	}
 }
 
-// farPub publishes m, to a peer's topic, :topic@peer, there.
+// farPub publishes m, to a peer's topic, :git@vps/changed, there.
 func (d *daemon) farPub(m message) puff.Value {
-	topic, name, _ := farAddr(m.topic)
-	if topic == "" || name == "" || strings.Contains(topic, "@") {
-		return puff.Errorf("no-address", "want a far topic as :topic@peer, got :%s", m.topic)
+	topic, name, ok := splitFar(m.topic)
+	if !ok {
+		return puff.Errorf("no-address", "want a peer's topic as :git@vps/changed, got :%s", m.topic)
 	}
 	ctx, cancel := context.WithTimeout(d.ctx, farSendWait)
 	defer cancel()
@@ -279,14 +400,15 @@ func (d *daemon) farPub(m message) puff.Value {
 		r = d.submit(ctx, name, rpc.Request{Op: "pub", Target: ":" + topic, Args: m.args, Agent: !m.user && !m.reviewed})
 	}
 	d.do(func(st *state) {
-		st.record(entry{at: time.Now(), kind: "pub", id: st.msgID(), cause: m.cause, user: m.user, from: m.from, to: name + " on :" + topic, args: m.args, reply: puff.Print(r), project: m.project})
+		st.record(entry{at: time.Now(), kind: "pub", id: st.msgID(), cause: m.cause, user: m.user, from: m.from, to: "on :" + m.topic, args: m.args, reply: puff.Print(r), project: m.project})
 	})
 	return r
 }
 
-// farActions is v, a value from the peer name, with the targets of its
-// :action vectors, as a view's items have, made far: [:review/accept 3]
-// is [:review@vps/accept 3] here.
+// farActions is v, a value from the peer name, with what names that
+// peer's addresses made far: the targets of its :action vectors, as a
+// view's items have, and the topic a view's :changed follows. So
+// [:review/accept 3] is [:review@vps/accept 3] here.
 func farActions(v puff.Value, name string) puff.Value {
 	switch v := v.(type) {
 	case puff.Vector:
@@ -305,19 +427,32 @@ func farActions(v puff.Value, name string) puff.Value {
 		es := make([]puff.Entry, v.Len())
 		for i := range v.Len() {
 			e := v.Entry(i)
-			if act, ok := e.Val.(puff.Vector); ok && puff.Equal(e.Key, puff.Keyword("action")) && act.Len() > 0 {
-				if k, ok := act.At(0).(puff.Keyword); ok {
-					if slash := strings.LastIndexByte(string(k), '/'); slash > 0 && !strings.Contains(string(k), "@") {
-						items := []puff.Value{puff.Keyword(string(k[:slash]) + "@" + name + string(k[slash:]))}
-						for j := 1; j < act.Len(); j++ {
-							items = append(items, act.At(j))
-						}
-						es[i] = puff.Entry{Key: e.Key, Val: puff.NewVector(items...)}
-						continue
+			es[i] = puff.Entry{Key: e.Key, Val: farActions(e.Val, name)}
+			far := func(k puff.Value) (puff.Value, bool) {
+				kw, ok := k.(puff.Keyword)
+				if !ok || strings.Contains(string(kw), "@") {
+					return k, false
+				}
+				return puff.Keyword(farName(string(kw), name)), true
+			}
+			switch {
+			case puff.Equal(e.Key, puff.Keyword("changed")):
+				if k, ok := far(e.Val); ok {
+					es[i].Val = k
+				}
+			case puff.Equal(e.Key, puff.Keyword("action")):
+				act, ok := e.Val.(puff.Vector)
+				if !ok || act.Len() == 0 {
+					break
+				}
+				if k, ok := far(act.At(0)); ok && strings.Contains(string(act.At(0).(puff.Keyword)), "/") {
+					items := []puff.Value{k}
+					for j := 1; j < act.Len(); j++ {
+						items = append(items, act.At(j))
 					}
+					es[i].Val = puff.NewVector(items...)
 				}
 			}
-			es[i] = puff.Entry{Key: e.Key, Val: farActions(e.Val, name)}
 		}
 		m, err := puff.NewMap(es...)
 		if err != nil {

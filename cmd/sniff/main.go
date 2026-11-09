@@ -630,14 +630,24 @@ func (s *server) fetch(target, args string) (string, map[string]string, int, err
 	if err != nil {
 		return "", nil, http.StatusBadGateway, err
 	}
-	switch mark := ms[target]; mark {
-	case "read":
-	case "":
+	// A peer's function, :pipeline@vps/show, is marked there: the peer
+	// refuses a :write one, as for a :read caller.
+	far := strings.Contains(target[:i], "@")
+	switch mark := ms[target]; {
+	case far, mark == "read":
+	case mark == "":
 		return "", nil, http.StatusNotFound, fmt.Errorf(":%s has no function %s", target[:i], target[i+1:])
 	default:
 		return "", nil, http.StatusForbidden, fmt.Errorf(":%s is :%s: a page fetches only :read functions", target, mark)
 	}
-	resp, err := c.Message("call", target, args, s.wd)
+	req := rpc.Request{Op: "call", Target: target, Args: args, Dir: s.wd}
+	if far {
+		req.Read = "a page"
+	}
+	resp, err := c.Forward(req)
+	if err == nil && resp.Error != "" {
+		err = errors.New(resp.Error)
+	}
 	if err != nil {
 		return "", nil, http.StatusBadGateway, err
 	}
