@@ -139,7 +139,7 @@ func TestConverge(t *testing.T) {
 	// A plan reports a check that fails after a change, and goes on.
 	var out strings.Builder
 	f := &fake{results: []result{{out: "git\n"}, {out: "\n"}, {code: 1, stderr: "sudo: unknown user whiff"}}}
-	if err := converge(context.Background(), &out, f, h, false); err != nil {
+	if changed, err := converge(context.Background(), &out, f, h, false); err != nil || !changed {
 		t.Fatal(err)
 	}
 	want := `admin@a
@@ -166,7 +166,7 @@ func TestConverge(t *testing.T) {
 		{}, // restart
 	}}
 	out.Reset()
-	if err := converge(context.Background(), &out, f, h, true); err != nil {
+	if _, err := converge(context.Background(), &out, f, h, true); err != nil {
 		t.Fatal(err)
 	}
 	if ssh := f.ran[len(f.ran)-2]; ssh != "$ set -e\nsystemctl daemon-reload\nsystemctl restart 'ssh'" {
@@ -178,14 +178,14 @@ func TestConverge(t *testing.T) {
 
 	// apply stops at a resource still off after its fix.
 	f = &fake{results: []result{{out: "git\n"}, {}, {out: "git\n"}}}
-	if err := converge(context.Background(), &out, f, h, true); err == nil || !strings.Contains(err.Error(), "pkg git: still differs") {
+	if _, err := converge(context.Background(), &out, f, h, true); err == nil || !strings.Contains(err.Error(), "pkg git: still differs") {
 		t.Errorf("apply = %v, want still differs", err)
 	}
 }
 
 func TestRunUsage(t *testing.T) {
 	var stderr strings.Builder
-	if code := run(context.Background(), []string{"diff", "x"}, nil, &stderr, nil); code != 2 || !strings.Contains(stderr.String(), "usage") {
+	if code := run(context.Background(), []string{"diff", "x"}, nil, &stderr, nil); code != 1 || !strings.Contains(stderr.String(), "usage") {
 		t.Errorf("run diff = %d %q", code, stderr.String())
 	}
 }
@@ -267,7 +267,7 @@ func TestSecrets(t *testing.T) {
 	h := host{dest: "admin@a", resources: []resource{e}}
 	f := &fake{results: []result{{}, {}, {out: "x\n600\n"}}}
 	var out strings.Builder
-	if err := converge(context.Background(), &out, f, h, true); err == nil || !strings.Contains(err.Error(), "still differs") {
+	if _, err := converge(context.Background(), &out, f, h, true); err == nil || !strings.Contains(err.Error(), "still differs") {
 		t.Fatalf("apply = %v", err)
 	}
 	if want := "A=\"s3cr\\\"t\"\nB=\"tw\\\\o\"\n"; f.inputs[1] != want {
@@ -325,7 +325,7 @@ func TestUserRestart(t *testing.T) {
 	hash := "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881"
 	f := &fake{results: []result{{}, {}, {out: hash + "\nroot 644\n"}, {}, {}, {out: hash + "\nwhiff 644\n"}}}
 	var out strings.Builder
-	if err := converge(context.Background(), &out, f, h, true); err != nil {
+	if _, err := converge(context.Background(), &out, f, h, true); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "  restart ssh, whiff (as whiff)\n") {
@@ -388,5 +388,37 @@ func TestRemote(t *testing.T) {
 	if got, want := remote("whiff", "go install x"), `sudo -n -H -u 'whiff' -- sh -c 'cd "$HOME" || exit 1
 go install x'`; got != want {
 		t.Errorf("remote = %s\nwant %s", got, want)
+	}
+}
+
+// TestShort shows a write as its path and size, and cuts a long line.
+func TestShort(t *testing.T) {
+	for cmd, want := range map[string]string{
+		writeCmd("hello\n", shPath("~/.config/x")):    "write ~/.config/x (6 bytes)",
+		writeCmd("k", `"$home/.ssh/authorized_keys"`): "write $home/.ssh/authorized_keys (1 byte)",
+		"make\nmake install":                          "make...",
+		strings.Repeat("x", 120):                      strings.Repeat("x", 97) + "...",
+		"printf %s 'not base64!' | base64 -d > /x":    "printf %s 'not base64!' | base64 -d > /x",
+	} {
+		if got := short(cmd); got != want {
+			t.Errorf("short(%.30q) = %q, want %q", cmd, got, want)
+		}
+	}
+}
+
+// TestDrift exits 2 from a plan when a host differs, 0 when it matches.
+func TestDrift(t *testing.T) {
+	path := write(t, `(host "admin@a" [(pkg "git")])`)
+	for _, tc := range []struct {
+		out  string
+		want int
+	}{{"", 0}, {"git\n", 2}} {
+		dial := func(string) (runner, func(), error) {
+			return &fake{results: []result{{out: tc.out}}}, func() {}, nil
+		}
+		var stdout, stderr strings.Builder
+		if code := run(context.Background(), []string{"plan", path}, &stdout, &stderr, dial); code != tc.want {
+			t.Errorf("plan with %q missing = %d, want %d: %s", tc.out, code, tc.want, stderr.String())
+		}
 	}
 }

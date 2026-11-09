@@ -46,7 +46,8 @@ Resources:
 
 Each takes :as, a user to run as (except pkg and user), and :restarts, a
 systemd unit restarted once at the end if it changed: the :as user's own.
-Local paths are from the host file's folder. The file runs :read, so it
+Local paths are from the host file's folder. plan exits 0 if each host
+matches, 2 if one differs, 1 on an error. The file runs :read, so it
 can't change anything itself. whiff comes from whiff.puff in waft's lib
 folder (cmd/waft/lib), copied next to the host file: see its comments.
 `
@@ -60,23 +61,29 @@ func main() {
 func run(ctx context.Context, args []string, stdout, stderr io.Writer, dial func(string) (runner, func(), error)) int {
 	if len(args) != 2 || args[0] != "plan" && args[0] != "apply" {
 		fmt.Fprint(stderr, usage)
-		return 2
+		return 1
 	}
 	hosts, err := load(ctx, args[1])
 	if err != nil {
 		fmt.Fprintf(stderr, "waft: %v\n", err)
 		return 1
 	}
+	apply, differs := args[0] == "apply", false
 	for _, h := range hosts {
 		r, closeRunner, err := dial(h.dest)
 		if err == nil {
-			err = converge(ctx, stdout, r, h, args[0] == "apply")
+			var changed bool
+			changed, err = converge(ctx, stdout, r, h, apply)
+			differs = differs || changed
 			closeRunner()
 		}
 		if err != nil {
 			fmt.Fprintf(stderr, "waft: %s: %v\n", h.dest, err)
 			return 1
 		}
+	}
+	if differs && !apply {
+		return 2
 	}
 	return 0
 }
@@ -120,15 +127,14 @@ func load(ctx context.Context, file string) ([]host, error) {
 }
 
 // converge checks each of h's resources and prints what differs, with the
-// commands that would fix it. With apply, it runs them and checks again,
+// commands that would fix it, and returns whether anything did. With apply, it runs them and checks again,
 // stopping at the first resource still off; units that changed resources
 // name are restarted once, at the end. In a plan, a check that fails after
 // an earlier change is reported, not fatal: it may need that change, as a
 // dir :as a user that isn't made yet.
-func converge(ctx context.Context, w io.Writer, r runner, h host, apply bool) error {
+func converge(ctx context.Context, w io.Writer, r runner, h host, apply bool) (changed bool, err error) {
 	fmt.Fprintln(w, h.dest)
 	var restarts []restart
-	changed := false
 	made := map[string]bool{} // users this plan makes
 	for _, res := range h.resources {
 		o := res.opts()
@@ -138,7 +144,7 @@ func converge(ctx context.Context, w io.Writer, r runner, h host, apply bool) er
 		}
 		fix, err := res.check(ctx, r)
 		if err != nil && (apply || !changed) {
-			return fmt.Errorf("%s: %v", name, err)
+			return changed, fmt.Errorf("%s: %v", name, err)
 		}
 		if err != nil && made[o.as] {
 			fmt.Fprintf(w, "  new     %s\n", name)
@@ -171,18 +177,18 @@ func converge(ctx context.Context, w io.Writer, r runner, h host, apply bool) er
 			input = i.input()
 		}
 		if err := script(ctx, r, o.as, fix, input); err != nil {
-			return fmt.Errorf("%s: %v", name, err)
+			return changed, fmt.Errorf("%s: %v", name, err)
 		}
 		if fix, err = res.check(ctx, r); err == nil && len(fix) > 0 {
 			err = fmt.Errorf("still differs after apply: %s", short(fix[0]))
 		}
 		if err != nil {
-			return fmt.Errorf("%s: %v", name, err)
+			return changed, fmt.Errorf("%s: %v", name, err)
 		}
 		note(w, res)
 	}
 	if len(restarts) == 0 {
-		return nil
+		return changed, nil
 	}
 	names := make([]string, len(restarts))
 	for i, u := range restarts {
@@ -190,7 +196,7 @@ func converge(ctx context.Context, w io.Writer, r runner, h host, apply bool) er
 	}
 	fmt.Fprintf(w, "  restart %s\n", strings.Join(names, ", "))
 	if !apply {
-		return nil
+		return changed, nil
 	}
 	// System units together, then each user's.
 	var users []string
@@ -208,10 +214,10 @@ func converge(ctx context.Context, w io.Writer, r runner, h host, apply bool) er
 			cmds = []string{userBus, "systemctl --user daemon-reload", "systemctl --user restart " + quoteAll(units[user])}
 		}
 		if err := script(ctx, r, user, cmds, nil); err != nil {
-			return fmt.Errorf("restart: %v", err)
+			return changed, fmt.Errorf("restart: %v", err)
 		}
 	}
-	return nil
+	return changed, nil
 }
 
 // addRestarts is restarts with the units o names, each once.
@@ -266,8 +272,12 @@ func script(ctx context.Context, r runner, as string, cmds []string, input []byt
 	return err
 }
 
-// short is cmd's first line, cut to fit plan's output.
+// short is cmd's first line, cut to fit plan's output; a write is what it
+// writes, not its bytes.
 func short(cmd string) string {
+	if what, ok := shownWrite(cmd); ok {
+		return what
+	}
 	line, _, more := strings.Cut(cmd, "\n")
 	if len(line) > 100 {
 		line, more = line[:97], true

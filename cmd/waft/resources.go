@@ -508,6 +508,23 @@ func writeCmd(content, p string) string {
 	return "printf %s " + quote(base64.StdEncoding.EncodeToString([]byte(content))) + " | base64 -d > " + p
 }
 
+// shownWrite is how plan shows cmd if writeCmd made it: the path and how
+// much it writes.
+func shownWrite(cmd string) (string, bool) {
+	rest, ok := strings.CutPrefix(cmd, "printf %s '")
+	b64, p, ok2 := strings.Cut(rest, "' | base64 -d > ")
+	data, err := base64.StdEncoding.DecodeString(b64)
+	if !ok || !ok2 || err != nil {
+		return "", false
+	}
+	p = strings.NewReplacer(`"$HOME"/`, "~/", `'`, "", `"`, "").Replace(p)
+	unit := "bytes"
+	if len(data) == 1 {
+		unit = "byte"
+	}
+	return fmt.Sprintf("write %s (%d %s)", p, len(data), unit), true
+}
+
 // attrs are the commands that give p, now with stat's "owner mode" (empty if
 // it doesn't exist yet), the mode and owner wanted, where those are set.
 func attrs(p, stat, mode, owner string) []string {
