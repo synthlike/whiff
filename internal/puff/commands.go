@@ -53,7 +53,9 @@ var readOnlyCommands = []command{
 	{"gh api", true, "-q _, --jq _, -t _, --template _, --paginate, --slurp, -i, --include, --silent, --cache _, -X GET, --method GET"},
 
 	{"go vet", true, "-json"},
-	{"go list", true, "-m, -json, -json=, -f _, -e, -deps, -test, -u, -versions, -find"},
+	// Not -u nor -versions, nor a module query (path@version, refused
+	// below): they ask the module proxy, so a path could carry data out.
+	{"go list", true, "-m, -json, -json=, -f _, -e, -deps, -test, -find"},
 	{"go doc", true, "-all, -src, -short, -u, -c, -cmd"},
 	{"go version", true, "-m, -v"},
 	{"go env", true, "-json"},
@@ -92,6 +94,9 @@ func ReadOnlyCommand(cmd Value) bool {
 		return false
 	}
 	rest := argv[1:]
+	if argv[0] == "go" && slices.ContainsFunc(rest, func(a string) bool { return strings.Contains(a, "@") }) {
+		return false
+	}
 	globals := strings.Split(commandGlobals[argv[0]], ", ")
 	for len(rest) > 0 {
 		n := flagLen(rest, globals)

@@ -58,6 +58,10 @@ func TestReadOnlyCommand(t *testing.T) {
 		{"go env GOPATH", true},
 		{"go env -w GOPATH=x", false},
 		{"go test ./...", false},
+		{"go list -m all", true},
+		{"go list -m -u all", false}, // asks the module proxy
+		{"go list -m -versions x.org/m", false},
+		{"go list -m x.org/secret@latest", false}, // a query asks it too
 		{"pwd", true},
 		{"pwd x", false},
 		{"ls -la", true},
