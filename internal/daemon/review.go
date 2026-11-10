@@ -138,10 +138,11 @@ func (st *state) queue(a *asked, what string) puff.Value {
 }
 
 // reviewing says whether a client follows :review/pending, on its own or
-// with every topic.
+// with every topic: not an agent's, which can't accept what it holds. A
+// peer's whiff following this one's is one: you review here from there.
 func (st *state) reviewing() bool {
 	for w := range st.subs {
-		if w.topics == nil || w.topics["review/pending"] {
+		if !w.agent && (w.topics == nil || w.topics["review/pending"]) {
 			return true
 		}
 	}

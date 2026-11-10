@@ -200,6 +200,7 @@ type grant struct {
 type watcher struct {
 	topics map[string]bool
 	ch     chan rpc.Event
+	agent  bool // an agent's connection: it doesn't review
 }
 
 // route owns the state until the daemon stops; others reach it through do.

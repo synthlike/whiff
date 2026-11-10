@@ -17,7 +17,7 @@ func (d *daemon) subscribe(l *link, req rpc.Request) (*watcher, rpc.Response) {
 	if err != nil || !ok {
 		return nil, rpc.Response{Error: fmt.Sprintf("want topics as a vector of keywords, got %s", req.Args)}
 	}
-	w := &watcher{ch: make(chan rpc.Event, mailboxSize)}
+	w := &watcher{ch: make(chan rpc.Event, mailboxSize), agent: req.Agent}
 	for i := range vec.Len() {
 		k, ok := vec.At(i).(puff.Keyword)
 		if !ok || k == "" {

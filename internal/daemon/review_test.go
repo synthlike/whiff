@@ -76,6 +76,15 @@ func TestReviewGate(t *testing.T) {
 	if r := msg(agent, "call", "jobs/run", `[["touch" "`+file+`"]]`); kind(r) != ":no-reviewer" {
 		t.Errorf("agent's job with no reviewer = %s", r)
 	}
+	// An agent following :review/pending isn't a reviewer: it can't accept.
+	watching := dial(t, dir)
+	watching.Agent = true
+	if _, err := watching.Sub("review/pending"); err != nil {
+		t.Fatal(err)
+	}
+	if r := msg(agent, "call", "notes/add", `["x"]`); kind(r) != ":no-reviewer" {
+		t.Errorf("agent's add with only an agent following = %s", r)
+	}
 
 	reviewer := dial(t, dir)
 	if _, err := reviewer.Sub("review/pending", "review/done"); err != nil {

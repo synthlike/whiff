@@ -651,4 +651,3 @@ broken over lines to fit, as `whiff state` is.
   sender already has.
 - A call waits 5s; anything longer is a job or an ask.
 - No calendar maths in puff: `1d` is 24 hours.
-- One machine; there is no cross-machine routing.
