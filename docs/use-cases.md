@@ -6,7 +6,9 @@ services are the ones in [services/](../services/README.md);
 services they call are installed as described in the service catalog,
 and commands that link files run from the whiff checkout.
 
-For a first service, follow the [message walkthrough](walkthrough.md).
+To set up a laptop and a VPS for one project end to end, follow
+[from scratch](from-scratch.md). For a first service, follow the
+[message walkthrough](walkthrough.md).
 The [puff guide](puff.md) explains the language, the
 [agent guide](agents.md) brings together tools and turn behavior, and
 [troubleshooting](troubleshooting.md) covers failures and recovery.

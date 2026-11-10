@@ -1,0 +1,82 @@
+; prnotes: a heads-up in your inbox for each new comment or review on the
+; open pull requests of the repositories it watches. It looks every 5
+; minutes, through the gh CLI, and changes nothing on GitHub.
+;   whiff call prnotes/watch      ; the repository you're in
+;   whiff call prnotes/poll       ; look now
+;
+; Its state is each watched directory's comments and reviews as it last
+; saw them, by id, so a restart doesn't tell you twice.
+
+(service prnotes :state {}
+  :start (fn (state) (do (send-after every :tick) (ok state)))
+
+  (def every 5m)
+
+  ; what is a review's state as words.
+  (def (what s)
+    (match s ["APPROVED" "approved"] ["CHANGES_REQUESTED" "asked for changes on"] [_ "reviewed"]))
+
+  ; notes-of is a pull request's comments and reviews, from gh's JSON:
+  ; each {:id :pr :title :who :what :text}. A review with no text that
+  ; only comments is its line comments' wrapper: nothing to read.
+  (def (notes-of p)
+    (let [{:number n :title t :comments cs :reviews rs} p]
+      (vector/concat
+        (vector/map cs (fn ({:id id :author {:login who} :body b})
+                         {:id id :pr n :title t :who who :what "commented on" :text b}))
+        (vector/map (vector/filter rs (fn ({:state s :body b}) (not (and (= s "COMMENTED") (= b "")))))
+          (fn ({:id id :author {:login who} :state s :body b})
+            {:id id :pr n :title t :who who :what (what s) :text b})))))
+
+  ; notes is the comments and reviews on dir's open pull requests.
+  (def (notes dir)
+    (match (try (proc/run ["gh" "pr" "list" "--json" "number,title,comments,reviews"] {:dir dir}))
+      [{:exit 0 :stdout out}
+       (ok (vector/reduce (try (json/parse out)) [] (fn (all p) (vector/concat all (notes-of p)))))]
+      [{:stderr e} (err {:kind :gh :message (string/trim e)})]))
+
+  ; line is note n as a heads-up.
+  (def (line n)
+    (let [{:pr pr :title t :who who :what w :text b} n
+          short (if (> (string/length b) 200) (str (string/slice b 0 200) "...") b)]
+      (str who " " w " #" pr " " t (if (= short "") "" (str ": " short)))))
+
+  (test "comments and reviews as heads-ups, without empty review wrappers"
+    (let [p (unwrap (json/parse "{\"number\":7,\"title\":\"Add a --json flag\",
+              \"comments\":[{\"id\":\"c1\",\"author\":{\"login\":\"ana\"},\"body\":\"Could this print a newline at the end?\"}],
+              \"reviews\":[{\"id\":\"r1\",\"author\":{\"login\":\"ben\"},\"state\":\"CHANGES_REQUESTED\",\"body\":\"Needs a test.\"},
+                           {\"id\":\"r2\",\"author\":{\"login\":\"ben\"},\"state\":\"COMMENTED\",\"body\":\"\"}]}"))]
+      (= (vector/map (notes-of p) line)
+        ["ana commented on #7 Add a --json flag: Could this print a newline at the end?"
+         "ben asked for changes on #7 Add a --json flag: Needs a test."])))
+
+  ; look tells you of what is new in each watched directory: [told state],
+  ; told how many. A directory gh fails in keeps what it had seen.
+  (def (look state)
+    (vector/reduce (map/entries state) [0 state]
+      (fn ([told s] [dir seen])
+        (match (notes dir)
+          [(ok ns)
+           (let [new (vector/filter ns (fn ({:id id}) (not (vector/contains? seen id))))]
+             (do (vector/each new (fn (n) (do (or-else (call :me/tell (line n)) :told) (ok :told))))
+               [(+ told (vector/length new)) (map/set s dir (vector/map ns (fn ({:id id}) id)))]))]
+          [_ [told s]]))))
+
+  (on (watch state) :update
+    "Watches the repository in the caller's directory, from now: what is already there isn't news. (ok :watching), or (err {:kind :gh})."
+    (let [dir (os/cwd)
+          ns (try (notes dir))]
+      (ok [:watching (map/set state dir (vector/map ns (fn ({:id id}) id)))])))
+
+  (on (unwatch state) :update
+    "Stops watching the repository in the caller's directory."
+    (ok [:done (map/delete state (os/cwd))]))
+
+  (on (poll state) :update
+    "Looks now, as it does every 5 minutes: (ok n), how many heads-ups it left."
+    (ok (look state)))
+
+  (on (tick state) :update
+    "Polls, and ticks again in 5 minutes; its own loop: call poll instead."
+    (do (send-after every :tick)
+      (ok (look state)))))

@@ -216,10 +216,12 @@ the team that builds it:
 
 ## Status and docs
 
-v0.7. Services, resident agents, MCP access, durable state and message
-history, and the sniff UI are implemented. The project is small and
+v0.8. Services, resident agents, MCP access, durable state and message
+history, the sniff UI, peers over ssh, huff and the sandbox are
+implemented. The project is small and
 evolving; the included services are used to develop whiff itself.
 
+- [From scratch](docs/from-scratch.md): whiff on a laptop and a VPS, coding work, a PR comment poller and a plan, end to end
 - [Learn puff](docs/puff.md): values, patterns, errors and scripts
 - [Follow a message](docs/walkthrough.md): a service, its state, events and a background job
 - [Agents](docs/agents.md): MCP, resident agents, delegation and budgets

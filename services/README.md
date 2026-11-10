@@ -17,6 +17,12 @@ Or try one without installing it: `whiff try services/git.puff status`.
   `:gh/changed {:dir :prs}` when its open pull requests change (`whiff sub
   gh/changed`); `unwatch`, `watching`, and `poll` to look now. What it
   watches and last saw is its state, kept across restarts.
+- `prnotes`: a heads-up in your inbox for each new comment or review on
+  the open pull requests of the repositories it `watch`es, every 5
+  minutes, through the gh CLI; `unwatch`, and `poll` to look now. What it
+  has seen, by id, is its state, so a restart doesn't tell you twice.
+  Put it on a VPS and the heads-ups reach your laptop's inbox, as
+  [from scratch](../docs/from-scratch.md) shows.
 - `todo`: the checkbox items in `TODO.md` in the caller's directory (`items`,
   `open`), `add text` and `done line`. The file is its state. `view` is the
   open items as a view: `whiff call todo/view | fzf | whiff act` ticks the
