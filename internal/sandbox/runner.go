@@ -122,6 +122,11 @@ func modCache() string {
 // runs or trusts. A commit fails, as it can't lock the index; whiff
 // commits on the host. None for a repository's own checkout, whose .git
 // is in dir, or outside one.
+//
+// dir/.git is the sandboxed side's to rewrite, so the gitdir it names is
+// mounted only if that gitdir's own gitdir file, which git wrote and the
+// container can't, points back at dir/.git: else `gitdir: ~/.ssh` would
+// mount ~/.ssh into the next command.
 func gitDirs(dir string) []string {
 	b, err := os.ReadFile(filepath.Join(dir, ".git"))
 	if err != nil {
@@ -131,10 +136,11 @@ func gitDirs(dir string) []string {
 	if !ok {
 		return nil
 	}
-	if !filepath.IsAbs(gitdir) {
-		gitdir = filepath.Join(dir, gitdir)
+	gitdir = resolve(dir, gitdir)
+	b, err = os.ReadFile(filepath.Join(gitdir, "gitdir"))
+	if err != nil || !sameFile(resolve(gitdir, strings.TrimSpace(string(b))), filepath.Join(dir, ".git")) {
+		return nil
 	}
-	gitdir = filepath.Clean(gitdir)
 	common := gitdir
 	if b, err := os.ReadFile(filepath.Join(gitdir, "commondir")); err == nil {
 		common = strings.TrimSpace(string(b))
@@ -151,6 +157,24 @@ func gitDirs(dir string) []string {
 		}
 	}
 	return dirs
+}
+
+// resolve is path, read from a file in dir, as a clean absolute path.
+func resolve(dir, path string) string {
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(dir, path)
+	}
+	return filepath.Clean(path)
+}
+
+// sameFile says whether a and b are one file, through symlinks.
+func sameFile(a, b string) bool {
+	fa, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	fb, err := os.Stat(b)
+	return err == nil && os.SameFile(fa, fb)
 }
 
 // within says whether path is dir or in it.

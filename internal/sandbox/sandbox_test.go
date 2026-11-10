@@ -202,6 +202,17 @@ func TestGitDirs(t *testing.T) {
 	if got := gitDirs(t.TempDir()); got != nil {
 		t.Errorf("outside a repository, gitDirs = %q", got)
 	}
+	// The container rewrites the worktree's .git to name a host directory,
+	// with a commondir or without: neither points back, so neither mounts.
+	secret := t.TempDir()
+	os.WriteFile(filepath.Join(wt, ".git"), []byte("gitdir: "+secret+"\n"), 0o644)
+	if got := gitDirs(wt); got != nil {
+		t.Errorf("a .git naming %s mounts %q", secret, got)
+	}
+	os.WriteFile(filepath.Join(secret, "commondir"), []byte("..\n"), 0o644)
+	if got := gitDirs(wt); got != nil {
+		t.Errorf("a .git naming %s, with a commondir, mounts %q", secret, got)
+	}
 	_, wt, common = repo(t, true)
 	if b, _ := os.ReadFile(filepath.Join(wt, ".git")); strings.Contains(string(b), "gitdir: /") {
 		t.Skip("this git writes absolute gitdirs only")
