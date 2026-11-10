@@ -90,7 +90,7 @@ cp cmd/waft/lib/whiff.puff cmd/waft/lib/hardened.puff .
    (pkg "git" "golang-go")
    (user "whiff" {:keys ["~/.ssh/id_ed25519.pub"] :linger #t}
      [(ssh-key)
-      (whiff {:version "v0.8.0"
+      (whiff {:version "v0.8.1"
               :env {"OPENROUTER_API_KEY" {:cmd "op read op://dev/openrouter/key"}}
               :services ["services/pipeline.puff"]})])])
 ```

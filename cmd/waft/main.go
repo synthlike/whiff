@@ -28,7 +28,7 @@ is its ssh dest, an admin with passwordless sudo, and its resources:
        [(ssh-key)
         (file "~/.gitconfig" {:from "dotfiles/gitconfig"})
         (repo "~/src/mdtoc" "git@github.com:me/mdtoc.git")
-        (whiff {:version "v0.8.0" :services ["services/pipeline.puff"]})])])
+        (whiff {:version "v0.8.1" :services ["services/pipeline.puff"]})])])
 
 Resources:
   pkg name ...              apt packages, all a host's installed first, as root

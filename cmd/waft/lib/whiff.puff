@@ -3,7 +3,7 @@
 ;
 ;   (pkg "golang-go")
 ;   (user "whiff" {:keys ["~/.ssh/id_ed25519.pub"] :linger #t}
-;     [(whiff {:version "v0.8.0"
+;     [(whiff {:version "v0.8.1"
 ;              :env {"OPENROUTER_API_KEY" {:cmd "op read op://dev/openrouter/key"}}
 ;              :services ["services/pipeline.puff"]})])
 ;
