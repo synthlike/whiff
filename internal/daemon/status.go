@@ -196,9 +196,9 @@ func (st *state) statusOf(name string, now time.Time) status {
 		}
 	case recent > 0:
 		r.state, r.note = "faulting", fmt.Sprintf("restarted %s today", times(len(h.faults)))
-	case r.agent && s.dayUSD > 0 && agentSpent(name, now).usd >= s.dayUSD:
-		r.state, r.note = "over-budget", fmt.Sprintf("%s of its %s a day", usd(agentSpent(name, now).usd), usd(s.dayUSD))
-	case r.agent && agentPaused(name):
+	case r.agent && s.dayUSD > 0 && agentSpent(st.home, name, now).usd >= s.dayUSD:
+		r.state, r.note = "over-budget", fmt.Sprintf("%s of its %s a day", usd(agentSpent(st.home, name, now).usd), usd(s.dayUSD))
+	case r.agent && agentPaused(st.home, name):
 		r.state = "paused"
 		if q := len(st.inbox(name)); q > 0 {
 			r.note = fmt.Sprintf("%d queued", q)
@@ -267,11 +267,7 @@ func waitedOn(children []*asked, now time.Time) string {
 
 // agentPaused is whether agent name is paused, by the file its turn loop
 // keeps.
-func agentPaused(name string) bool {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return false
-	}
+func agentPaused(home, name string) bool {
 	b, _ := os.ReadFile(filepath.Join(home, ".whiff", "agents", name, "paused"))
 	return strings.TrimSpace(string(b)) == "paused"
 }
@@ -288,12 +284,8 @@ type spending struct {
 
 // agentSpent is agent name's spending in the 24 hours before now, from
 // the costs file its turn loop keeps.
-func agentSpent(name string, now time.Time) spending {
+func agentSpent(home, name string, now time.Time) spending {
 	var sp spending
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return sp
-	}
 	b, _ := os.ReadFile(filepath.Join(home, ".whiff", "agents", name, "costs"))
 	// Each line is "time usd" for a turn, "time usd - project" for one in
 	// a project, "time usd task" for a task.
@@ -384,7 +376,7 @@ func (d *daemon) serviceStatus(name string) puff.Value {
 	})
 	add("timers", puff.NewVector(timers...))
 	if agent {
-		sp := agentSpent(name, now)
+		sp := agentSpent(d.home(), name, now)
 		add("spent", puff.Float(sp.usd))
 		add("tasks-spent", puff.Float(sp.tasks))
 		add("turns", puff.Int(sp.turns))

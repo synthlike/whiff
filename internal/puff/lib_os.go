@@ -33,14 +33,18 @@ var osFns = []*Builtin{
 		fmt.Fprintln(c.Env.Stdout, strings.Join(parts, " "))
 		return Done, nil
 	}},
-	{Name: "env/get", Args: "name", Doc: "(some s): the environment variable name; (none) if it isn't set.", Fn: str1(func(name string) Value {
-		if s, ok := os.LookupEnv(name); ok {
-			return Some(String(s))
+	{Name: "env/get", Args: "name", Doc: "(some s): the environment variable name; (none) if it isn't set.", Fn: func(c *Call, args []Value) (Value, error) {
+		name, err := arg[String](args, 0, "a string")
+		if err != nil {
+			return nil, err
 		}
-		return None()
-	})},
-	{Name: "os/home", Doc: "Your home directory.", Fn: func(*Call, []Value) (Value, error) {
-		dir, err := os.UserHomeDir()
+		if s, ok := Getenv(c.Env.Environ, string(name)); ok {
+			return Some(String(s)), nil
+		}
+		return None(), nil
+	}},
+	{Name: "os/home", Doc: "Your home directory.", Fn: func(c *Call, _ []Value) (Value, error) {
+		dir, err := Home(c.Env.Environ)
 		if err != nil {
 			return nil, err
 		}
@@ -295,7 +299,7 @@ func procRun(c *Call, args []Value) (Value, error) {
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(timeout))
 		defer cancel()
 	}
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd := Command(ctx, c.Env.Environ, argv)
 	cmd.Dir = c.Env.Dir
 	if d, ok := opts.Get(Keyword("dir")); ok {
 		s, ok := d.(String)

@@ -105,6 +105,7 @@ func TestGitService(t *testing.T) {
 // TestGhService tries services/gh.puff with a fake gh on PATH that prints
 // what the real one does.
 func TestGhService(t *testing.T) {
+	t.Parallel()
 	src, err := os.ReadFile(filepath.Join("..", "..", "services", "gh.puff"))
 	if err != nil {
 		t.Fatal(err)
@@ -133,7 +134,7 @@ esac
 	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(fake), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	setEnv(t, dir, "PATH", bin+string(os.PathListSeparator)+getEnv(dir, "PATH"))
 	start(t, dir)
 	c := dial(t, dir)
 
@@ -158,6 +159,7 @@ esac
 // TestGhWatch runs services/gh.puff, polling every 20ms, on a repository
 // whose fake gh prints its prs.json.
 func TestGhWatch(t *testing.T) {
+	t.Parallel()
 	src, err := os.ReadFile(filepath.Join("..", "..", "services", "gh.puff"))
 	if err != nil {
 		t.Fatal(err)
@@ -174,7 +176,7 @@ esac
 	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(fake), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	setEnv(t, dir, "PATH", bin+string(os.PathListSeparator)+getEnv(dir, "PATH"))
 	repo := filepath.Join(dir, "repo")
 	os.Mkdir(repo, 0o700)
 	prs := func(json string) {
@@ -318,6 +320,7 @@ func TestTodoService(t *testing.T) {
 // TestReviewerService tries services/reviewer.puff with a fake claude on
 // PATH, which says what it was given.
 func TestReviewerService(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("no git")
 	}
@@ -336,7 +339,7 @@ echo "reviewed:"; grep '^+[^+]'
 	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(fake), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	setEnv(t, dir, "PATH", bin+string(os.PathListSeparator)+getEnv(dir, "PATH"))
 	start(t, dir)
 	c := dial(t, dir)
 
@@ -424,8 +427,8 @@ answer "$mode in $(basename "$PWD"): $msg"
 	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(fake), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("HOME", dir)
+	setEnv(t, dir, "PATH", bin+string(os.PathListSeparator)+getEnv(dir, "PATH"))
+	setEnv(t, dir, "HOME", dir)
 }
 
 // TestAssistantService runs services/assistant.puff, installed, with a
@@ -433,6 +436,7 @@ answer "$mode in $(basename "$PWD"): $msg"
 // and echoes the message; and watcher, an agent with :model and :every,
 // whose first scheduled turn has nothing to say and its second news.
 func TestAssistantService(t *testing.T) {
+	t.Parallel()
 	src, err := os.ReadFile(filepath.Join("..", "..", "services", "assistant.puff"))
 	if err != nil {
 		t.Fatal(err)
@@ -554,6 +558,7 @@ func TestAssistantService(t *testing.T) {
 // PATH: the dev writes feature.txt in its first turn and test.txt when
 // resumed; the reviewer approves, or, once picky, never does.
 func TestPipelineService(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("no git")
 	}
@@ -585,9 +590,9 @@ echo "changed things"
 	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(claude), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("FAKE", fake)
-	t.Setenv("HOME", dir)
+	setEnv(t, dir, "PATH", bin+string(os.PathListSeparator)+getEnv(dir, "PATH"))
+	setEnv(t, dir, "FAKE", fake)
+	setEnv(t, dir, "HOME", dir)
 	writeServices(t, dir, map[string]string{"pipeline": string(src)})
 	start(t, dir)
 	c := dial(t, dir)
@@ -609,10 +614,10 @@ echo "changed things"
 	}
 	git(repo, "init", "-q", "-b", "main")
 	git(repo, "commit", "-q", "--allow-empty", "-m", "first")
-	t.Setenv("GIT_AUTHOR_NAME", "t")
-	t.Setenv("GIT_AUTHOR_EMAIL", "t@example.com")
-	t.Setenv("GIT_COMMITTER_NAME", "t")
-	t.Setenv("GIT_COMMITTER_EMAIL", "t@example.com")
+	setEnv(t, dir, "GIT_AUTHOR_NAME", "t")
+	setEnv(t, dir, "GIT_AUTHOR_EMAIL", "t@example.com")
+	setEnv(t, dir, "GIT_COMMITTER_NAME", "t")
+	setEnv(t, dir, "GIT_COMMITTER_EMAIL", "t@example.com")
 
 	call := func(fn, args string) string {
 		t.Helper()
@@ -786,6 +791,7 @@ echo "changed things"
 // with a fake claude: the planner answers two tasks in a code fence, the
 // dev writes a file named after its task, and the reviewer approves.
 func TestPlanService(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("no git")
 	}
@@ -811,13 +817,13 @@ esac
 	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(claude), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("HOME", dir)
+	setEnv(t, dir, "PATH", bin+string(os.PathListSeparator)+getEnv(dir, "PATH"))
+	setEnv(t, dir, "HOME", dir)
 	for _, k := range []string{"GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"} {
-		t.Setenv(k, "t")
+		setEnv(t, dir, k, "t")
 	}
 	for _, k := range []string{"GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"} {
-		t.Setenv(k, "t@example.com")
+		setEnv(t, dir, k, "t@example.com")
 	}
 	writeServices(t, dir, srcs)
 	start(t, dir)
@@ -1069,6 +1075,7 @@ func TestServiceFileTests(t *testing.T) {
 // TestPipelineRecovers stops whiff while services/pipeline.puff's dev runs:
 // the run fails with a report that offers Retry, and retrying finishes it.
 func TestPipelineRecovers(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("no git")
 	}
@@ -1098,12 +1105,12 @@ echo "changed things"
 	if err := os.WriteFile(hang, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("HOME", dir)
-	t.Setenv("GIT_AUTHOR_NAME", "t")
-	t.Setenv("GIT_AUTHOR_EMAIL", "t@example.com")
-	t.Setenv("GIT_COMMITTER_NAME", "t")
-	t.Setenv("GIT_COMMITTER_EMAIL", "t@example.com")
+	setEnv(t, dir, "PATH", bin+string(os.PathListSeparator)+getEnv(dir, "PATH"))
+	setEnv(t, dir, "HOME", dir)
+	setEnv(t, dir, "GIT_AUTHOR_NAME", "t")
+	setEnv(t, dir, "GIT_AUTHOR_EMAIL", "t@example.com")
+	setEnv(t, dir, "GIT_COMMITTER_NAME", "t")
+	setEnv(t, dir, "GIT_COMMITTER_EMAIL", "t@example.com")
 	writeServices(t, dir, map[string]string{"pipeline": string(src)})
 	done := start(t, dir)
 	c := dial(t, dir)
@@ -1153,6 +1160,7 @@ echo "changed things"
 // between pipeline's looking for a free run and adding its own: a git that
 // takes whiff/1 first. The run starts as run 2 instead of failing.
 func TestPipelineTakenRun(t *testing.T) {
+	t.Parallel()
 	real, err := exec.LookPath("git")
 	if err != nil {
 		t.Skip("no git")
@@ -1170,12 +1178,12 @@ exec "` + real + `" "$@"
 `
 	os.WriteFile(filepath.Join(bin, "git"), []byte(git), 0o700)
 	os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\ncat > /dev/null\nsleep 30\n"), 0o700)
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("HOME", dir)
-	t.Setenv("GIT_AUTHOR_NAME", "t")
-	t.Setenv("GIT_AUTHOR_EMAIL", "t@example.com")
-	t.Setenv("GIT_COMMITTER_NAME", "t")
-	t.Setenv("GIT_COMMITTER_EMAIL", "t@example.com")
+	setEnv(t, dir, "PATH", bin+string(os.PathListSeparator)+getEnv(dir, "PATH"))
+	setEnv(t, dir, "HOME", dir)
+	setEnv(t, dir, "GIT_AUTHOR_NAME", "t")
+	setEnv(t, dir, "GIT_AUTHOR_EMAIL", "t@example.com")
+	setEnv(t, dir, "GIT_COMMITTER_NAME", "t")
+	setEnv(t, dir, "GIT_COMMITTER_EMAIL", "t@example.com")
 	writeServices(t, dir, map[string]string{"pipeline": string(src)})
 	start(t, dir)
 	c := dial(t, dir)
@@ -1277,6 +1285,7 @@ func TestAgentAsk(t *testing.T) {
 // the :can functions, and the reads whiff mcp lists them with, until the
 // turn ends.
 func TestAgentSession(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	fakeClaude(t, dir)
 	os.Mkdir(filepath.Join(dir, "project"), 0o700)
@@ -1406,6 +1415,7 @@ func TestAgentSession(t *testing.T) {
 // once spent tells you and refuses turns; a turn's, which claude stops at;
 // a turn's :time; and stop, which ends the turn running now.
 func TestAgentLimits(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	fakeClaude(t, dir)
 	for name, cost := range map[string]string{"cheap": "0.6", "capped": "0.3", "led": "0.25"} {
@@ -1503,6 +1513,7 @@ func TestAgentLimits(t *testing.T) {
 // review gate, and its answer comes back to lead, once lead's turn has
 // ended, as a turn of its own, whose news reaches your inbox.
 func TestAgentDelegate(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	fakeClaude(t, dir)
 	writeServices(t, dir, map[string]string{
@@ -1581,6 +1592,7 @@ func TestAgentDelegate(t *testing.T) {
 // TestAgentPause pauses an agent: what you tell it waits, whiff services
 // says so, and resuming it takes what waits, oldest first.
 func TestAgentPause(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	fakeClaude(t, dir)
 	writeServices(t, dir, map[string]string{"napper": `(agent napper :prompt "Nap.")`})
@@ -1625,6 +1637,7 @@ func TestAgentPause(t *testing.T) {
 // once its time has passed, with its note, and one set before a restart
 // still comes after it, once.
 func TestAgentLater(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	fakeClaude(t, dir)
 	writeServices(t, dir, map[string]string{"watch": `(agent watch :prompt "Watch.")`})
@@ -1682,6 +1695,7 @@ func TestAgentLater(t *testing.T) {
 // it: lead's answer waits until helper's has come back, and is its turn on
 // that, not the first turn's.
 func TestAgentDelegateAsk(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	fakeClaude(t, dir)
 	writeServices(t, dir, map[string]string{
@@ -1735,6 +1749,7 @@ func TestAgentDelegateAsk(t *testing.T) {
 // each answers its asker when it ends. Bases that don't merge fail, and
 // leave nothing behind.
 func TestPipelineBuild(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("no git")
 	}
@@ -1761,14 +1776,14 @@ if [ -e "$FAKE/clash" ]; then basename "$PWD" > same.txt; fi
 echo done
 `
 	os.WriteFile(filepath.Join(bin, "claude"), []byte(claude), 0o700)
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("FAKE", fake)
-	t.Setenv("HOME", dir)
+	setEnv(t, dir, "PATH", bin+string(os.PathListSeparator)+getEnv(dir, "PATH"))
+	setEnv(t, dir, "FAKE", fake)
+	setEnv(t, dir, "HOME", dir)
 	for _, k := range []string{"GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"} {
-		t.Setenv(k, "t")
+		setEnv(t, dir, k, "t")
 	}
 	for _, k := range []string{"GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"} {
-		t.Setenv(k, "t@example.com")
+		setEnv(t, dir, k, "t@example.com")
 	}
 	writeServices(t, dir, map[string]string{"pipeline": string(src)})
 	start(t, dir)
@@ -1876,6 +1891,7 @@ echo done
 // to :lead/ask, asks lead something and gets lead's answer, and the run's
 // end comes back to lead as a turn, which says nothing to you.
 func TestPipelineLead(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("no git")
 	}
@@ -1893,7 +1909,7 @@ func TestPipelineLead(t *testing.T) {
 	claude := `#!/bin/sh
 case "$*" in
 *"acceptEdits"*)
-  cat >/dev/null; echo "$WHIFF_SESSION" > "$FAKE/dev-token"; printf '%s\n' "$@" > "$FAKE/dev-args"
+  cat >/dev/null; printf '%s\n' "$@" > "$FAKE/dev-args"; echo "$WHIFF_SESSION" > "$FAKE/dev-token"
   while [ ! -e "$FAKE/go" ]; do sleep 0.02; done
   echo x > x.txt; echo done; exit 0 ;;
 "-p --strict-mcp-config --tools "*) cat >/dev/null; echo "VERDICT: approve"; exit 0 ;;
@@ -1905,14 +1921,14 @@ case "$msg" in *"has ended"*|quiet) out=nothing ;; *) out="lead: $msg" ;; esac
 printf '{"type":"result","subtype":"success","is_error":false,"result":"%s","total_cost_usd":0.01}\n' "$(printf '%s' "$out" | sed 's/["\\]/\\&/g')"
 `
 	os.WriteFile(filepath.Join(bin, "claude"), []byte(claude), 0o700)
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("FAKE", fake)
-	t.Setenv("HOME", dir)
+	setEnv(t, dir, "PATH", bin+string(os.PathListSeparator)+getEnv(dir, "PATH"))
+	setEnv(t, dir, "FAKE", fake)
+	setEnv(t, dir, "HOME", dir)
 	for _, k := range []string{"GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"} {
-		t.Setenv(k, "t")
+		setEnv(t, dir, k, "t")
 	}
 	for _, k := range []string{"GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"} {
-		t.Setenv(k, "t@example.com")
+		setEnv(t, dir, k, "t@example.com")
 	}
 	writeServices(t, dir, map[string]string{
 		"pipeline": string(src),
@@ -2077,14 +2093,14 @@ esac
 printf '{"type":"result","subtype":"success","is_error":false,"result":"carried on","total_cost_usd":0.01}\n'
 `
 	os.WriteFile(filepath.Join(bin, "claude"), []byte(claude), 0o700)
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("FAKE", fake)
-	t.Setenv("HOME", dir)
+	setEnv(t, dir, "PATH", bin+string(os.PathListSeparator)+getEnv(dir, "PATH"))
+	setEnv(t, dir, "FAKE", fake)
+	setEnv(t, dir, "HOME", dir)
 	for _, k := range []string{"GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"} {
-		t.Setenv(k, "t")
+		setEnv(t, dir, k, "t")
 	}
 	for _, k := range []string{"GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"} {
-		t.Setenv(k, "t@example.com")
+		setEnv(t, dir, k, "t@example.com")
 	}
 	writeServices(t, dir, map[string]string{
 		"pipeline": string(src),
@@ -2138,6 +2154,7 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"carried 
 // so is the run begun for it, its dev killed; and lead is paused, so the
 // cancelled build's result waits for you rather than starting a turn.
 func TestAgentCancel(t *testing.T) {
+	t.Parallel()
 	eval, build, fake := leadBuilding(t)
 	got := eval(`(call :lead/cancel)`)
 	if !strings.HasPrefix(got, "(ok {:tasks ["+build+"] :turn ") || strings.Contains(got, ":turn :none") {
@@ -2168,6 +2185,7 @@ func TestAgentCancel(t *testing.T) {
 // build: it isn't run again on its own, and restarting it tells the new
 // turn why and that the build is still going, so it doesn't start another.
 func TestAgentRestartTasks(t *testing.T) {
+	t.Parallel()
 	eval, build, fake := leadBuilding(t)
 	os.WriteFile(filepath.Join(fake, "die"), nil, 0o600)
 	inbox := func() string {
@@ -2205,6 +2223,7 @@ func TestAgentRestartTasks(t *testing.T) {
 // it ran left for you, with an action that restarts it, telling the new
 // turn what the failed one was given.
 func TestAgentRestart(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	fakeClaude(t, dir)
 	writeServices(t, dir, map[string]string{"fixer": `(agent fixer :prompt "Fix.")`})
@@ -2253,6 +2272,7 @@ func TestAgentRestart(t *testing.T) {
 // pipeline build's :cost does: the agent spends it with the turn's own,
 // and once that is its day's budget, takes no more turns.
 func TestAgentChildCost(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	fakeClaude(t, dir)
 	writeServices(t, dir, map[string]string{
@@ -2317,6 +2337,7 @@ func TestAgentChildCost(t *testing.T) {
 // :limits :tasks: the one past it is refused at once, and once one ends
 // there is room for another.
 func TestAgentTaskLimit(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	fakeClaude(t, dir)
 	writeServices(t, dir, map[string]string{

@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -23,6 +24,7 @@ import (
 // the agent its result as a turn of its own, which tells you too.
 // History has the calls as the agent's, and its home the transcript.
 func TestHuffAgent(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	withHuff(t, dir)
 
@@ -66,7 +68,7 @@ func TestHuffAgent(t *testing.T) {
 		io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":`+string(text)+`},"finish_reason":"stop"}],"usage":{"prompt_tokens":80,"completion_tokens":12,"cost":0.002}}`)
 	}))
 	defer srv.Close()
-	t.Setenv("WHIFF_LOCAL_URL", srv.URL)
+	setEnv(t, dir, "WHIFF_LOCAL_URL", srv.URL)
 
 	writeServices(t, dir, map[string]string{
 		"scout": `(agent scout :prompt "Greet people." :model "local/fake" :can [:greet/hello :greet/save])`,
@@ -134,21 +136,42 @@ func TestHuffAgent(t *testing.T) {
 // withHuff builds huff into dir/bin, puts it on PATH and makes dir HOME.
 func withHuff(t *testing.T, dir string) {
 	t.Helper()
+	huff, err := builtHuff()
+	if err != nil {
+		t.Fatal(err)
+	}
 	bin := filepath.Join(dir, "bin")
 	os.Mkdir(bin, 0o700)
-	build := exec.Command("go", "build", "-o", filepath.Join(bin, "huff"), "github.com/synthlike/whiff/cmd/huff")
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("building huff: %v\n%s", err, out)
+	if err := os.Symlink(huff, filepath.Join(bin, "huff")); err != nil {
+		t.Fatal(err)
 	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("HOME", dir)
+	setEnv(t, dir, "PATH", bin+string(os.PathListSeparator)+getEnv(dir, "PATH"))
+	setEnv(t, dir, "HOME", dir)
 }
+
+// huffDir is where builtHuff built huff, which TestMain removes.
+var huffDir string
+
+// builtHuff builds huff once for the tests that run it.
+var builtHuff = sync.OnceValues(func() (string, error) {
+	dir, err := os.MkdirTemp("", "whiff-huff-")
+	if err != nil {
+		return "", err
+	}
+	huffDir = dir
+	path := filepath.Join(dir, "huff")
+	if out, err := exec.Command("go", "build", "-o", path, "github.com/synthlike/whiff/cmd/huff").CombinedOutput(); err != nil {
+		return "", fmt.Errorf("building huff: %v\n%s", err, out)
+	}
+	return path, nil
+})
 
 // TestHuffAgentStopped stops a huff turn while its model call is under
 // way: huff hears the job's SIGTERM, abandons the call and keeps the
 // transcript as far as it got, before the SIGKILL that would lose it, so
 // the next turn goes on from it, the stopped message and all.
 func TestHuffAgentStopped(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	withHuff(t, dir)
 	asked := make(chan struct{}, 1)
@@ -168,7 +191,7 @@ func TestHuffAgentStopped(t *testing.T) {
 		io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"Here."},"finish_reason":"stop"}],"usage":{"prompt_tokens":9,"completion_tokens":1,"cost":0.001}}`)
 	}))
 	defer srv.Close()
-	t.Setenv("WHIFF_LOCAL_URL", srv.URL)
+	setEnv(t, dir, "WHIFF_LOCAL_URL", srv.URL)
 	writeServices(t, dir, map[string]string{
 		"scout": `(agent scout :prompt "Greet people." :model "local/fake" :can [])`,
 	})

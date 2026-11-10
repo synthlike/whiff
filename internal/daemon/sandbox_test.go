@@ -27,6 +27,7 @@ import (
 // where there's a sandbox, the job runs in Linux, writes only its dir, and
 // a cancel ends its container; where there isn't, it fails to start.
 func TestSandboxJob(t *testing.T) {
+	oneContainerAtATime(t)
 	dir := tempDir(t)
 	writeServices(t, dir, map[string]string{})
 	start(t, dir)
@@ -102,6 +103,7 @@ func TestSandboxJob(t *testing.T) {
 // whiff died is ended at start, as its name, unlike a pid, can't be
 // another's; the job is then lost as one that runs no more.
 func TestSandboxStray(t *testing.T) {
+	oneContainerAtATime(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	c, err := sandbox.New(ctx, false)
@@ -157,6 +159,7 @@ func TestSandboxStray(t *testing.T) {
 // container does on any host, git works in the run's worktree for both,
 // and the run ends ready.
 func TestPipelineSandbox(t *testing.T) {
+	oneContainerAtATime(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	if _, err := exec.LookPath("git"); err != nil {
@@ -281,6 +284,7 @@ func TestPipelineSandbox(t *testing.T) {
 // The pipeline's git uses the worktree's real gitdir instead: the command
 // never runs, and the planted files are only the dev's work.
 func TestPipelineGitRedirect(t *testing.T) {
+	oneContainerAtATime(t)
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("no git")
 	}
@@ -374,4 +378,20 @@ func TestPipelineGitRedirect(t *testing.T) {
 	if err != nil || !strings.Contains(string(out), "evil/config") {
 		t.Errorf("whiff/1's commit = %s %v", out, err)
 	}
+}
+
+// oneContainerAtATime holds a lock on this machine for the rest of the
+// test, shared by every whiff package's tests that boot a container:
+// Apple's runtime fails to bootstrap two at once, and go test runs
+// packages side by side.
+func oneContainerAtATime(t *testing.T) {
+	t.Helper()
+	f, err := os.OpenFile(filepath.Join(os.TempDir(), "whiff-container-tests.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
 }

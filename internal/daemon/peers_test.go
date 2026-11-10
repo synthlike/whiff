@@ -30,7 +30,12 @@ func TestMain(m *testing.M) {
 		io.Copy(os.Stdout, nc)
 		os.Exit(0)
 	}
-	os.Exit(m.Run())
+	storeNoSync = true
+	code := m.Run()
+	if huffDir != "" {
+		os.RemoveAll(huffDir)
+	}
+	os.Exit(code)
 }
 
 // TestPeers adds peers and follows how each is connected: one reached by

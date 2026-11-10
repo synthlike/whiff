@@ -345,7 +345,14 @@ func (d *daemon) spawn(j *job, id int64) (*proc, error) {
 		}
 		p.runner, p.box = c, sandbox.Name("job")
 	}
-	cmd := p.runner.Command(p.ctx, p.box, j.opts.dir, j.argv())
+	argv := j.argv()
+	if !j.opts.sandbox && d.env != nil {
+		// On the daemon's own PATH, as puff.Command finds it.
+		if path, err := puff.LookPath(d.env, argv[0]); err == nil {
+			argv[0] = path
+		}
+	}
+	cmd := p.runner.Command(p.ctx, p.box, j.opts.dir, argv)
 	var stdout, stderr io.Writer = &p.stdout, &p.stderr
 	if j.opts.file {
 		if err := p.openOutput(d.outputDir(id)); err != nil {
@@ -371,8 +378,15 @@ func (d *daemon) spawn(j *job, id int64) (*proc, error) {
 	}
 	// A session job's client, whiff mcp or huff, claims its session with
 	// the token, from the daemon in WHIFF_DIR.
+	if d.env != nil {
+		cmd.Env = d.env
+	}
 	if j.opts.token != "" {
-		cmd.Env = append(os.Environ(), "WHIFF_SESSION="+j.opts.token, "WHIFF_DIR="+d.dir)
+		env := d.env
+		if env == nil {
+			env = os.Environ()
+		}
+		cmd.Env = append(slices.Clip(env), "WHIFF_SESSION="+j.opts.token, "WHIFF_DIR="+d.dir)
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {

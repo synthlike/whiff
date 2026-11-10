@@ -51,6 +51,11 @@ var tasksBucket = []byte("tasks")
 // resultKept is how long a task's result is kept after it ended.
 const resultKept = 30 * 24 * time.Hour
 
+// storeNoSync, for tests alone, which TestMain sets before any runs, has
+// whiff.db skip fsync: its daemons never outlive the process, and every
+// commit's fsync, on macOS a full flush, held them all up.
+var storeNoSync bool
+
 // openStore opens whiff.db, next to the services directory (so
 // ~/.whiff/whiff.db), with its buckets. Only the daemon opens it. It
 // deletes history older than historyKept, and :output :file jobs' output
@@ -61,7 +66,7 @@ func openStore(services string) (*bbolt.DB, error) {
 		return nil, err
 	}
 	path := filepath.Join(dir, "whiff.db")
-	db, err := bbolt.Open(path, 0o600, &bbolt.Options{Timeout: storeTimeout})
+	db, err := bbolt.Open(path, 0o600, &bbolt.Options{Timeout: storeTimeout, NoSync: storeNoSync})
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +144,7 @@ func compactStore(db *bbolt.DB) (*bbolt.DB, error) {
 		os.Remove(tmp)
 		fmt.Fprintf(os.Stderr, "whiff: whiff.db wasn't compacted: %v\n", err)
 	}
-	return bbolt.Open(path, 0o600, &bbolt.Options{Timeout: storeTimeout})
+	return bbolt.Open(path, 0o600, &bbolt.Options{Timeout: storeTimeout, NoSync: storeNoSync})
 }
 
 // storedState is name's committed state, printed, if it has one.

@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -63,6 +64,7 @@ func TestImage(t *testing.T) {
 // TestImageRuns runs the built image where there is one: the toolchain a
 // sandboxed command gets.
 func TestImageRuns(t *testing.T) {
+	oneContainerAtATime(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	b, err := Find(runtime.GOOS, exec.LookPath)
@@ -101,6 +103,7 @@ func TestArgs(t *testing.T) {
 // TestContainer runs commands in a sandbox where there is one: what they
 // can't reach, and that a cancel ends them and their container.
 func TestContainer(t *testing.T) {
+	oneContainerAtATime(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	c, err := New(ctx, false)
@@ -230,6 +233,7 @@ func TestGitDirs(t *testing.T) {
 // sandbox: it reads, as a pipeline's dev and check do, and can't write
 // the repository's .git.
 func TestContainerGit(t *testing.T) {
+	oneContainerAtATime(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	c, err := New(ctx, false)
@@ -256,4 +260,20 @@ func TestContainerGit(t *testing.T) {
 	if _, err := os.Stat(hook); err == nil {
 		t.Error("a sandboxed command left a hook in the repository")
 	}
+}
+
+// oneContainerAtATime holds a lock on this machine for the rest of the
+// test, shared by every whiff package's tests that boot a container:
+// Apple's runtime fails to bootstrap two at once, and go test runs
+// packages side by side.
+func oneContainerAtATime(t *testing.T) {
+	t.Helper()
+	f, err := os.OpenFile(filepath.Join(os.TempDir(), "whiff-container-tests.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
 }

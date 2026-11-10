@@ -6,9 +6,12 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/synthlike/whiff/internal/puff"
 	"github.com/synthlike/whiff/internal/rpc"
 )
 
@@ -29,8 +32,17 @@ func start(t testing.TB, dir string) <-chan error {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	stopped := make(chan struct{})
+	env := environFor(dir)
 	go func() {
-		done <- Run(ctx, dir, filepath.Join(dir, "services"))
+		// A child another test's daemon has forked, and not yet exec'd,
+		// holds a copy of every descriptor, this daemon's lock too, for a
+		// moment: a restart may find it held.
+		err := run(ctx, dir, filepath.Join(dir, "services"), env)
+		for deadline := time.Now().Add(2 * time.Second); errors.Is(err, ErrRunning) && time.Now().Before(deadline); {
+			time.Sleep(10 * time.Millisecond)
+			err = run(ctx, dir, filepath.Join(dir, "services"), env)
+		}
+		done <- err
 		close(stopped)
 	}()
 	t.Cleanup(func() {
@@ -38,6 +50,36 @@ func start(t testing.TB, dir string) <-chan error {
 		<-stopped
 	})
 	return done
+}
+
+// testEnvs are the variables setEnv set, by daemon dir.
+var testEnvs sync.Map
+
+// setEnv sets k to v for the daemon start runs on dir, as t.Setenv would
+// for the process, so the test can still run in parallel: call it before
+// start. The daemon's jobs, proc/run, env/get and os/home see it.
+func setEnv(t testing.TB, dir, k, v string) {
+	t.Helper()
+	old, _ := testEnvs.Load(dir)
+	vars, _ := old.([]string)
+	testEnvs.Store(dir, append(slices.Clip(vars), k+"="+v))
+	t.Cleanup(func() { testEnvs.Delete(dir) })
+}
+
+// getEnv is k for the daemon on dir: what setEnv set, or the process's.
+func getEnv(dir, k string) string {
+	v, _ := puff.Getenv(environFor(dir), k)
+	return v
+}
+
+// environFor is the environment of the daemon on dir: the process's with
+// what setEnv set on top; nil, the process's own, if it set nothing.
+func environFor(dir string) []string {
+	vars, ok := testEnvs.Load(dir)
+	if !ok {
+		return nil
+	}
+	return append(os.Environ(), vars.([]string)...)
 }
 
 // set sets *v to x for the test and restores it once the test's daemons

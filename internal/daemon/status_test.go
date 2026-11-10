@@ -15,6 +15,7 @@ import (
 // and checks the order whiff services shows them in: what needs you
 // first, what runs next, then the rest, each by name.
 func TestServiceList(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	fakeClaude(t, dir)
 	writeServices(t, dir, map[string]string{
@@ -105,7 +106,8 @@ func TestServiceList(t *testing.T) {
 // answer or review, which need you; a child's task, or a turn running
 // again, which don't; and a report, which waits for nothing.
 func TestAgentWaits(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Parallel()
+	home := t.TempDir()
 	now := time.Now()
 	ask := func(id int64, from, addr, fn string, held bool) *asked {
 		a := &asked{ticket: ticket{id: id, from: from}, addr: addr, fn: fn, at: now.Add(-4 * time.Minute)}
@@ -136,7 +138,7 @@ func TestAgentWaits(t *testing.T) {
 		{"another's", []*asked{ask(1, "agent/digest", "pipeline", "run", false), ask(2, "digest", "me", "ask", false)}, nil, `idle ""`},
 	}
 	for _, c := range cases {
-		st := &state{addrs: map[string]*service{"lead": {name: "lead", agent: true}}, asked: c.asked,
+		st := &state{home: home, addrs: map[string]*service{"lead": {name: "lead", agent: true}}, asked: c.asked,
 			jobs: map[int64]*job{}, health: map[string]*health{}}
 		for i, j := range c.jobs {
 			st.jobs[int64(i)] = j

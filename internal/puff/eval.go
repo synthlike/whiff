@@ -72,6 +72,9 @@ type Env struct {
 	// Dir is where relative paths, os/cwd and proc/run start; "" is the
 	// process's working directory.
 	Dir string
+	// Environ is the environment env/get, os/home and proc/run see, as
+	// os.Environ gives it; nil is the process's.
+	Environ []string
 	// Hints are words for an unknown name's error, by name: why it isn't
 	// here, for a function another host has, as whiff's are in puff.
 	Hints   map[string]string

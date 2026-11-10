@@ -166,6 +166,7 @@ type state struct {
 	owed       []answered      // results for services that aren't loaded, until they are
 	cut        []ticket        // what load read, until resume takes it up: accepted as whiff went
 	jobs       map[int64]*job
+	home       string                      // the daemon's home directory, where agents keep their files
 	nextID     int64                       // the last id given to a message answered later, or a job
 	idsTo      int64                       // the last id stored as reserved: newID gives up to it without the disk
 	lastMsg    int64                       // the last id given to a message or an eval in history: see msgID
@@ -210,7 +211,7 @@ type watcher struct {
 func (d *daemon) route() {
 	kick, final := make(chan struct{}, 1), make(chan batch, 1)
 	d.wg.Go(func() { d.writeHistory(kick, final) })
-	st := &state{db: d.db, log: d.log, kick: kick, addrs: map[string]*service{}, jobs: map[int64]*job{}, waiters: map[int64][]chan puff.Value{}, peers: map[string]*peer{}, keyed: map[string]chan struct{}{}, checking: map[int64]bool{}, checkAgain: map[int64]bool{},
+	st := &state{db: d.db, log: d.log, home: d.home(), kick: kick, addrs: map[string]*service{}, jobs: map[int64]*job{}, waiters: map[int64][]chan puff.Value{}, peers: map[string]*peer{}, keyed: map[string]chan struct{}{}, checking: map[int64]bool{}, checkAgain: map[int64]bool{},
 		subs: map[*watcher]bool{}, tracers: map[*tracer]bool{}, modes: map[string]*mode{}, grants: map[string]grant{}, health: map[string]*health{}}
 	defer func() {
 		// Where each peer's history is up to: followFar can't store it

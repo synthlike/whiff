@@ -35,14 +35,19 @@ var defaultCallTimeout = 5 * time.Second
 // belongs to the route goroutine, starting and stopping services to the
 // supervisor's, and each service's state to its own goroutine.
 type daemon struct {
-	ctx         context.Context
-	ops         chan func(st *state)
-	restarts    chan *service // services that faulted, for the supervisor
-	resets      chan reset    // whiff reset, for the supervisor
-	db          *bbolt.DB     // whiff.db: see store.go
-	log         io.Writer     // notes, and what services print
-	services    string        // the services directory
-	dir         string        // the socket's directory, which a session job's client dials: WHIFF_DIR
+	ctx      context.Context
+	ops      chan func(st *state)
+	restarts chan *service // services that faulted, for the supervisor
+	resets   chan reset    // whiff reset, for the supervisor
+	db       *bbolt.DB     // whiff.db: see store.go
+	log      io.Writer     // notes, and what services print
+	services string        // the services directory
+	dir      string        // the socket's directory, which a session job's client dials: WHIFF_DIR
+	// env is the environment its jobs, proc/run, env/get and os/home see,
+	// and the home its agents keep their files in; nil is the process's.
+	// A test's daemon has its own, so tests with fake programs on their
+	// PATH run side by side.
+	env         []string
 	callTimeout time.Duration
 	base        *puff.Env    // only looked up in, for builtins' marks
 	tries       atomic.Int64 // the last whiff try's number, for its scratch address
@@ -55,6 +60,11 @@ type daemon struct {
 // ends, with the services in services and their state in whiff.db next to
 // it. A lock file in dir keeps it to one daemon per directory.
 func Run(ctx context.Context, dir, services string) error {
+	return run(ctx, dir, services, nil)
+}
+
+// run is Run in the environment env: see daemon.env.
+func run(ctx context.Context, dir, services string, env []string) error {
 	if err := rpc.PrepareDir(dir); err != nil {
 		return err
 	}
@@ -98,9 +108,16 @@ func Run(ctx context.Context, dir, services string) error {
 		lock.Close()
 		close(closing)
 	}()
+	// Not before the lock is released: Accept fails as the listener
+	// closes, and the next daemon, started as Run returns, would find the
+	// lock still held.
+	defer func() {
+		stop()
+		<-closing
+	}()
 
 	d := &daemon{ctx: ctx, ops: make(chan func(*state)), restarts: make(chan *service, 16),
-		resets: make(chan reset), db: db, log: os.Stderr, services: services, dir: dir, callTimeout: defaultCallTimeout}
+		resets: make(chan reset), db: db, log: os.Stderr, services: services, dir: dir, callTimeout: defaultCallTimeout, env: env}
 	d.base = d.newEnv(io.Discard, &caller{})
 	d.timers.Store(time.Now().UnixNano())
 	err = db.View(func(tx *bbolt.Tx) error {
@@ -148,6 +165,7 @@ func Run(ctx context.Context, dir, services string) error {
 func (d *daemon) newEnv(stdout io.Writer, cur *caller) *puff.Env {
 	env := puff.NewEnv()
 	env.Stdout = stdout
+	env.Environ = d.env
 	if err := env.Register(d.builtins(cur)...); err != nil {
 		panic(err)
 	}
@@ -602,6 +620,12 @@ func (d *daemon) evalIn(ctx context.Context, env *puff.Env, cur *caller, out *st
 // ownAddrs are whiff's own addresses, its built-in services': startup
 // refuses a built-in that isn't here, so a new one can't be left out.
 var ownAddrs = []string{"jobs", "me", "review", "tasks", "timers", "peers"}
+
+// home is the home directory in d's environment.
+func (d *daemon) home() string {
+	home, _ := puff.Home(d.env)
+	return home
+}
 
 // own says whether name is one of whiff's own addresses, which no service
 // file or client may take.
