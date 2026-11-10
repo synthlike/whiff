@@ -326,6 +326,24 @@ inference missed; a publish to a topic with `:write` subscribers is held too.
 Asks and `whiff/done`s aren't gated: a person answers an ask anyway, and a
 `whiff/done` tells of something already started.
 
+The gate as one table, which `TestGateTable` checks row by row
+(a peer's rows are `TestFar`'s):
+
+| Who sends | To | Gate |
+| --- | --- | --- |
+| you, or a chain you began, until an agent's answer joins it | anything | through |
+| an agent | a `:read` function, or an ask | through |
+| an agent | a `:write` function, or a service that reaches one | held |
+| a connection holding `:agent/*`, whatever its requests say | a `:write` | held |
+| a session trusted for the target's service | a `:write` there | through |
+| a session trusted for another service | a `:write` here | held |
+| a free session | anything | through |
+| a service, on a job's result with `:origin :agent` | a `:write` | held |
+| a service, on a plain job's result | a `:write` | through |
+| an agent's eval | reaching a `:write` | held, as a whole |
+| an agent's eval | only reads | through |
+| a service, on a task an agent answered on a peer | a `:write` | held |
+
 Rules that keep the gate honest:
 
 - Marks are inferred, with explicit `:read` overrides listed by
