@@ -648,7 +648,9 @@ broken over lines to fit, as `whiff state` is.
   with `:retry n` runs again instead, under its id, up to n times, after a
   timeout, a stop or a crash, but only if it is `:read` or says
   `:idempotent #t`, and never while its process group may still run, nor
-  after you cancel it. Its record lists each attempt.
+  after you cancel it. It waits 1s before its second attempt, twice as
+  long before each after, up to a minute, so a failure that passes can;
+  a cancel meanwhile ends it. Its record lists each attempt.
 - A `send-after` survives a restart with its origin, so an agent's still meets
   the review gate, and one that came due while whiff was down fires once when
   the services are back. A service's timers to itself go with the version

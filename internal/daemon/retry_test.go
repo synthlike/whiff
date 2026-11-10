@@ -58,7 +58,7 @@ func TestRetries(t *testing.T) {
 	if r := wait(id); r != ok || attempts(f) != 2 {
 		t.Errorf("job %s = %s after %d attempts, want %s after 2", id, r, attempts(f), ok)
 	}
-	historyHas(t, c, "job "+id+": job "+id+" took longer than 200ms; attempt 2 of 3")
+	historyHas(t, c, "job "+id+": job "+id+" took longer than 200ms; attempt 2 of 3 in 1s")
 
 	// A write that doesn't say it's idempotent runs once.
 	f = filepath.Join(dir, "b")
@@ -154,5 +154,45 @@ func TestRetries(t *testing.T) {
 		if got := process(id); got != "(ok (none))" {
 			t.Errorf("job %s's process = %s, want (ok (none))", id, got)
 		}
+	}
+}
+
+// Each attempt again waits twice as long as the last, up to a minute.
+func TestBackoff(t *testing.T) {
+	t.Parallel()
+	for n, want := range map[int]time.Duration{1: time.Second, 2: 2 * time.Second, 3: 4 * time.Second, 6: 32 * time.Second, 7: time.Minute, 40: time.Minute} {
+		if got := backoff(n); got != want {
+			t.Errorf("backoff(%d) = %v, want %v", n, got, want)
+		}
+	}
+}
+
+// A job cancelled while it waits to run again ends then, with its one
+// attempt recorded as ended.
+func TestCancelBetweenAttempts(t *testing.T) {
+	t.Parallel()
+	dir := tempDir(t)
+	writeServices(t, dir, nil)
+	start(t, dir)
+	c := dial(t, dir)
+	r, err := c.Message("call", "jobs/run", `[["sleep" "30"] {:timeout 100ms :retry 1 :idempotent #t}]`, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := pendingOf(t, r.Value)
+	historyHas(t, c, "job "+id+": job "+id+" took longer than 100ms; attempt 2 of 2 in 1s")
+	began := time.Now()
+	if r, err := c.Eval("(call :jobs/cancel "+id+")", dir); err != nil || r.Value != "(ok :done)" {
+		t.Fatalf("cancel = %+v %v", r, err)
+	}
+	r, err = c.Message("wait", "", "["+id+"]", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "job " + id + " was cancelled before attempt 2"; !strings.Contains(r.Value, want) {
+		t.Errorf("job %s = %s, want it to say %q", id, r.Value, want)
+	}
+	if took := time.Since(began); took > 900*time.Millisecond {
+		t.Errorf("it ended %v after the cancel, as if it waited out its backoff", took)
 	}
 }

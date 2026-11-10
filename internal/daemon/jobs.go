@@ -104,7 +104,7 @@ func (d *daemon) jobsService() *service {
 	return &service{name: "jobs", d: d, cur: caller{addr: "jobs"},
 		fns: map[string]handler{
 			"run": {params: []string{"cmd", "opts"}, optional: 1, mark: puff.MarkWrite, marked: true, native: d.runJob, cmd: true,
-				doc: "Run cmd, [program args...], here; pending now, {:exit :stdout :stderr} when done. Options: :timeout (1h), or :none for a server; :stdin, a string; :dir, where it runs; :as :text answers (ok stdout), or (err {:kind :exit}) unless it exits 0; :origin :agent, for a job whose output a model writes, answers as :agent's; :retry n runs it again, up to n times, under its id, if a timeout or whiff stopped it, or whiff died while it ran, and only if it is :read or :idempotent #t says running it twice is safe; :output :file keeps all it prints, not only the last 64KiB, in stdout and stderr files under ~/.whiff/jobs/<id>/, which its result names as :output; :stream #t publishes each line it prints on :jobs/<id> as it comes, and its result's :stdout is the last line, as claude -p --output-format stream-json's result, and tasks/watch shows them; :session [:addr/fn ...], from a service: the job's whiff mcp acts as an agent session, :agent/<service> for an agent's turn or a new :agent/<n>, reaching only those functions, gated as any agent's; :sandbox #t runs it in a container that sees only its :dir, without the network, or with it as :sandbox {:net #t}, and it fails to start where there's no sandbox (whiff sandbox check). :read for a read-only command, as whiff ls lists them."},
+				doc: "Run cmd, [program args...], here; pending now, {:exit :stdout :stderr} when done. Options: :timeout (1h), or :none for a server; :stdin, a string; :dir, where it runs; :as :text answers (ok stdout), or (err {:kind :exit}) unless it exits 0; :origin :agent, for a job whose output a model writes, answers as :agent's; :retry n runs it again, up to n times, under its id, if a timeout or whiff stopped it, or whiff died while it ran, and only if it is :read or :idempotent #t says running it twice is safe, after 1s, then twice as long each time, up to a minute; :output :file keeps all it prints, not only the last 64KiB, in stdout and stderr files under ~/.whiff/jobs/<id>/, which its result names as :output; :stream #t publishes each line it prints on :jobs/<id> as it comes, and its result's :stdout is the last line, as claude -p --output-format stream-json's result, and tasks/watch shows them; :session [:addr/fn ...], from a service: the job's whiff mcp acts as an agent session, :agent/<service> for an agent's turn or a new :agent/<n>, reaching only those functions, gated as any agent's; :sandbox #t runs it in a container that sees only its :dir, without the network, or with it as :sandbox {:net #t}, and it fails to start where there's no sandbox (whiff sandbox check). :read for a read-only command, as whiff ls lists them."},
 			"list": {mark: puff.MarkRead, marked: true, native: d.listJobs,
 				doc: "The running jobs, each {:id :cmd :cwd :from}, and :container if it is sandboxed."},
 			"cancel": {params: []string{"id"}, mark: puff.MarkWrite, marked: true, native: d.cancelJob,
@@ -554,6 +554,25 @@ func (d *daemon) await(j *job, p *proc) {
 			return
 		}
 		var next *proc
+		ended, wait := time.Now(), backoff(len(j.attempts))
+		if d.ctx.Err() == nil {
+			d.note("job %d: %s; attempt %d of %d in %v", j.id, errMessage(r), len(j.attempts)+1, j.opts.retry+1, wait)
+		}
+		// A transient failure may need waiting out. Cancelled meanwhile, it
+		// ends so; whiff stopping leaves it stored, for the next daemon to
+		// run again, as one it stopped running.
+		select {
+		case <-time.After(wait):
+		case <-j.ctx.Done():
+			if d.ctx.Err() == nil {
+				d.do(func(*state) {
+					j.ended("stopped")
+					j.attempts[len(j.attempts)-1].ended = ended
+				})
+				d.end(j, failed("cancelled", "stopped", "job %d was cancelled before attempt %d", j.id, len(j.attempts)+1))
+				return
+			}
+		}
 		if d.ctx.Err() == nil {
 			var err error
 			if next, err = d.spawn(j, j.id); err != nil {
@@ -564,6 +583,7 @@ func (d *daemon) await(j *job, p *proc) {
 		}
 		step := func() {
 			j.ended("stopped")
+			j.attempts[len(j.attempts)-1].ended = ended // before the wait
 			if next != nil {
 				j.began(next)
 			}
@@ -572,12 +592,7 @@ func (d *daemon) await(j *job, p *proc) {
 			}
 		}
 		// Stopping, the route goroutine may have gone, and j with it.
-		if !d.do(func(st *state) {
-			step()
-			if next != nil {
-				st.note(fmt.Sprintf("job %d: %s; attempt %d of %d", j.id, errMessage(r), len(j.attempts), j.opts.retry+1))
-			}
-		}) {
+		if !d.do(func(st *state) { step() }) {
 			step()
 		}
 		if next == nil {
@@ -585,6 +600,22 @@ func (d *daemon) await(j *job, p *proc) {
 		}
 		p = next
 	}
+}
+
+// retryBackoff is how long a job waits before its first attempt again;
+// each after it waits twice as long as the last, up to retryBackoffMost.
+var (
+	retryBackoff     = time.Second
+	retryBackoffMost = time.Minute
+)
+
+// backoff is how long j waits before its next attempt, having made n.
+func backoff(n int) time.Duration {
+	d := retryBackoff
+	for i := 1; i < n && d < retryBackoffMost; i++ {
+		d *= 2
+	}
+	return min(d, retryBackoffMost)
 }
 
 // errMessage is the :message of r, an (err e).
