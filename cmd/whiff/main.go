@@ -45,7 +45,8 @@ const usage = `usage:
   whiff pending                          list agents' messages that wait for your review, here and on each peer, as 12@vps
   whiff accept <id>                      deliver a message that waits for review, and print its value; 12@vps on a peer
   whiff reject <id> <reason>             answer a message that waits for review with (err {:kind :rejected})
-  whiff trust <agent/n> <service>...     let an agent session's messages to the services through, as if you accepted them
+  whiff trust <agent/n> <service>...     let an agent session's messages to the services, or functions
+                                         as board/build, through, as if you accepted them
   whiff free <agent/n>                   let everything an agent session sends, publishes and evaluates through
   whiff gate <agent/n>                   hold an agent session's :write messages for review again, as by default
   whiff session <agent/n>                what an agent session wrote, and how: held, accepted, trusted or free
@@ -77,8 +78,11 @@ const usage = `usage:
   whiff stop                             stop the daemon
   whiff daemon                           run the daemon in the foreground
 
-trust and free take --for <d>, as --for 2h, to end the mode after that long;
-else it lasts until the session ends.
+trust and free take --for <d>, as --for 2h or 3d, to end the mode after that
+long, and --most <n> to end it after n writes it let through; else it lasts
+until the session ends. Either way, its end tells you, in your inbox. An agent
+on a peer is agent/lead@vps: the peer keeps to its mode.
+  whiff trust agent/lead board/plan board/build --most 20 --for 3d
 
 Each arg of call, send, pub, try and reply is read as a puff value, or taken as
 a string if it doesn't read as one: 12 is 12, ann is "ann", '"12"' is "12".
@@ -453,20 +457,26 @@ func result(op string, resp rpc.Response, stdout, stderr io.Writer) int {
 
 // setMode sets agent's mode: trust (with services), free or gate, which
 // takes no args. --for 2h, before or among the services, ends it after
-// that long.
+// that long, and --most 20 after that many writes. agent@peer is a peer's.
 func setMode(dir, op, agent string, args []string, stdout, stderr io.Writer) int {
 	var services []string
 	var d time.Duration
+	most := 0
 	for i := 0; i < len(args); i++ {
-		if args[i] != "--for" {
+		if args[i] != "--for" && args[i] != "--most" {
 			services = append(services, args[i])
 			continue
 		}
-		var err error
-		if i+1 < len(args) {
-			d, err = time.ParseDuration(args[i+1])
+		ok := i+1 < len(args) && op != "gate"
+		if ok && args[i] == "--for" {
+			v, err := puff.ReadValue(args[i+1])
+			dur, isDur := v.(puff.Duration)
+			d, ok = time.Duration(dur), err == nil && isDur && dur > 0
+		} else if ok {
+			n, err := strconv.Atoi(args[i+1])
+			most, ok = n, err == nil && n > 0
 		}
-		if i+1 == len(args) || err != nil || d <= 0 || op == "gate" {
+		if !ok {
 			fmt.Fprint(stderr, usage)
 			return 2
 		}
@@ -482,27 +492,39 @@ func setMode(dir, op, agent string, args []string, stdout, stderr io.Writer) int
 		return 1
 	}
 	defer c.Close()
-	resp, err := c.Mode(strings.TrimPrefix(agent, ":"), mode, services, d)
+	addr, peer := strings.TrimPrefix(agent, ":"), ""
+	if at := strings.LastIndexByte(addr, '@'); at > 0 {
+		addr, peer = addr[:at], addr[at+1:]
+	}
+	req := rpc.ModeRequest(addr, mode, services, d, most)
+	req.Peer = peer
+	resp, err := c.Forward(req)
+	if err == nil && resp.Error != "" {
+		err = errors.New(resp.Error)
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "whiff: %v\n", err)
 		return 1
 	}
 	code := result(op, resp, stdout, stderr)
 	if code == 0 {
-		fmt.Fprintln(stdout, modeLine(agent, mode, services, d))
+		fmt.Fprintln(stdout, modeLine(agent, mode, services, d, most))
 	}
 	return code
 }
 
 // modeLine says what setting a mode did: agent/3 is trusted :gh :todo,
 // for 2h0m0s.
-func modeLine(agent, mode string, services []string, d time.Duration) string {
+func modeLine(agent, mode string, services []string, d time.Duration, most int) string {
 	s := strings.TrimPrefix(agent, ":") + " is " + mode
 	for _, name := range services {
 		s += " :" + strings.TrimPrefix(name, ":")
 	}
+	if most > 0 {
+		s += fmt.Sprintf(", for %d writes", most)
+	}
 	if d > 0 {
-		s += fmt.Sprintf(", for %v", d)
+		s += ", for " + puff.Print(puff.Duration(d))
 	}
 	return s
 }

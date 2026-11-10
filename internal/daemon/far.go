@@ -153,16 +153,16 @@ func (d *daemon) forward(st *state, addr string, m message) puff.Value {
 	return nil
 }
 
-// atPeer sends req, an inbox, reply, accept, reject or cancel-task for
-// its peer, there, as this whiff's client, in req's origin, so the peer
+// atPeer sends req, an inbox, reply, accept, reject, cancel-task or mode
+// for its peer, there, as this whiff's client, in req's origin, so the peer
 // decides as it would on one of its own clients': an agent can't accept
 // there either. Once: they have no key, and one sent again says the
 // message has gone.
 func (d *daemon) atPeer(req rpc.Request) rpc.Response {
 	switch req.Op {
-	case "inbox", "reply", "accept", "reject", "cancel-task":
+	case "inbox", "reply", "accept", "reject", "cancel-task", "mode":
 	default:
-		return rpc.Response{Error: fmt.Sprintf("%s isn't for a peer: of these, only inbox, reply, accept, reject and cancel", req.Op)}
+		return rpc.Response{Error: fmt.Sprintf("%s isn't for a peer: of these, only inbox, reply, accept, reject, cancel and mode", req.Op)}
 	}
 	name := req.Peer
 	req.Peer = ""

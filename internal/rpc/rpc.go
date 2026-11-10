@@ -26,9 +26,10 @@ import (
 // Version is the protocol version. Bump it when a message changes, or a
 // function clients evaluate is renamed (21: a submission key, which an
 // older daemon would ignore and run a message twice; 22: result, which a
-// peer asks a far task's by); hello and stop must stay readable by every version, so an old
+// peer asks a far task's by; 23: a mode's :most, which an older daemon
+// would ignore and trust without bound); hello and stop must stay readable by every version, so an old
 // daemon can be stopped.
-const Version = 22
+const Version = 23
 
 // Request is a client's message to the daemon. The daemon answers each with
 // a Response, in order, except an answer or a cancel, which have none.
@@ -65,7 +66,7 @@ type Request struct {
 	// begins after, as a peer last saw it: its At and ID.
 	After   time.Time `json:"after,omitzero"`
 	AfterID int64     `json:"after_id,omitempty"`
-	// Peer is, for inbox, reply, accept, reject and cancel-task, the peer
+	// Peer is, for inbox, reply, accept, reject, cancel-task and mode, the peer
 	// it is for: the daemon sends it there, as its client.
 	Peer string `json:"peer,omitempty"`
 }
@@ -658,6 +659,15 @@ func (c *Client) Test(file, src, dir string) (Response, error) {
 // or "free"; for, if not 0, ends it after that long. The Response's Value
 // is (ok :done), or (err {:kind :no-address}).
 func (c *Client) Mode(addr, mode string, services []string, d time.Duration) (Response, error) {
+	var resp Response
+	err := c.roundTrip(ModeRequest(addr, mode, services, d, 0), &resp)
+	return resp, err
+}
+
+// ModeRequest is the request Mode sends, which most, if not 0, also ends
+// after that many writes let through; services may name functions too,
+// as board/build. Forward it with Peer set to set a peer's agent's mode.
+func ModeRequest(addr, mode string, services []string, d time.Duration, most int) Request {
 	args := "{:mode :" + mode
 	if len(services) > 0 {
 		keys := make([]string, len(services))
@@ -669,9 +679,10 @@ func (c *Client) Mode(addr, mode string, services []string, d time.Duration) (Re
 	if d > 0 {
 		args += fmt.Sprintf(" :for %ds", int64(d/time.Second))
 	}
-	var resp Response
-	err := c.roundTrip(Request{Op: "mode", Target: addr, Args: args + "}"}, &resp)
-	return resp, err
+	if most > 0 {
+		args += fmt.Sprintf(" :most %d", most)
+	}
+	return Request{Op: "mode", Target: addr, Args: args + "}"}
 }
 
 // History is the daemon's history, oldest first.

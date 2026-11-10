@@ -385,7 +385,10 @@ whiff peer ls
   `:write` function waits in `whiff pending` until you accept it, on the
   VPS too; whiff infers which functions write, so there's nothing to
   label by hand. The pipeline's own steps run as yours: their changes stay
-  on a branch until you push or merge them.
+  on a branch until you push or merge them. For overnight work, approve
+  a bounded grant once, from your laptop: `whiff trust
+  agent/lead@vps board/plan board/build --most 20 --for 3d`; the VPS
+  enforces it and your inbox says when it ran out.
 - **Secrets stay out of files you share.** The host file names commands
   that print them; waft reads them as it applies and writes them to a
   0600 file on the host. A turn whose daemon dies stops at once, rather

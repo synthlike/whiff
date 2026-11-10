@@ -176,6 +176,19 @@ within its capabilities. `gate` restores individual review. A timed mode
 expires automatically; an untimed resident agent's mode lasts across
 turns and daemon restarts until changed or its file is removed.
 
+For work you won't watch, approve it once, within bounds:
+
+```sh
+whiff trust agent/lead board/plan board/build --most 20 --for 3d
+whiff trust agent/lead@vps board/plan board/build --most 20 --for 3d   # an agent on a peer
+```
+
+It trusts only those functions, for 20 writes or 3 days, whichever ends
+first; then the session is gated again and your inbox says so. `whiff ls`
+shows how many writes are left, and `whiff session agent/lead` what it
+did under it. Spending stays bounded by the agent's `:limits` and its
+team's `:day`.
+
 Origins follow message chains: a service doing work for an agent doesn't
 turn that work into your own. Accepting a held message permits the work
 it causes. History records whether a write was held, accepted, trusted

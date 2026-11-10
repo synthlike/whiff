@@ -175,6 +175,7 @@ type state struct {
 	tracers    map[*tracer]bool            // clients following history: whiff history -f
 	modes      map[string]*mode            // agent sessions that aren't gated, by address
 	grants     map[string]grant            // agent turns' session tokens: see grant
+	tellMe     func(text string)           // tells you text, in your inbox, from :review; nil in a test's state
 	health     map[string]*health          // by service file's name: see whiff services
 	peers      map[string]*peer            // other machines' whiffs, by name: see peers.go
 	keyed      map[string]chan struct{}    // submission keys whose message is running, closed as it ends: see once
@@ -213,6 +214,9 @@ func (d *daemon) route() {
 	d.wg.Go(func() { d.writeHistory(kick, final) })
 	st := &state{db: d.db, log: d.log, home: d.home(), kick: kick, addrs: map[string]*service{}, jobs: map[int64]*job{}, waiters: map[int64][]chan puff.Value{}, peers: map[string]*peer{}, keyed: map[string]chan struct{}{}, checking: map[int64]bool{}, checkAgain: map[int64]bool{},
 		subs: map[*watcher]bool{}, tracers: map[*tracer]bool{}, modes: map[string]*mode{}, grants: map[string]grant{}, health: map[string]*health{}}
+	st.tellMe = func(text string) {
+		d.put(st, "me", message{from: "review", fn: "tell", args: puff.Print(puff.NewVector(puff.String(text)))})
+	}
 	defer func() {
 		// Where each peer's history is up to: followFar can't store it
 		// once whiff stops.
@@ -273,10 +277,11 @@ func (d *daemon) put(st *state, addr string, m message) puff.Value {
 	}
 	var res puff.Value
 	// An agent session's mode may let its message through, as accepted.
-	if !m.user && !m.reviewed && st.lets(m.from, addr) {
+	if !m.user && !m.reviewed && st.lets(m.from, addr, m.fn) {
 		m.reviewed = true
 		if s := st.addrs[addr]; s != nil && m.topic == "" && d.markerOn(st).msgMark(s, m) == puff.MarkWrite {
 			m.gate = st.modeOf(m.from).name()
+			st.wrote(m.from)
 		}
 	}
 	if _, _, ok := farAddr(addr); ok {
@@ -416,7 +421,7 @@ func (d *daemon) readOnly(ctx context.Context, addr string, m message) error {
 		return nil
 	}
 	var lets bool
-	d.do(func(st *state) { lets = !m.user && st.lets(m.from, addr) })
+	d.do(func(st *state) { lets = !m.user && st.lets(m.from, addr, m.fn) })
 	if lets {
 		return nil
 	}

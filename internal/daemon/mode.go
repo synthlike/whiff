@@ -15,11 +15,14 @@ import (
 
 // Modes: how the review gate treats an agent session, an :agent/<n>
 // address. Gated, the default, holds its :write messages. Trusted lets its
-// messages to the services you name through as if you had accepted them,
-// so what those services do for it goes through too. Free lets everything
-// it sends, publishes and evaluates through. Only you set a mode, as only
-// you accept; it lasts until the session ends, or for a while. An agent's
-// own session lasts as long as the agent, across restarts too.
+// messages to the services, or single functions, you name through as if
+// you had accepted them, so what those do for it goes through too. Free
+// lets everything it sends, publishes and evaluates through. Only you set
+// a mode, as only you accept; it lasts until the session ends, for a
+// while, or for so many writes: a standing approval, as "lead may plan
+// and build, 20 writes, for 3 days". A mode that runs out tells you, in
+// your inbox, and history has each write it let through. An agent's own
+// session lasts as long as the agent, across restarts too.
 
 // modesBucket holds the modes of agents' own sessions, :agent/<name>, by
 // address, printed as (session/mode) gives them: trusting an agent
@@ -30,8 +33,10 @@ var modesBucket = []byte("modes")
 // mode is an agent session's mode other than gated.
 type mode struct {
 	free  bool
-	trust map[string]bool // the services trusted mode lets through
+	trust map[string]bool // what trusted mode lets through: services, :board, or functions, :board/build
 	until time.Time       // zero for as long as the session lasts
+	most  int             // the writes it lets through before it ends; 0 for no limit
+	used  int             // the writes it has let through
 }
 
 // String is m as whiff ls shows it: free, or trusted :gh :todo, and the
@@ -43,6 +48,9 @@ func (m *mode) String() string {
 		for _, name := range slices.Sorted(maps.Keys(m.trust)) {
 			s += " :" + name
 		}
+	}
+	if m.most > 0 {
+		s += fmt.Sprintf(", %d of %d writes left", m.most-m.used, m.most)
 	}
 	if !m.until.IsZero() {
 		s += fmt.Sprintf(", %v left", time.Until(m.until).Round(time.Second))
@@ -58,16 +66,41 @@ func (m *mode) name() string {
 	return "trusted"
 }
 
-// modeOf is addr's mode, or nil if it is gated; a mode that has run out
-// is gone, and history notes it.
+// modeOf is addr's mode, or nil if it is gated; a mode whose time has
+// run out is gone, and says so.
 func (st *state) modeOf(addr string) *mode {
 	m := st.modes[addr]
 	if m != nil && !m.until.IsZero() && !time.Now().Before(m.until) {
-		st.setMode(addr, nil)
-		st.record(entry{at: m.until, note: fmt.Sprintf(":%s's %s mode ran out: it is gated", addr, m.name())})
+		st.endMode(addr, m, m.until, "its time")
 		return nil
 	}
 	return m
+}
+
+// wrote counts a write addr's mode let through, ending a mode that has
+// let through as many as it may.
+func (st *state) wrote(addr string) {
+	m := st.modes[addr]
+	if m == nil || m.most == 0 {
+		return
+	}
+	m.used++
+	if m.used >= m.most {
+		st.endMode(addr, m, time.Now(), fmt.Sprintf("its %d writes", m.most))
+		return
+	}
+	st.setMode(addr, m)
+}
+
+// endMode gates addr, whose mode m ran out at at, having used up what:
+// history notes it, and your inbox tells you, with what it let through.
+func (st *state) endMode(addr string, m *mode, at time.Time, what string) {
+	st.setMode(addr, nil)
+	text := fmt.Sprintf(":%s's %s mode used up %s: it is gated again. What it did: whiff session %s", addr, m.name(), what, addr)
+	st.record(entry{at: at, note: text})
+	if st.tellMe != nil {
+		st.tellMe(text)
+	}
 }
 
 // heldGate is the gate of a message the review gate held, for history:
@@ -80,11 +113,17 @@ func heldGate(r puff.Value) string {
 	return "refused"
 }
 
-// lets says whether from's mode lets its message to addr through, as if
-// you had accepted it; addr "" is a publish, which only free lets through.
-func (st *state) lets(from, addr string) bool {
+// lets says whether from's mode lets its message to addr's fn through,
+// as if you had accepted it; addr "" is a publish, which only free lets
+// through.
+func (st *state) lets(from, addr, fn string) bool {
 	m := st.modeOf(from)
-	return m != nil && (m.free || addr != "" && m.trust[addr])
+	return m != nil && (m.free || addr != "" && m.trusts(addr, fn))
+}
+
+// trusts says whether m trusts addr's fn: addr, or the one function.
+func (m *mode) trusts(addr, fn string) bool {
+	return m.trust[addr] || fn != "" && m.trust[addr+"/"+fn]
 }
 
 // modeValue is addr's mode as (session/mode) gives it: (ok {:mode ...}), or (err
@@ -113,6 +152,9 @@ func (m *mode) value() puff.Value {
 	}
 	if !m.until.IsZero() {
 		es = append(es, puff.Key("until", puff.NewTime(m.until)))
+	}
+	if m.most > 0 {
+		es = append(es, puff.Key("most", puff.Int(m.most)), puff.Key("used", puff.Int(m.used)))
 	}
 	v, _ := puff.NewMap(es...)
 	return v
@@ -143,6 +185,11 @@ func storedMode(p string) (*mode, error) {
 	}
 	if t, ok := get("until").(puff.Time); ok {
 		m.until = t.Go()
+	}
+	if n, ok := get("most").(puff.Int); ok {
+		m.most = int(n)
+		used, _ := get("used").(puff.Int)
+		m.used = int(used)
 	}
 	return m, nil
 }
@@ -214,6 +261,13 @@ func (d *daemon) clientMode(req rpc.Request) rpc.Response {
 		}
 		m.until = time.Now().Add(time.Duration(dur))
 	}
+	if n := get("most"); n != nil && m != nil {
+		most, ok := n.(puff.Int)
+		if !ok || most <= 0 {
+			return rpc.Response{Error: fmt.Sprintf("want :most as a number of writes like 20, got %s", puff.Print(n))}
+		}
+		m.most = int(most)
+	}
 	var res puff.Value
 	var note string
 	d.do(func(st *state) {
@@ -222,8 +276,12 @@ func (d *daemon) clientMode(req rpc.Request) rpc.Response {
 			return
 		}
 		for name := range m.trustSet() {
-			if st.addrs[name] == nil {
-				res = puff.Errorf("no-address", "no address :%s to trust", name)
+			addr, fn, isFn := strings.Cut(name, "/")
+			if s := st.addrs[addr]; s == nil {
+				res = puff.Errorf("no-address", "no address :%s to trust", addr)
+				return
+			} else if _, ok := s.fns[fn]; isFn && !ok {
+				res = puff.Errorf("no-fn", ":%s has no function %s to trust", addr, fn)
 				return
 			}
 		}
@@ -276,7 +334,7 @@ func (st *state) trust(addr, service string) puff.Value {
 	m := &mode{trust: map[string]bool{service: true}}
 	if old != nil {
 		maps.Copy(m.trust, old.trust)
-		m.until = old.until
+		m.until, m.most, m.used = old.until, old.most, old.used
 	}
 	st.setMode(addr, m)
 	st.record(entry{at: time.Now(), note: fmt.Sprintf(":%s is %s", addr, m)})

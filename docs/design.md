@@ -338,7 +338,7 @@ The gate as one table, which `TestGateTable` checks row by row
 | an agent | a `:read` function, or an ask | through |
 | an agent | a `:write` function, or a service that reaches one | held |
 | a connection holding `:agent/*`, whatever its requests say | a `:write` | held |
-| a session trusted for the target's service | a `:write` there | through |
+| a session trusted for the target's service, or the function | a `:write` there | through, counted if the mode has `--most` |
 | a session trusted for another service | a `:write` here | held |
 | a free session | anything | through |
 | a service, on a job's result with `:origin :agent` | a `:write` | held |
@@ -374,7 +374,16 @@ sender does with it is gated there.
 treats its messages to `:todo` as accepted (and so what `:todo` does for
 it), and so its eval whose only writes are calls and sends to `:todo`;
 `whiff free agent/3 --for 2h` treats everything it sends, publishes and
-evaluates as accepted; `whiff gate agent/3` goes back. The session sees its
+evaluates as accepted; `whiff gate agent/3` goes back. A mode can be a
+standing approval, bounded the ways you'd bound it in words: single
+functions rather than whole services, `--for 3d`, and `--most 20`, the
+writes it lets through before it ends, as `whiff trust agent/lead
+board/plan board/build --most 20 --for 3d`. Money is bounded where it
+already is, by the agent's `:limits` and its team's day. A mode that runs
+out, by time or count, gates the session again and tells you in your
+inbox, so overnight work stops at the edge of what you approved rather
+than past it. `agent/lead@vps` is a peer's agent: the peer keeps to the
+mode, as it keeps its own review gate. The session sees its
 mode, `(session/mode)`, and `whiff mcp`'s tools say what goes through, so it doesn't
 wait on what won't wait; they change at its next call. History records how
 the gate treated each of an agent's writes (`held 5`, `accepted 5`,

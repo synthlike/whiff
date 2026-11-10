@@ -12,6 +12,7 @@
 ; project of the repository, whose team sets the runs' models, check,
 ; how many go at once and what they and the lead's turns may spend a day.
 ;   whiff trust agent/lead board pipeline   ; its plan and runs without your review
+;   whiff trust agent/lead board/plan board/build --most 20 --for 3d   ; or within bounds
 ;   whiff call lead/tell "In ~/src/shorty, build a URL shortener ...; workers on haiku"
 ;   whiff call board/tell shorty "build a URL shortener ..."   ; as the team says
 ;   whiff services lead               ; how far it is, what it spent

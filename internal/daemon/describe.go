@@ -166,7 +166,7 @@ func (mk *marker) form(s *service, f *puff.Form) puff.Mark {
 			return mk.forms(s, f.Items)
 		}
 		target, ok := mk.resolve(s, f.Items[i])
-		if !ok || !mk.trusted[target.s.name] && mk.node(target.s, target.fn) == puff.MarkWrite &&
+		if !ok || !mk.trusted[target.s.name] && !mk.trusted[target.s.name+"/"+target.fn] && mk.node(target.s, target.fn) == puff.MarkWrite &&
 			!(target.s.fns[target.fn].cmd && len(f.Items) > i+1 && readOnlyCommand(f.Items[i+1])) {
 			return mk.write(f.Items[i])
 		}

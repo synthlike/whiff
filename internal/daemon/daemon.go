@@ -301,7 +301,7 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 			// A free session's code runs as if you had accepted it.
 			free := false
 			if req.Agent && from != "" {
-				d.do(func(st *state) { free = st.lets(from, "") })
+				d.do(func(st *state) { free = st.lets(from, "", "") })
 			}
 			if req.Op == "eval" {
 				resp = d.eval(ectx, from, free, req)

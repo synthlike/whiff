@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/synthlike/whiff/internal/puff"
 	"github.com/synthlike/whiff/internal/rpc"
 )
 
@@ -132,7 +133,7 @@ func TestModes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"note  :agent/1 is trusted :notes", "note  :agent/1 is free", "note  :agent/1 is gated", "note  :agent/1's free mode ran out: it is gated"} {
+	for _, want := range []string{"note  :agent/1 is trusted :notes", "note  :agent/1 is free", "note  :agent/1 is gated", "note  :agent/1's free mode used up its time: it is gated again"} {
 		if !strings.Contains(h, want) {
 			t.Errorf("history has no %q", want)
 		}
@@ -224,5 +225,94 @@ func TestSession(t *testing.T) {
 	}
 	if got := rpc.SessionText(es, "agent/9"); got != "agent/9: no writes in history\n" {
 		t.Errorf("an unknown session = %q", got)
+	}
+}
+
+// TestStandingApproval trusts an agent session for one function, for so
+// many writes: a standing approval. Its writes there go through, counted;
+// reads aren't counted, and the service's other writes still wait. Once
+// it has let through as many as it may, the session is gated again, and
+// your inbox says so. A function that isn't there can't be trusted.
+func TestStandingApproval(t *testing.T) {
+	t.Parallel()
+	dir := tempDir(t)
+	file := filepath.Join(dir, "notes")
+	writeServices(t, dir, map[string]string{
+		"notes": `(service notes
+  (on (add text) "Appends text." (file/append "` + file + `" text))
+  (on (clear) "Empties them." (file/write "` + file + `" ""))
+  (on (list) "Reads them." (file/read-text "` + file + `")))`,
+	})
+	start(t, dir)
+	you := dial(t, dir)
+	if _, err := you.Sub("review/pending"); err != nil {
+		t.Fatal(err)
+	}
+	agent := dial(t, dir)
+	agent.Agent = true
+	if resp, err := agent.Claim("agent", `(ask (tell text) "Asks the agent.")`); err != nil || resp.Value != "(ok :agent/1)" {
+		t.Fatalf("claim = %+v %v", resp, err)
+	}
+	call := func(target, args string) string {
+		t.Helper()
+		resp, err := agent.Message("call", target, args, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.HasPrefix(resp.Value, "(ok") {
+			return "ok"
+		}
+		_, kind, _ := strings.Cut(resp.Value, ":kind ")
+		kind, _, _ = strings.Cut(kind, " ")
+		return kind
+	}
+	grant := func(services []string, most int) string {
+		t.Helper()
+		resp, err := you.Forward(rpc.ModeRequest("agent/1", "trusted", services, time.Hour, most))
+		if err != nil {
+			return err.Error()
+		}
+		return resp.Value + resp.Error
+	}
+	if got := grant([]string{"notes/nope"}, 2); !strings.Contains(got, ":no-fn") {
+		t.Errorf("trusting no function = %s", got)
+	}
+	bad, _ := you.Forward(rpc.Request{Op: "mode", Target: "agent/1", Args: "{:mode :trusted :services [:notes] :most 0}"})
+	if !strings.Contains(bad.Error, "want :most as a number of writes") {
+		t.Errorf(":most 0 = %+v", bad)
+	}
+	if got := grant([]string{"notes/add"}, 2); got != "(ok :done)" {
+		t.Fatalf("a standing approval = %s", got)
+	}
+	for _, c := range []struct{ target, args, want string }{
+		{"notes/add", `["a"]`, "ok"},
+		{"notes/list", `[]`, "ok"},
+		{"notes/clear", `[]`, ":pending"},
+		{"notes/add", `["b"]`, "ok"},
+		{"notes/add", `["c"]`, ":pending"},
+	} {
+		if got := call(c.target, c.args); got != c.want {
+			t.Errorf("%s %s = %s, want %s", c.target, c.args, got, c.want)
+		}
+	}
+	eventually(t, "the writes", func() string { b, _ := os.ReadFile(file); return string(b) }, "ab")
+	if ls, _ := you.Ls(); !strings.Contains(ls, ":agent/1 (agent, gated)") {
+		t.Errorf("ls = %s, want it gated again", ls)
+	}
+	inbox, err := you.Inbox("me")
+	if err != nil || !strings.Contains(inbox, `:agent/1's trusted mode used up its 2 writes: it is gated again. What it did: whiff session agent/1`) {
+		t.Errorf("your inbox = %s %v", inbox, err)
+	}
+}
+
+// A mode's writes left survive being stored, as an agent's own does.
+func TestStoredModeCounts(t *testing.T) {
+	m := &mode{trust: map[string]bool{"board/build": true}, most: 20, used: 3}
+	got, err := storedMode(puff.Print(m.value()))
+	if err != nil || got.most != 20 || got.used != 3 || !got.trusts("board", "build") || got.trusts("board", "plan") {
+		t.Errorf("stored = %+v %v", got, err)
+	}
+	if s := got.String(); s != "trusted :board/build, 17 of 20 writes left" {
+		t.Errorf("String = %q", s)
 	}
 }

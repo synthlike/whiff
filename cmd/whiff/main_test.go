@@ -213,10 +213,13 @@ func TestTerminal(t *testing.T) {
 
 // Setting a mode says what it did.
 func TestModeLine(t *testing.T) {
-	if got := modeLine("agent/3", "trusted", []string{"gh", ":todo"}, 2*time.Hour); got != "agent/3 is trusted :gh :todo, for 2h0m0s" {
+	if got := modeLine("agent/3", "trusted", []string{"gh", ":todo"}, 2*time.Hour, 0); got != "agent/3 is trusted :gh :todo, for 2h" {
 		t.Errorf("trusted: %q", got)
 	}
-	if got := modeLine(":agent/lead", "gated", nil, 0); got != "agent/lead is gated" {
+	if got := modeLine("agent/lead@vps", "trusted", []string{"board/build"}, 72*time.Hour, 20); got != "agent/lead@vps is trusted :board/build, for 20 writes, for 3d" {
+		t.Errorf("a standing approval: %q", got)
+	}
+	if got := modeLine(":agent/lead", "gated", nil, 0, 0); got != "agent/lead is gated" {
 		t.Errorf("gated: %q", got)
 	}
 }

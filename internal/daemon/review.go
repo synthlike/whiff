@@ -70,7 +70,7 @@ func (d *daemon) publishGated(m message) puff.Value {
 			mk := d.markerOn(st)
 			write := mk.topic(m.topic) == puff.MarkWrite
 			switch {
-			case st.lets(m.from, ""):
+			case st.lets(m.from, "", ""):
 				m.reviewed = true
 				if write {
 					m.gate = "free"

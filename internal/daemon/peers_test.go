@@ -342,6 +342,30 @@ func TestFar(t *testing.T) {
 		t.Errorf("your box@far/put = %s", got)
 	}
 
+	// You trust a session there from here, which the peer keeps to: one
+	// write, then it holds again. An agent can't, from here either.
+	fa := dial(t, far)
+	fa.Agent = true
+	claimed, err := fa.Claim("agent", `(ask (tell text) "Asks the agent.")`)
+	if err != nil || !strings.HasPrefix(claimed.Value, "(ok :agent/") {
+		t.Fatalf("claim there = %+v %v", claimed, err)
+	}
+	session := strings.TrimSuffix(strings.TrimPrefix(claimed.Value, "(ok :"), ")")
+	grant := rpc.ModeRequest(session, "trusted", []string{"box/put"}, time.Hour, 1)
+	grant.Peer = "far"
+	if got := call(ac, grant); !strings.Contains(got, "an agent can't set") {
+		t.Errorf("an agent's mode there = %s", got)
+	}
+	if got := call(c, grant); got != "(ok :done)" {
+		t.Fatalf("mode there = %s", got)
+	}
+	if got := call(fa, rpc.Request{Op: "call", Target: "box/put", Args: "[10]"}); got != "(ok 10)" {
+		t.Errorf("a trusted put there = %s", got)
+	}
+	if got := call(fa, rpc.Request{Op: "call", Target: "box/put", Args: "[11]"}); !strings.Contains(got, ":pending") {
+		t.Errorf("a put past its one write = %s", got)
+	}
+
 	// A key sent again gets the first's answer, without running again.
 	for range 2 {
 		if got := call(fc, rpc.Request{Op: "call", Target: "box/put", Args: "[9]", Key: "k1"}); got != "(ok 9)" {
