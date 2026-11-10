@@ -17,6 +17,7 @@ import (
 // History survives a restart, and its ids go on from where they were, so
 // a chain from before can't be mistaken for one after.
 func TestHistorySurvivesRestart(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	writeServices(t, dir, map[string]string{
 		"greet": `(service greet
@@ -70,6 +71,7 @@ func TestHistorySurvivesRestart(t *testing.T) {
 
 // An entry comes back from whiff.db as it went in.
 func TestStoredEntry(t *testing.T) {
+	t.Parallel()
 	at := time.Date(2026, 11, 3, 10, 0, 0, 123456789, time.UTC)
 	for _, e := range []entry{
 		{at: at, kind: "call", id: 7, cause: 3, user: true, from: "agent/1", to: "todo/add", args: `["x \"y\""]`, reply: "(ok :done)", took: 1234567 * time.Nanosecond, gate: "held 9"},
@@ -96,6 +98,7 @@ func TestStoredEntry(t *testing.T) {
 // At start, history past historyKept goes, the rest stays, and a whiff.db
 // that leaves much of itself free is compacted.
 func TestHistoryPrunedAndCompacted(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	services := filepath.Join(dir, "services")
 	path := filepath.Join(dir, "whiff.db")
@@ -138,6 +141,7 @@ func TestHistoryPrunedAndCompacted(t *testing.T) {
 // the last 1000 entries a client gets otherwise: each comes once, oldest
 // first, the stored ones and those since, stored yet or not.
 func TestAllHistory(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	services := filepath.Join(dir, "services")
 	db, err := openStore(services)

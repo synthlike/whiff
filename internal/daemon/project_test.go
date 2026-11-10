@@ -8,6 +8,7 @@ import (
 )
 
 func TestProjectOf(t *testing.T) {
+	t.Parallel()
 	root := tempDir(t)
 	repo := filepath.Join(root, "tally")
 	tree := filepath.Join(root, "runs", "tally-7")
@@ -43,6 +44,7 @@ func TestProjectOf(t *testing.T) {
 // and what its service does on it carry the tag, and history finds them
 // by project:.
 func TestProjectTag(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	repo := filepath.Join(dir, "tally")
 	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o700); err != nil {
@@ -98,6 +100,7 @@ func TestProjectTag(t *testing.T) {
 // the lead it tells: what it sends carries the tag, and a chain in one
 // already stays there.
 func TestProjectEnter(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	writeServices(t, dir, map[string]string{
 		"teller": `(service teller

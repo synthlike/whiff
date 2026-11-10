@@ -15,6 +15,7 @@ import (
 )
 
 func TestMe(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	got := filepath.Join(dir, "got")
 	writeServices(t, dir, map[string]string{
@@ -78,6 +79,7 @@ func TestMe(t *testing.T) {
 // :me's inbox as a view, answered with :me/answer from your connection
 // only: not an agent's, nor a service's in a chain you began.
 func TestMeInbox(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	got := filepath.Join(dir, "got")
 	writeServices(t, dir, map[string]string{
@@ -160,6 +162,7 @@ func TestMeInbox(t *testing.T) {
 // report's actions are labelled with their messages, since clicking one
 // sends it as you.
 func TestMeChoicesAndActions(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	start(t, dir)
 	c := dial(t, dir)
@@ -218,6 +221,7 @@ func TestMeChoicesAndActions(t *testing.T) {
 // and that answers (ok v), dismisses the report; one that shows you
 // something, or fails, leaves it.
 func TestMeActedOn(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	writeServices(t, dir, map[string]string{"jot": `(service jot
   (on (look) :read "Looks." (ok 1))
@@ -262,6 +266,7 @@ func TestMeActedOn(t *testing.T) {
 // What waits for you outlives the daemon, as who sent it: an agent's chain
 // stays an agent's, and ids aren't given out twice.
 func TestMeInboxSurvivesRestart(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	got := filepath.Join(dir, "got")
 	writeServices(t, dir, map[string]string{
@@ -392,6 +397,7 @@ func TestMeInboxSurvivesRestart(t *testing.T) {
 
 // No service file or client takes any of whiff's own addresses.
 func TestOwnAddrs(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	files := map[string]string{}
 	for _, name := range ownAddrs {

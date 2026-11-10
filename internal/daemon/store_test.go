@@ -47,6 +47,7 @@ func pendingOf(t testing.TB, r string) string {
 // What waits in a service's inbox outlives the daemon, and its answer
 // reaches the sender; an ask's :expires goes on counting.
 func TestInboxesSurviveRestart(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	got := filepath.Join(dir, "got")
 	box := `(service box
@@ -149,6 +150,7 @@ func TestInboxesSurviveRestart(t *testing.T) {
 // delivers it, and rejecting tells its sender. A session's number stays its
 // own, so Trust can't reach another's.
 func TestReviewSurvivesRestart(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	file := filepath.Join(dir, "notes")
 	evald := filepath.Join(dir, "evald")
@@ -251,6 +253,7 @@ func TestReviewSurvivesRestart(t *testing.T) {
 }
 
 func TestStoredAsked(t *testing.T) {
+	t.Parallel()
 	const at = `:cwd "/x" :at 2026-10-27T10:00:00Z`
 	a, err := storedAsked(1, `{:addr :me :fn :ask :args ["q"] :origin :user :from :plan :session :agent/3 `+at+`}`)
 	if err != nil {
@@ -316,6 +319,7 @@ func TestStoredAsked(t *testing.T) {
 // A message leaves the stored inbox only as its answer is stored, in one
 // transaction: taken but not answered, it is still there for a restart.
 func TestAnswerLeavesInbox(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	db, err := openStore(filepath.Join(dir, "services"))
 	if err != nil {
@@ -348,6 +352,7 @@ func TestAnswerLeavesInbox(t *testing.T) {
 }
 
 func TestTrialsAreNotStored(t *testing.T) {
+	t.Parallel()
 	if (&asked{addr: "try/1"}).durable() {
 		t.Error("a trial's inbox is durable")
 	}
@@ -426,6 +431,7 @@ func makeDue(t *testing.T, dir, fn string) {
 // fires once, and one that didn't waits. It keeps its origin, so an agent's
 // still meets the review gate. A :start sets its own, so a loop isn't doubled.
 func TestTimersSurviveRestart(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	file := filepath.Join(dir, "notes")
 	writeServices(t, dir, map[string]string{
@@ -516,6 +522,7 @@ func TestTimersSurviveRestart(t *testing.T) {
 // A timer that fired stays stored until its message is handled: one still
 // in a mailbox as whiff stops fires again at start, once.
 func TestTimerKeptUntilHandled(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	file := filepath.Join(dir, "notes")
 	writeServices(t, dir, map[string]string{
@@ -550,6 +557,7 @@ func TestTimerKeptUntilHandled(t *testing.T) {
 }
 
 func TestStoredTimer(t *testing.T) {
+	t.Parallel()
 	tm := &timer{key: []byte("k"), due: time.Unix(100, 0), addr: "notes", m: message{from: "agent/1", fn: "add", args: `["x" 1]`, dir: "/x", reviewed: true, session: "agent/1"}}
 	got, err := storedTimer(tm.key, puff.Print(tm.stored()))
 	if err != nil {
@@ -580,6 +588,7 @@ func TestStoredTimer(t *testing.T) {
 // A job doesn't outlive the daemon, but its sender hears how it ended, as
 // far as whiff knows, and it isn't run again.
 func TestJobsInterrupted(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	got := filepath.Join(dir, "got")
 	writeServices(t, dir, map[string]string{
@@ -823,6 +832,7 @@ func TestResultsUntilHandled(t *testing.T) {
 // ended: one answer, which whiff wait finds after a restart. One accepted
 // as whiff died is :interrupted :unknown.
 func TestHeldJobKeepsItsID(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	file := filepath.Join(dir, "touched")
 	writeServices(t, dir, nil)
@@ -877,6 +887,7 @@ func TestHeldJobKeepsItsID(t *testing.T) {
 }
 
 func TestStoredJob(t *testing.T) {
+	t.Parallel()
 	j := &job{ticket: ticket{id: 7, from: "plan", dir: "/x", user: true, session: "agent/2"}, cmd: puff.NewVector(puff.String("go")), pid: 42}
 	got, err := storedJob(7, puff.Print(j.stored()))
 	if err != nil {
@@ -915,6 +926,7 @@ func TestStoredJob(t *testing.T) {
 // Trusting an agent outlasts a restart, as the agent does; it goes when the
 // agent's file does, even while whiff is down.
 func TestAgentModeSurvivesRestart(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	writeServices(t, dir, map[string]string{
 		"scout": `(agent scout :prompt "Look.")`,
@@ -971,6 +983,7 @@ func TestAgentModeSurvivesRestart(t *testing.T) {
 }
 
 func TestStoredKey(t *testing.T) {
+	t.Parallel()
 	timer := append(idKey(1700000000000000000), idKey(7)...)
 	for _, c := range []struct {
 		key  []byte
@@ -992,6 +1005,7 @@ func TestStoredKey(t *testing.T) {
 // its first is given, so a restart, which begins after what is stored,
 // never gives one again; within a block, nothing is written.
 func TestNewIDBlocks(t *testing.T) {
+	t.Parallel()
 	db, err := openStore(filepath.Join(t.TempDir(), "services"))
 	if err != nil {
 		t.Fatal(err)

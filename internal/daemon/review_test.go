@@ -12,6 +12,7 @@ import (
 )
 
 func TestReviewGate(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	file := filepath.Join(dir, "notes")
 	writeServices(t, dir, map[string]string{
@@ -201,6 +202,7 @@ func TestReviewGate(t *testing.T) {
 }
 
 func TestEvalGate(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	file := filepath.Join(dir, "notes")
 	os.WriteFile(file, []byte("a"), 0o600)
@@ -303,6 +305,7 @@ func TestEvalGate(t *testing.T) {
 }
 
 func TestPublishGate(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	file := filepath.Join(dir, "notes")
 	writeServices(t, dir, map[string]string{
@@ -378,6 +381,7 @@ func TestPublishGate(t *testing.T) {
 // your messages only: not an agent's, nor one in a chain it began that you
 // accepted.
 func TestReviewService(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	file := filepath.Join(dir, "notes")
 	writeServices(t, dir, map[string]string{
@@ -501,6 +505,7 @@ func TestReviewService(t *testing.T) {
 // TestAcceptApart: while :review/accept waits on what it delivered, a slow
 // service here, :review answers its other calls, and accepts another.
 func TestAcceptApart(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	gate := filepath.Join(dir, "go")
 	writeServices(t, dir, map[string]string{

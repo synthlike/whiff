@@ -15,6 +15,7 @@ var update = flag.Bool("update", false, "rewrite docs/stdlib.md from the functio
 // TestStdlibDoc checks that docs/stdlib.md is the function tables as they
 // are; go test ./internal/daemon -run TestStdlibDoc -update rewrites it.
 func TestStdlibDoc(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join("..", "..", "docs", "stdlib.md")
 	want := stdlibDoc(puff.Base(), (&daemon{}).builtins(&caller{}))
 	if *update {

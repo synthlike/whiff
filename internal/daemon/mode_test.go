@@ -11,6 +11,7 @@ import (
 )
 
 func TestModes(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	file := filepath.Join(dir, "notes")
 	writeServices(t, dir, map[string]string{
@@ -139,6 +140,7 @@ func TestModes(t *testing.T) {
 }
 
 func TestSession(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	file := filepath.Join(dir, "notes")
 	writeServices(t, dir, map[string]string{

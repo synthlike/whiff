@@ -9,6 +9,7 @@ import (
 )
 
 func TestPublish(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	logged, mirrored := filepath.Join(dir, "logged"), filepath.Join(dir, "mirrored")
 	writeServices(t, dir, map[string]string{

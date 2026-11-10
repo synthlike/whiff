@@ -20,6 +20,7 @@ import (
 // stopping or whiff dying, if running it twice is safe, until its attempts
 // run out; its sender sees one result, the last.
 func TestRetries(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	writeServices(t, dir, nil)
 	done := start(t, dir)

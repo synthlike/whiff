@@ -13,6 +13,7 @@ import (
 // comes back with: for a job that runs, and for one the review gate holds,
 // accepted or rejected. A job that can't start stays an err.
 func TestSubmitted(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	log := filepath.Join(dir, "log")
 	touched := filepath.Join(dir, "touched")

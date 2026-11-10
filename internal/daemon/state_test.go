@@ -139,6 +139,7 @@ func TestState(t *testing.T) {
 }
 
 func TestStateOf(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	writeServices(t, dir, map[string]string{
 		"counter": `(service counter :state {:n 0}

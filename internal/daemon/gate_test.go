@@ -16,6 +16,7 @@ import (
 // did. A peer's rows are TestFar's: an agent's write held there, and a
 // task an agent answers there coming back as an agent's.
 func TestGateTable(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	writeServices(t, dir, map[string]string{
 		"box": `(service box

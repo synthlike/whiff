@@ -7,6 +7,7 @@ import (
 )
 
 func TestRepl(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	start(t, dir)
 	c := dial(t, dir)

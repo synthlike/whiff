@@ -18,6 +18,7 @@ import (
 // TestGitService tries services/git.puff, as whiff try does, in a scratch
 // repository.
 func TestGitService(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("no git")
 	}
@@ -230,6 +231,7 @@ esac
 // TestTodoService tries services/todo.puff on a TODO.md in a scratch
 // directory.
 func TestTodoService(t *testing.T) {
+	t.Parallel()
 	src, err := os.ReadFile(filepath.Join("..", "..", "services", "todo.puff"))
 	if err != nil {
 		t.Fatal(err)
@@ -1019,6 +1021,7 @@ esac
 // TestServiceFileTests runs the (test ...)s in every file in services/, as
 // whiff test does.
 func TestServiceFileTests(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	start(t, dir)
 	c := dial(t, dir)
@@ -1643,8 +1646,9 @@ func TestAgentLater(t *testing.T) {
 		t.Fatalf("claim = %+v %v", r, err)
 	}
 	for _, tt := range []struct{ args, want string }{
-		{`[1s "soon"]`, "(ok 20"},
-		{`[3s "after a restart"]`, "(ok 20"},
+		// The second is due well after the restart the first's turn starts.
+		{`[300ms "soon"]`, "(ok 20"},
+		{`[1500ms "after a restart"]`, "(ok 20"},
 		{`["tomorrow" "x"]`, `(err {:kind :bad-call :message "later wants a duration of 0s or more and a note, got \"tomorrow\" and \"x\""`},
 	} {
 		if r, err := turn.Message("call", "watch/later", tt.args, ""); err != nil || !strings.HasPrefix(r.Value, tt.want) {
@@ -1996,6 +2000,7 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"%s","tot
 // that chain, unless the job is :origin :agent, as a model writes its
 // output; then it is the agent's, gated.
 func TestJobReviewedChain(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	writeServices(t, dir, map[string]string{
 		"runner": `(service runner

@@ -130,6 +130,7 @@ func TestClient(t *testing.T) {
 }
 
 func TestAgentClaim(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	start(t, dir)
 	c := dial(t, dir)

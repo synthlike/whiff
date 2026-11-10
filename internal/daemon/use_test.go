@@ -11,6 +11,7 @@ import (
 // A used file's defs are the service's own: its handlers' marks see
 // through them, and its tests run with the service's.
 func TestUse(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	services := filepath.Join(dir, "services")
 	writeServices(t, dir, map[string]string{

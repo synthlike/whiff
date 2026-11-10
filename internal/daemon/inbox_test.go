@@ -10,6 +10,7 @@ import (
 )
 
 func TestInbox(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	got := filepath.Join(dir, "got")
 	writeServices(t, dir, map[string]string{
@@ -103,6 +104,7 @@ func TestInbox(t *testing.T) {
 }
 
 func TestAskDef(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	tests := []struct{ name, src, want string }{
 		{"ok", `(service ok (ask (f x) :write "Doc." :expires 1d))`, ""},
@@ -131,7 +133,7 @@ func TestAskDef(t *testing.T) {
 func eventually(t *testing.T, what string, get func() string, want string) {
 	t.Helper()
 	var got string
-	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
 		if got = get(); got == want {
 			return
 		}

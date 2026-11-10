@@ -6,6 +6,7 @@ import (
 )
 
 func TestTry(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	writeServices(t, dir, map[string]string{
 		"greet": `(service greet (on (hello name) "Greets name." (ok "installed")))`,
@@ -79,6 +80,7 @@ func TestTry(t *testing.T) {
 }
 
 func TestTestOp(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	start(t, dir)
 	c := dial(t, dir)

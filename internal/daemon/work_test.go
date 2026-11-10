@@ -11,6 +11,7 @@ import (
 // status, branch and cost, not its long note; an err keeps its message's
 // first line.
 func TestBrief(t *testing.T) {
+	t.Parallel()
 	long := strings.Repeat("review ", 40)
 	for _, tt := range []struct{ in, want string }{
 		{`(ok {:run 7 :status :ready :branch "whiff/7" :cost 0.31 :note "` + long + `"})`, `(ok {:branch "whiff/7" :cost 0.31 :run 7 :status :ready})`},

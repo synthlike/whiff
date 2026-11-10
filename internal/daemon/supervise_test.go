@@ -75,6 +75,7 @@ func TestReload(t *testing.T) {
 }
 
 func TestRestartAfterFault(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	writeServices(t, dir, map[string]string{
 		"boom": `(service boom
@@ -103,7 +104,7 @@ func historyOf(c *rpc.Client) (string, error) {
 // historyHas waits until a line of history holds want.
 func historyHas(t *testing.T, c *rpc.Client, want string) {
 	t.Helper()
-	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
 		h, err := historyOf(c)
 		if err != nil {
 			t.Fatal(err)

@@ -89,6 +89,7 @@ func TestJobStop(t *testing.T) {
 }
 
 func TestJobs(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	got := filepath.Join(dir, "got")
 	if err := os.WriteFile(filepath.Join(dir, "here"), []byte("in dir"), 0o600); err != nil {
@@ -261,6 +262,7 @@ func TestJobs(t *testing.T) {
 // whiff.db, while its result has the tail, as any job's, and :output; one
 // without keeps only the tail. Old output dirs go at start.
 func TestJobOutputFile(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	start(t, dir)
 	c := dial(t, dir)

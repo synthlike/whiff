@@ -12,6 +12,7 @@ import (
 // run's ask still says whose work it is, the ticket follows its run, and a
 // project has at most 4 going.
 func TestBoardBuild(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	repo := filepath.Join(dir, "tally")
 	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o700); err != nil {

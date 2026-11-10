@@ -109,6 +109,7 @@ func TestCall(t *testing.T) {
 }
 
 func TestSend(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	out := filepath.Join(dir, "out")
 	writeServices(t, dir, map[string]string{
@@ -165,6 +166,7 @@ func TestSend(t *testing.T) {
 }
 
 func TestCycle(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	writeServices(t, dir, map[string]string{
 		"a": `(service a
@@ -282,6 +284,7 @@ func TestLoadService(t *testing.T) {
 // A panic in a handler faults its message rather than ending the daemon,
 // and arguments that aren't a vector are a bad call, not a panic.
 func TestHandlePanic(t *testing.T) {
+	t.Parallel()
 	s := &service{name: "boom", d: &daemon{callTimeout: time.Second}, fns: map[string]handler{
 		"go": {native: func(message, []puff.Value) (puff.Value, error) { panic("oops") }},
 	}}

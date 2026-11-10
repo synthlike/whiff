@@ -41,6 +41,7 @@ var markServices = map[string]string{
 }
 
 func TestDescribe(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	writeServices(t, dir, markServices)
 	start(t, dir)
@@ -107,6 +108,7 @@ func TestDescribe(t *testing.T) {
 }
 
 func TestLs(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	writeServices(t, dir, map[string]string{
 		"files": markServices["files"],
@@ -177,6 +179,7 @@ warning: ` + greet + `:5:32: :hello2 doesn't exist
 }
 
 func TestBackstop(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	file := filepath.Join(dir, "f")
 	writeServices(t, dir, map[string]string{

@@ -9,6 +9,7 @@ import (
 )
 
 func TestStart(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	count := filepath.Join(dir, "count")
 	writeServices(t, dir, map[string]string{
@@ -79,6 +80,7 @@ func TestStartReload(t *testing.T) {
 // loop's first tick isn't lost to a slow load. TestGhWatch lost gh's
 // tick so under load.
 func TestStartTimerBeforeAddress(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	writeServices(t, dir, map[string]string{
 		"loop": `(service loop :state 0

@@ -50,7 +50,8 @@ func set[T any](t *testing.T, v *T, x T) {
 
 // dial connects to the daemon on dir, waiting for it to listen.
 func dial(t testing.TB, dir string) *rpc.Client {
-	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+	// Generous: under the parallel tests' load a restart takes a while.
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
 		c, err := rpc.Dial(dir, nil)
 		if err == nil {
 			t.Cleanup(func() { c.Close() })
@@ -73,6 +74,7 @@ func wait(t *testing.T, done <-chan error) error {
 }
 
 func TestEval(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	start(t, dir)
 	c := dial(t, dir)
@@ -105,6 +107,7 @@ func TestEval(t *testing.T) {
 }
 
 func TestOneDaemonPerDir(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	start(t, dir)
 	dial(t, dir)
@@ -114,6 +117,7 @@ func TestOneDaemonPerDir(t *testing.T) {
 }
 
 func TestStopCancelsEval(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	done := start(t, dir)
 	busy := dial(t, dir)

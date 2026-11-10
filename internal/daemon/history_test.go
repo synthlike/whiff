@@ -11,6 +11,7 @@ import (
 )
 
 func TestHistory(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	writeServices(t, dir, map[string]string{
 		"greet": `(service greet
@@ -107,6 +108,7 @@ func TestTrace(t *testing.T) {
 }
 
 func TestChains(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	writeServices(t, dir, map[string]string{
 		"front": `(service front
@@ -147,6 +149,7 @@ func TestChains(t *testing.T) {
 
 // A service that schedules itself isn't one endless chain.
 func TestTimerBeginsChain(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	writeServices(t, dir, map[string]string{
 		"loop": `(service loop (on (tick) "Ticks again in a moment." (send-after 1ms :tick)))`,

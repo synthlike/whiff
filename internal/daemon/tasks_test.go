@@ -15,6 +15,7 @@ import (
 // TestTasks shows each kind of task in :tasks, held, waiting, running and
 // ended, with who owns it and what can be done with it, and cancels one.
 func TestTasks(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	writeServices(t, dir, map[string]string{
 		"box":   `(service box (ask (q x) "Waits."))`,
@@ -176,6 +177,7 @@ func TestTasks(t *testing.T) {
 // as a dev its lead. Each is the child of the one whose work began it, and
 // tasks/tree gives them nested.
 func TestTaskTree(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	writeServices(t, dir, map[string]string{
 		"boss": `(service boss
@@ -257,6 +259,7 @@ func TestTaskTree(t *testing.T) {
 // stream-json as steps; its result is the last line, and once it ends the
 // watch says how.
 func TestTaskWatch(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	start(t, dir)
 	c := dial(t, dir)

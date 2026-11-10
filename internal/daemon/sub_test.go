@@ -8,6 +8,7 @@ import (
 )
 
 func TestSub(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	writeServices(t, dir, map[string]string{
 		"git": `(service git (on (poke v) "Publishes v." (publish :git/changed v)))`,

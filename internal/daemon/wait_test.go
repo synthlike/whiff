@@ -8,6 +8,7 @@ import (
 )
 
 func TestWait(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	writeServices(t, dir, map[string]string{
 		"todo": `(service todo

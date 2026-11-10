@@ -11,6 +11,7 @@ import (
 // TestTimers lists and views the timers waiting, and cancels one, which
 // then never fires; cancel is yours.
 func TestTimers(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	writeServices(t, dir, map[string]string{
 		"pinger": `(service pinger
@@ -85,6 +86,7 @@ func TestTimers(t *testing.T) {
 
 // TestTimerCancelled cancels a timer before it is due: it never sends.
 func TestTimerCancelled(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	writeServices(t, dir, map[string]string{
 		"pinger": `(service pinger (on (ping) :write "Hears a ping." (call :me/tell "pinged")))`,

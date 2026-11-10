@@ -13,6 +13,7 @@ import (
 // whiff cancel ends a task that hasn't ended, however it waits: held,
 // waiting for a reply or running. An agent cancels only its own session's.
 func TestCancel(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	file := filepath.Join(dir, "touched")
 	writeServices(t, dir, map[string]string{"box": `(service box (ask (q x) "A question."))`})
@@ -102,6 +103,7 @@ func TestCancel(t *testing.T) {
 // ends, its ask, which nobody would hear the answer to, is cancelled, and
 // its sender hears so.
 func TestSessionEndsWithJob(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	writeServices(t, dir, map[string]string{
 		"boss":   `(service boss (on (hire) "Runs a worker." (call :jobs/run ["sh" "-c" "echo $WHIFF_SESSION > token; while [ ! -e done ]; do sleep 0.02; done"] {:session [:helper/ask]})))`,
@@ -142,6 +144,7 @@ func TestSessionEndsWithJob(t *testing.T) {
 // leaves the flag out: its write is held for review, and it can't cancel
 // your task.
 func TestSessionStaysAgent(t *testing.T) {
+	t.Parallel()
 	dir := tempDir(t)
 	file := filepath.Join(dir, "touched")
 	writeServices(t, dir, map[string]string{"box": `(service box (ask (q x) "A question."))`})

@@ -132,6 +132,7 @@ func TestPeers(t *testing.T) {
 }
 
 func TestPeerArgv(t *testing.T) {
+	t.Parallel()
 	p := &peer{name: "vps", dest: "whiff@203.0.113.7", whiff: "/home/whiff/go/bin/whiff"}
 	got := strings.Join(p.argv(), " ")
 	if !strings.HasPrefix(got, "ssh -o BatchMode=yes") || !strings.HasSuffix(got, " whiff@203.0.113.7 /home/whiff/go/bin/whiff bridge") {
