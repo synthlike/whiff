@@ -103,15 +103,17 @@
 
   ; roles are a plan's models, from model: a string, every role's, or
   ; {:planner :dev :reviewer}, each's, "" for the default: Claude's, or
-  ; huff's for a model that names a provider.
+  ; huff's for a model that names a provider; with :sandbox as pipeline
+  ; takes it, #f if model doesn't say.
   (def (roles model)
     (if (= (value/type model) :map)
-      {:planner (map/get-or model :planner "") :dev (map/get-or model :dev "") :reviewer (map/get-or model :reviewer "")}
-      {:planner model :dev model :reviewer model}))
+      {:planner (map/get-or model :planner "") :dev (map/get-or model :dev "") :reviewer (map/get-or model :reviewer "")
+       :sandbox (map/get-or model :sandbox #f)}
+      {:planner model :dev model :reviewer model :sandbox #f}))
 
-  (test "a plan's models: one for every role, or each its own"
-    (= [(roles "haiku") (roles {:planner "opus"})]
-      [{:planner "haiku" :dev "haiku" :reviewer "haiku"} {:planner "opus" :dev "" :reviewer ""}]))
+  (test "a plan's models: one for every role, or each its own, sandboxed if it says"
+    (= [(roles "haiku") (roles {:planner "opus"}) (map/get (roles {:dev "openrouter/x/y" :sandbox #t}) :sandbox)]
+      [{:planner "haiku" :dev "haiku" :reviewer "haiku" :sandbox #f} {:planner "opus" :dev "" :reviewer "" :sandbox #f} (some #t)]))
 
   ; planner-cmd is the planner, which only reads, on model: claude, or
   ; huff for a model that names a provider.
@@ -129,9 +131,9 @@
   ; is each task's run so far.
   (def (next-run state n i base)
     (let [{:repo repo :tasks ts :check check} (plan-of state n)
-          {:dev dev :reviewer reviewer} (roles (map/get-or (plan-of state n) :model ""))
+          {:dev dev :reviewer reviewer :sandbox box} (roles (map/get-or (plan-of state n) :model ""))
           task (unwrap (vector/get ts i))
-          run (try (call :pipeline/start-on repo base task check {:dev dev :reviewer reviewer}))
+          run (try (call :pipeline/start-on repo base task check {:dev dev :reviewer reviewer :sandbox box}))
           built (map/get-or (plan-of state n) :built [])]
       (ok (-> state
             (set-plan n {:step :building :task i :run run :built (vector/append built run)})
@@ -238,7 +240,7 @@
       (moved n (ok [n (try (ask-planner state n))]))))
 
   (on (start state goal check model) :write :update
-    "Plans goal in the repository here with a planner, which only reads, then builds its tasks one after another as :pipeline runs, each from the last one's branch, with check (a command, like [\"go\" \"test\" \"./...\"]); model is every role's model, \"\" for Claude's default, a Claude model as \"haiku\", or a provider's, as \"openrouter/moonshotai/kimi-k2.6\", which huff runs, or {:planner :dev :reviewer}, each's. (ok n), the plan's number; how it went lands in your inbox."
+    "Plans goal in the repository here with a planner, which only reads, then builds its tasks one after another as :pipeline runs, each from the last one's branch, with check (a command, like [\"go\" \"test\" \"./...\"]); model is every role's model, \"\" for Claude's default, a Claude model as \"haiku\", or a provider's, as \"openrouter/moonshotai/kimi-k2.6\", which huff runs, or {:planner :dev :reviewer}, each's, with :sandbox #t to run each run's dev commands and check in a container, as pipeline's build takes it. (ok n), the plan's number; how it went lands in your inbox."
     (begin state goal check model #f))
 
   (on (draft state goal check model) :write :update
