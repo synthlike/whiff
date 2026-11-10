@@ -19,8 +19,10 @@ You give a goal; a planner Claude splits it into tasks; for each task a dev
 Claude writes the code in a worktree of its own, whiff runs your tests, and
 a reviewer Claude reviews the diff. Until the tests pass and the reviewer
 approves, the review goes back to the dev, up to three rounds. Each task
-starts from the branch of the one before, so the last branch holds the
-whole goal. Your own working tree is never touched.
+starts from the branches of the tasks it comes after, merged, and tasks
+that don't need each other run at the same time; the last task comes after
+all the rest, so its branch holds the whole goal. Your own working tree is
+never touched.
 
 Install the two services and start a plan in your repository:
 
@@ -34,6 +36,20 @@ whiff call plan/start "A small todo CLI in Go ..." '["go" "test" "./..."]' '""'
 The last argument is the model: `""` for Claude's default, a Claude model
 as `haiku`, a provider's as `openrouter/moonshotai/kimi-k2.6`, which
 huff runs, or `{:planner "opus" :dev "haiku" :reviewer "sonnet"}`.
+
+For a larger goal left to run on its own, the model map also takes how
+many runs go at once, how many times a task's run that gave up is retried
+before the plan stops, and a budget for all its runs, after which it starts
+no more and offers to raise it:
+
+```sh
+whiff call plan/start "A Go calculator: lexer, parser, evaluator and CLI ..." '["go" "test" "./..."]' \
+  '{:dev "openrouter/moonshotai/kimi-k2" :reviewer "openrouter/moonshotai/kimi-k2" :at-once 3 :retries 1 :budget 2.0}'
+```
+
+A plan has up to 12 tasks. `plan/draft` lets you see them first, with
+what each comes after (`3. evaluator (after 1, 2)`), and change that with
+`plan/after`.
 
 A real run, on an empty Go module, with the goal "A small todo CLI in Go,
 run as 'todo': 'todo add <text>' adds an item, 'todo list' lists them

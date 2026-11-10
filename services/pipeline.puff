@@ -415,7 +415,7 @@
                                            :cost (map/get-or (run-of state n) :cost 0.0)
                                            :actions (actions n status branch from)})) :gone)]
           [(none) :none])
-        (heard (publish :pipeline/done {:run n :status status :branch branch :dir dir :note note :from from}))
+        (heard (publish :pipeline/done {:run n :status status :branch branch :dir dir :note note :from from :cost (map/get-or (run-of state n) :cost 0.0)}))
         ; After :pipeline/done, so a planner hears of the end first.
         (heard (publish :pipeline/step {:run n :step status}))
         (ok (set-run state n {:step status :from from :note note})))))

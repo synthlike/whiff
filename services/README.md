@@ -49,9 +49,12 @@ Or try one without installing it: `whiff try services/git.puff status`.
   you hear only what matters. Its plan is on `board`, a ticket a run, its
   runs' models, check, count and spend as the project's team says. `whiff trust agent/lead board
   pipeline` first.
-- `plan`: `start goal check` has a planner Claude split goal into a few
-  tasks and builds them one after another as `pipeline` runs, each from the
-  last one's branch. `plans` says where each is. Needs `pipeline`.
+- `plan`: `start goal check model` has a planner split goal into up to 12
+  tasks, each after the ones whose work it needs, and builds them as
+  `pipeline` runs, each from those tasks' branches merged, those that don't
+  need each other at once (`:at-once 3`); `:retries` and `:budget` let a
+  large plan run unattended. The last task's branch has them all. `plans`
+  says where each is. Needs `pipeline`.
 - `board`: what is being built, by project, as tickets in Todo, Doing,
   Review, Done and Failed: its own (`add project title`, `move id step`,
   `assign id who`; `plan repo title task` for a run, which `build id base

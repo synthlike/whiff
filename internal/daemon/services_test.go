@@ -860,7 +860,8 @@ case "$4" in
   Read,Glob,Grep) cat > "$HOME/planned"; if [ -f "$HOME/tasks" ]; then cat "$HOME/tasks"; else printf 'Here is the plan:\n` + "```" + `json\n["one", "two"]\n` + "```" + `\n'; fi ;;
   "") cat > /dev/null; if [ -f "$HOME/broken" ]; then echo "stuck" >&2; exit 1; fi
      if [ -f "$HOME/picky" ]; then echo "VERDICT: changes"; else echo "VERDICT: approve"; fi ;;
-  *) task=$(sed -n 's/^Task: //p'); echo "$task" > "$task.txt"; echo "wrote $task.txt" ;;
+  *) task=$(sed -n 's/^Task: //p'); echo "$task" > "$task.txt"
+     if [ -f "$HOME/costly" ]; then echo '{"total_cost_usd":1.0}'; else echo "wrote $task.txt"; fi ;;
 esac
 `
 	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(claude), 0o700); err != nil {
@@ -919,7 +920,7 @@ esac
 		t.Errorf("whiff/2's own commit = %q", got)
 	}
 	resp, err = c.Message("call", "plan/plans", "[]", repo)
-	if err != nil || !strings.Contains(resp.Value, `:step :done :task 1 :tasks ["one" "two"]`) {
+	if err != nil || !strings.Contains(resp.Value, `:step :done :task 1 :task-runs {0 1 1 2} :tasks ["one" "two"]`) {
 		t.Errorf("plans = %+v %v", resp, err)
 	}
 	resp, err = c.Message("call", "plan/board", "[]", repo)
@@ -1040,15 +1041,19 @@ esac
 		return fmt.Sprint(strings.Contains(string(b), "You planned this before:\n1. one\n2. two\n\nPlan it again. Their note on that plan: fewer, bigger tasks"))
 	}, "true")
 	eventually(t, "the plan waits again", func() string { return call("remove", `[3 9]`) }, `(err {:kind :no-task :message "plan 3 has tasks 1 to 2"})`)
-	// Tasks added and removed, at most 4, at least 1.
+	// Tasks added and removed, at most 12, at least 1.
 	if got := call("add", `[3 2 "middle"]`); got != `(ok ["one" "middle" "two"])` {
 		t.Errorf("add = %s", got)
 	}
-	call("add", `[3 4 "last"]`)
-	if got := call("add", `[3 1 "fifth"]`); !strings.Contains(got, ":full") {
-		t.Errorf("a fifth task = %s", got)
+	for i := 4; i <= 12; i++ {
+		call("add", fmt.Sprintf(`[3 %d "last"]`, i))
 	}
-	call("remove", `[3 4]`)
+	if got := call("add", `[3 1 "thirteenth"]`); !strings.Contains(got, ":full") {
+		t.Errorf("a thirteenth task = %s", got)
+	}
+	for i := 12; i >= 4; i-- {
+		call("remove", fmt.Sprintf(`[3 %d]`, i))
+	}
 	if got := call("remove", `[3 2]`); got != `(ok ["one" "two"])` {
 		t.Errorf("remove = %s", got)
 	}
@@ -1098,6 +1103,58 @@ esac
 	if got := call("review-again", "[4]"); !strings.Contains(got, ":no-plan") {
 		t.Errorf("review-again of a done plan = %s", got)
 	}
+
+	// Tasks at once: alpha and beta from the base, gamma from both merged;
+	// gamma's branch has them all.
+	os.WriteFile(filepath.Join(dir, "tasks"), []byte(`[{"task": "alpha"}, {"task": "beta", "after": []}, {"task": "gamma", "after": [1, 2]}]`), 0o600)
+	if got := call("start", `["at once" ["true"] {:at-once 2}]`); got != "(ok 5)" {
+		t.Fatalf("plan/start = %s", got)
+	}
+	doneAs := regexp.MustCompile(`plan 5, at once: done\. All 3 tasks built; (whiff/\d+) has them all\.`)
+	var last string
+	eventually(t, "the plan at once", func() string {
+		text, _ := c.Inbox("me")
+		if m := doneAs.FindStringSubmatch(text); m != nil {
+			last = m[1]
+			return "done"
+		}
+		return text
+	}, "done")
+	if got := git("ls-tree", "--name-only", last); !strings.Contains(got, "alpha.txt\nbeta.txt\ngamma.txt") {
+		t.Errorf("%s's files = %q", last, got)
+	}
+	plans := call("plans", "[]")
+	runOf := regexp.MustCompile(`:plan 5 .*:task-runs \{0 (\d+) 1 (\d+) 2 (\d+)\}`).FindStringSubmatch(plans)
+	if runOf == nil {
+		t.Fatalf("plan 5's runs: %s", plans)
+	}
+	if got := git("log", "--format=%s", "whiff/"+runOf[2]); strings.Contains(got, "alpha") {
+		t.Errorf("beta, from the start, has alpha: %q", got)
+	}
+
+	// A budget stops a plan before a task it can't afford; a new one goes on.
+	os.WriteFile(filepath.Join(dir, "costly"), nil, 0o600)
+	if got := call("start", `["on a budget" ["true"] {:at-once 1 :budget 1.5}]`); got != "(ok 6)" {
+		t.Fatalf("plan/start = %s", got)
+	}
+	inboxHas("the budget spent", `"plan 6, on a budget: failed. Its runs spent $2.00, its budget of $1.50: what is built so far is on its branches." {:actions [{:action [:plan/budget 6] :ask "Dollars its runs may spend in all, more than $1.50" :label "Raise the budget"}`)
+	if got := call("budget", "[6 10.0]"); got != "(ok :building)" {
+		t.Fatalf("plan/budget = %s", got)
+	}
+	inboxHas("the plan on a new budget", `"plan 6, on a budget: done. All 3 tasks built;`)
+	os.Remove(filepath.Join(dir, "costly"))
+
+	// :retries takes a task's run that gave up on again, before the plan stops.
+	os.WriteFile(filepath.Join(dir, "tasks"), []byte(`["solo"]`), 0o600)
+	os.WriteFile(filepath.Join(dir, "picky"), nil, 0o600)
+	if got := call("start", `["retried" ["true"] {:retries 1}]`); got != "(ok 7)" {
+		t.Fatalf("plan/start = %s", got)
+	}
+	inboxHas("the retried plan stopped", `"plan 7, retried: failed. Task 1 of 1, run `)
+	if plans := call("plans", "[]"); !regexp.MustCompile(`:plan 7 .*:tries \{0 1\}`).MatchString(plans) {
+		t.Errorf("plan 7 wasn't retried once: %s", plans)
+	}
+	os.Remove(filepath.Join(dir, "picky"))
 }
 
 // TestServiceFileTests runs the (test ...)s in every file in services/, as
