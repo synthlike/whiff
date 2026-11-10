@@ -309,14 +309,19 @@ func (d *daemon) publish(m message) {
 
 // publish is the daemon's publish on the route goroutine.
 func (st *state) publish(m message) {
+	v, _ := puff.ReadValue(m.args)
+	vec, ok := v.(puff.Vector)
+	if !ok || vec.Len() != 1 {
+		st.note(fmt.Sprintf("an event on :%s isn't one value, so it isn't published: %s", m.topic, m.args))
+		return
+	}
 	var e *rpc.Event
 	for w := range st.subs {
 		if w.topics != nil && !w.topics[m.topic] {
 			continue
 		}
 		if e == nil {
-			v, _ := puff.ReadValue(m.args)
-			e = &rpc.Event{At: time.Now(), Topic: m.topic, Value: puff.Print(v.(puff.Vector).At(0)), From: m.from, Origin: string(origin(m.user))}
+			e = &rpc.Event{At: time.Now(), Topic: m.topic, Value: puff.Print(vec.At(0)), From: m.from, Origin: string(origin(m.user))}
 		}
 		select {
 		case w.ch <- *e:

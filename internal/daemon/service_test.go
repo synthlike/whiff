@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/synthlike/whiff/internal/puff"
 )
 
 // writeServices writes name.puff files into dir/services.
@@ -274,5 +276,21 @@ func TestLoadService(t *testing.T) {
 		case tt.want != "" && (err == nil || !strings.Contains(err.Error(), tt.want)):
 			t.Errorf("%s: %v, want %q", tt.name, err, tt.want)
 		}
+	}
+}
+
+// A panic in a handler faults its message rather than ending the daemon,
+// and arguments that aren't a vector are a bad call, not a panic.
+func TestHandlePanic(t *testing.T) {
+	s := &service{name: "boom", d: &daemon{callTimeout: time.Second}, fns: map[string]handler{
+		"go": {native: func(message, []puff.Value) (puff.Value, error) { panic("oops") }},
+	}}
+	r, faulted, stopped := s.handle(context.Background(), message{fn: "go", args: "[]"})
+	if want := `(err {:kind :fault :message ":boom/go panicked: oops"})`; r != want || !faulted || stopped {
+		t.Errorf("a panicking handler = %s %v %v, want %s, faulted", r, faulted, stopped, want)
+	}
+	r, faulted, _ = s.handle(context.Background(), message{fn: "go", args: "5"})
+	if !strings.Contains(r, ":kind :bad-call") || faulted {
+		t.Errorf("arguments 5 = %s %v, want a bad call", r, faulted)
 	}
 }

@@ -409,13 +409,17 @@ func (d *daemon) followFar(ctx context.Context, p *peer, c *rpc.Client, hist []r
 			if strings.Contains(e.Topic, "@") {
 				continue
 			}
+			// One value, or it is dropped: else "1] [2" would publish two.
+			v, err := puff.ReadValue(e.Value)
+			if err != nil {
+				continue
+			}
 			from := e.From
 			if from != "" {
 				from += "@" + p.name
 			}
-			d.publish(message{from: from, topic: farName(e.Topic, p.name), args: "[" + e.Value + "]", lineage: lineage{user: e.Origin == "user"}})
+			d.publish(message{from: from, topic: farName(e.Topic, p.name), args: puff.Print(puff.NewVector(v)), lineage: lineage{user: e.Origin == "user"}})
 			// A published value comes as itself: the task's id.
-			v, _ := puff.ReadValue(e.Value)
 			if n, ok := v.(puff.Int); ok && e.Topic == "tasks/changed" {
 				d.checkFar(p.name, c, []int64{int64(n)})
 			}

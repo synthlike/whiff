@@ -629,6 +629,13 @@ func (s *service) handle(ctx context.Context, m message) (reply string, faulted,
 	var n, optional int
 	var update bool
 	what := ":" + m.to(s.name)
+	// A panic in a native, or in puff, faults this message rather than
+	// ending the daemon and orphaning its jobs.
+	defer func() {
+		if p := recover(); p != nil {
+			reply, faulted, stopped = puff.Print(puff.Errorf("fault", "%s panicked: %v", what, p)), true, false
+		}
+	}()
 	if m.topic != "" {
 		sub, ok := s.subs[m.topic]
 		if !ok {
@@ -654,7 +661,10 @@ func (s *service) handle(ctx context.Context, m message) (reply string, faulted,
 	if err != nil {
 		return fail("bad-call", "%v", err)
 	}
-	vec := v.(puff.Vector)
+	vec, ok := v.(puff.Vector)
+	if !ok {
+		return fail("bad-call", "%s wants its arguments as a vector, got %s", what, m.args)
+	}
 	if l := vec.Len(); l > n || l < n-optional {
 		want := fmt.Sprint(n)
 		if optional > 0 {
