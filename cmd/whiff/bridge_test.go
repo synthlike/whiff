@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -31,12 +32,7 @@ func TestBridge(t *testing.T) {
   (on (hello name) "Greets name."
     (ok (string/concat "hello, " name))))
 `), 0o600)
-	t.Cleanup(func() {
-		if c, err := rpc.Dial(dir, nil); err == nil {
-			c.Stop()
-			c.Close()
-		}
-	})
+	t.Cleanup(func() { stopBridged(t, dir) })
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	bridge := []string{os.Args[0], "bridge"}
@@ -224,4 +220,41 @@ func TestPeerQueues(t *testing.T) {
 		_, out, _ := whiff("pending")
 		return strings.Contains(out, "peer far is offline: its inbox isn't shown") || strings.Contains(out, "peer far is connecting")
 	})
+}
+
+// stopBridged stops the daemon a bridge started on dir and waits until it
+// has let go of its lock. A test that failed may have given up on a
+// bridge whose daemon, under load, was still starting: it watches for one
+// a while, so none outlives the test, serving a directory nobody owns.
+func stopBridged(t *testing.T, dir string) {
+	watch := 5 * time.Second // it returns once the lock is free
+	if t.Failed() {
+		watch = 10 * time.Second
+	}
+	for deadline := time.Now().Add(watch); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		if c, err := rpc.Dial(dir, nil); err == nil {
+			c.Stop()
+			c.Close()
+		}
+		if !locked(filepath.Join(dir, "whiff.lock")) && !t.Failed() {
+			return
+		}
+	}
+	if locked(filepath.Join(dir, "whiff.lock")) {
+		t.Errorf("the daemon on %s still runs", dir)
+	}
+}
+
+// locked says whether a daemon holds the lock at path.
+func locked(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		return true
+	}
+	syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	return false
 }
