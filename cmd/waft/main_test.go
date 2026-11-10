@@ -352,7 +352,8 @@ func TestWhiffLib(t *testing.T) {
    (user "whiff" {:linger #t}
      [(whiff {:version "v0.8.0"
               :env {"KEY" {:env "KEY"}}
-              :services ["services/pipeline.puff"]})])])`)
+              :services ["services/pipeline.puff"]
+              :git {:name "O'Brien"}})])])`)
 	os.WriteFile(filepath.Join(filepath.Dir(path), "whiff.puff"), lib, 0o644)
 	hosts, err := load(context.Background(), path)
 	if err != nil {
@@ -365,6 +366,8 @@ func TestWhiffLib(t *testing.T) {
 	want := `pkg golang-go  []
 user whiff  []
 go-bin github.com/synthlike/whiff/cmd/whiff@v0.8.0 whiff [whiff]
+go-bin github.com/synthlike/whiff/cmd/huff@v0.8.0 whiff []
+cmd git identity for pipeline's commits whiff []
 env ~/.whiff/env whiff [whiff]
 file ~/.config/systemd/user/whiff.service whiff [whiff]
 file ~/.whiff/services/pipeline.puff whiff []
@@ -373,13 +376,20 @@ cmd whiff enabled and running whiff []`
 		t.Errorf("got:\n%s\nwant:\n%s", g, want)
 	}
 	rs := hosts[0].resources
-	if f := rs[4].(*file); !strings.Contains(f.content, "ExecStart=%h/go/bin/whiff daemon\nEnvironmentFile=-%h/.whiff/env\n") {
+	// A name of its own, quoted; an email by default; and never one the
+	// user has.
+	if c := rs[4].(*cmd); c.script != "git config --global user.name 'O'\\''Brien'\ngit config --global user.email 'whiff@localhost'" ||
+		c.unless != "git config --global user.name >/dev/null && git config --global user.email >/dev/null" {
+		t.Errorf("git identity %q unless %q", c.script, c.unless)
+	}
+	// huff, on the unit's PATH, before what the env file may set.
+	if f := rs[6].(*file); !strings.Contains(f.content, "ExecStart=%h/go/bin/whiff daemon\nEnvironment=PATH=%h/go/bin:/usr/local/bin:/usr/bin:/bin\nEnvironmentFile=-%h/.whiff/env\n") {
 		t.Errorf("unit:\n%s", f.content)
 	}
-	if f := rs[5].(*file); f.from != filepath.Join(filepath.Dir(path), "services/pipeline.puff") {
+	if f := rs[7].(*file); f.from != filepath.Join(filepath.Dir(path), "services/pipeline.puff") {
 		t.Errorf("service from %s", f.from)
 	}
-	if c := rs[6].(*cmd); !strings.HasPrefix(c.script, userBus+"\n") || !strings.HasPrefix(c.unless, userBus+";") {
+	if c := rs[8].(*cmd); !strings.HasPrefix(c.script, userBus+"\n") || !strings.HasPrefix(c.unless, userBus+";") {
 		t.Errorf("cmd %q unless %q", c.script, c.unless)
 	}
 }

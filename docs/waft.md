@@ -96,8 +96,10 @@ cp cmd/waft/lib/whiff.puff cmd/waft/lib/hardened.puff .
 ```
 
 [`whiff.puff`](../cmd/waft/lib/whiff.puff) gives a user their own whiff:
-installed with `go install` at a version, a systemd user unit that loads
-`~/.whiff/env`, the service files, and the daemon running. Once applied,
+whiff and huff installed with `go install` at a version, a systemd user
+unit that loads `~/.whiff/env` and finds huff, a git identity for
+pipeline's commits if the user has none (`:git {:name :email}`, `whiff`
+by default), the service files, and the daemon running. Once applied,
 reach it from your machine as a [peer](design.md#peers):
 
 ```sh
