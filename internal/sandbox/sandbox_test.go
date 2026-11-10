@@ -10,7 +10,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -64,7 +63,6 @@ func TestImage(t *testing.T) {
 // TestImageRuns runs the built image where there is one: the toolchain a
 // sandboxed command gets.
 func TestImageRuns(t *testing.T) {
-	oneContainerAtATime(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	b, err := Find(runtime.GOOS, exec.LookPath)
@@ -84,9 +82,9 @@ func TestImageRuns(t *testing.T) {
 }
 
 func TestArgs(t *testing.T) {
-	c := &Container{Backend: backends["linux"], ModCache: "/home/u/go/pkg/mod"}
+	c := &Container{Backend: backends["linux"], ModCache: "/home/u/go/pkg/mod", BuildCache: "whiff-gocache"}
 	got := strings.Join(c.Args("whiff-job-1", "/src/p", []string{"go", "test"}), " ")
-	want := "podman run --rm --init --name whiff-job-1 -v /src/p:/src/p -w /src/p -v " + cacheVolume +
+	want := "podman run --rm --init --name whiff-job-1 -v /src/p:/src/p -w /src/p -v whiff-gocache:" + goCache +
 		" -v /home/u/go/pkg/mod:/go/pkg/mod:ro --network none " + Image + " go test"
 	if got != want {
 		t.Errorf("Args =\n%s\nwant\n%s", got, want)
@@ -103,7 +101,6 @@ func TestArgs(t *testing.T) {
 // TestContainer runs commands in a sandbox where there is one: what they
 // can't reach, and that a cancel ends them and their container.
 func TestContainer(t *testing.T) {
-	oneContainerAtATime(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	c, err := New(ctx, false)
@@ -155,6 +152,58 @@ func TestContainer(t *testing.T) {
 	c.End(ctx, name)
 	if !c.Gone(ctx, name) {
 		t.Error("the container outlived End")
+	}
+}
+
+// TestContainersOverlap runs a sandboxed command while another runs,
+// where there is a sandbox, as pipeline runs side by side do: both share
+// Go's build cache, which on macOS a volume, attached to one VM at a time,
+// couldn't hold.
+func TestContainersOverlap(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	c, err := New(ctx, false)
+	if err != nil {
+		t.Skip(err)
+	}
+	dir := t.TempDir()
+	name := Name("test")
+	long := c.Command(ctx, name, dir, []string{"sleep", "30"})
+	if err := long.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		c.End(ctx, name)
+		long.Wait()
+	}()
+	for deadline := time.Now().Add(time.Minute); c.Gone(ctx, name); time.Sleep(100 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the first container didn't start")
+		}
+	}
+	out, err := c.Command(ctx, Name("test"), dir, []string{"sh", "-c", "touch /root/.cache/go-build/x && echo second"}).CombinedOutput()
+	if err != nil || string(out) != "second\n" {
+		t.Errorf("a second container while one runs = %q %v", out, err)
+	}
+	if c.Backend.Volume == "" {
+		if _, err := os.Stat(filepath.Join(c.BuildCache, "x")); err != nil {
+			t.Errorf("the build cache isn't %s: %v", c.BuildCache, err)
+		}
+		os.Remove(filepath.Join(c.BuildCache, "x"))
+	}
+}
+
+// Apple's runtime keeps Go's build cache in a host directory of whiff's,
+// podman in its named volume.
+func TestBuildCache(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", "")
+	if got, err := buildCache(backends["linux"]); got != "whiff-gocache" || err != nil {
+		t.Errorf("podman's build cache = %q %v", got, err)
+	}
+	got, err := buildCache(backends["darwin"])
+	if fi, serr := os.Stat(got); err != nil || serr != nil || !fi.IsDir() || !strings.HasSuffix(got, filepath.Join("whiff", "sandbox-go-build")) {
+		t.Errorf("Apple's build cache = %q %v %v", got, err, serr)
 	}
 }
 
@@ -233,7 +282,6 @@ func TestGitDirs(t *testing.T) {
 // sandbox: it reads, as a pipeline's dev and check do, and can't write
 // the repository's .git.
 func TestContainerGit(t *testing.T) {
-	oneContainerAtATime(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	c, err := New(ctx, false)
@@ -260,20 +308,4 @@ func TestContainerGit(t *testing.T) {
 	if _, err := os.Stat(hook); err == nil {
 		t.Error("a sandboxed command left a hook in the repository")
 	}
-}
-
-// oneContainerAtATime holds a lock on this machine for the rest of the
-// test, shared by every whiff package's tests that boot a container:
-// Apple's runtime fails to bootstrap two at once, and go test runs
-// packages side by side.
-func oneContainerAtATime(t *testing.T) {
-	t.Helper()
-	f, err := os.OpenFile(filepath.Join(os.TempDir(), "whiff-container-tests.lock"), os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { f.Close() })
 }

@@ -42,6 +42,11 @@ type Backend struct {
 	Run     []string // run's own flags, as Apple's to keep progress out of output
 	Inspect []string // argv, before a name, that fails if no container has it
 	Remove  []string // argv, before a name, that ends and deletes its container
+	// Volume is the named volume Go's build cache is kept in, or "" for
+	// a host directory: an Apple volume is a disk image one VM at a time
+	// can attach, so a second sandboxed command while one runs wouldn't
+	// start.
+	Volume string
 }
 
 // noNet is the network Apple's container runs commands without a network on.
@@ -65,6 +70,7 @@ var backends = map[string]Backend{
 		NoNet:   []string{"--network", "none"},
 		Inspect: []string{"podman", "container", "inspect"},
 		Remove:  []string{"podman", "rm", "--force", "--time", "0"},
+		Volume:  "whiff-gocache",
 	},
 }
 

@@ -458,8 +458,10 @@ it the network.
 - **What a command sees.** Its directory, read-write, at the same path,
   so paths in its output are the host's. Go's module cache read-only, if
   the host has one, so builds need no network for modules it has, and
-  Go's build cache in a volume of the runtime's that only sandboxed
-  commands share. In a git worktree, as a pipeline run's, the
+  Go's build cache, which only sandboxed commands share: podman's named
+  volume, or on macOS a directory of whiff's in the host's cache
+  directory, as an Apple volume is a disk one container at a time can
+  attach. In a git worktree, as a pipeline run's, the
   repository's `.git` read-only, so status, diff and log work there,
   while a commit fails and nothing in the container can write the
   repository's hooks, config or refs. Not your home, other repositories,

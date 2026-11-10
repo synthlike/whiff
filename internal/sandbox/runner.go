@@ -51,9 +51,8 @@ func (Direct) Command(ctx context.Context, _, dir string, argv []string) *exec.C
 func (Direct) Gone(context.Context, string) bool { return true }
 func (Direct) End(context.Context, string)       {}
 
-// cacheVolume is the runtime's named volume Go's build cache is kept in,
-// across sandboxed commands: not a host directory.
-const cacheVolume = "whiff-gocache:/root/.cache/go-build"
+// goCache is where Go's build cache is in a container.
+const goCache = "/root/.cache/go-build"
 
 // Container runs each command in a new container of Image, removed as it
 // ends, that sees only its dir, at the same path, so paths in its output
@@ -64,6 +63,10 @@ type Container struct {
 	Backend
 	Net      bool   // the command may reach the network, and the host's servers
 	ModCache string // the host's Go module cache, or ""
+	// BuildCache is what holds Go's build cache across sandboxed
+	// commands, which share it and nothing else does: the runtime's named
+	// volume, or a host directory of its own (Backend.Volume); "" for none.
+	BuildCache string
 }
 
 // New is the Container for this host, or why there can't be one: no
@@ -83,7 +86,25 @@ func New(ctx context.Context, net bool) (*Container, error) {
 	if !net && !b.HasNetwork(ctx) {
 		return nil, fmt.Errorf("the sandbox's network %s isn't there: whiff sandbox build makes it", noNet)
 	}
-	return &Container{Backend: b, Net: net, ModCache: modCache()}, nil
+	cache, err := buildCache(b)
+	if err != nil {
+		return nil, err
+	}
+	return &Container{Backend: b, Net: net, ModCache: modCache(), BuildCache: cache}, nil
+}
+
+// buildCache is b's volume, or else a directory in the host's cache
+// directory that sandboxed commands alone use, made if it isn't there.
+func buildCache(b Backend) (string, error) {
+	if b.Volume != "" {
+		return b.Volume, nil
+	}
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		return "", err
+	}
+	dir = filepath.Join(dir, "whiff", "sandbox-go-build")
+	return dir, os.MkdirAll(dir, 0o700)
 }
 
 // Host is a Container for this host's runtime, to find and end commands by
@@ -189,7 +210,10 @@ const endGrace = 5 * time.Second
 // Args is the runtime's argv that runs argv in dir, as name.
 func (c *Container) Args(name, dir string, argv []string) []string {
 	args := append([]string{c.Name, "run"}, c.Run...)
-	args = append(args, "--rm", "--init", "--name", name, "-v", dir+":"+dir, "-w", dir, "-v", cacheVolume)
+	args = append(args, "--rm", "--init", "--name", name, "-v", dir+":"+dir, "-w", dir)
+	if c.BuildCache != "" {
+		args = append(args, "-v", c.BuildCache+":"+goCache)
+	}
 	for _, d := range gitDirs(dir) {
 		args = append(args, "-v", d+":"+d+":ro")
 	}
