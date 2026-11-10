@@ -37,8 +37,11 @@ An MCP client should use its tools to call whiff. Running the normal
 
 ## Give an agent a mailbox
 
-Resident agents need the Claude CLI installed and authenticated, with
-`claude` and `whiff` on the daemon's `PATH`. Create
+A resident agent on a Claude model needs the Claude CLI installed and
+authenticated, with `claude` and `whiff` on the daemon's `PATH`; one on
+another provider's model needs `huff` there and that provider's key (see
+[On other models, with huff](#on-other-models-with-huff)). The included
+`assistant` runs on Kimi K2 through OpenRouter. Create
 `~/.whiff/services/helper.puff`:
 
 ```lisp

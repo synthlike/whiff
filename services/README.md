@@ -67,7 +67,9 @@ Or try one without installing it: `whiff try services/git.puff status`.
   board shows it first. `show` is every project's, `for project` one's;
   sniff's sidebar opens it, for the project shown if one is.
 - `assistant`: a resident agent, one `(agent assistant :prompt "...")`
-  form. `tell text` wakes Claude for one turn of the same session, with no
+  form on Kimi K2 through OpenRouter, run by huff (the daemon needs
+  `OPENROUTER_API_KEY`; `:model ""` puts it on the claude CLI). `tell text`
+  wakes its model for one turn of the same session, with no
   tools; its answer lands in your inbox (`whiff inbox`), and replying to it
   is your next message; `ask text` answers whoever asked instead, so a
   service can use it. Its home is `~/.whiff/agents/assistant`. Another
@@ -76,7 +78,7 @@ Or try one without installing it: `whiff try services/git.puff status`.
   `:every 1d` if you like; `:can [:assistant/ask]` lets it delegate to
   another agent, whose answer comes back as a turn of its own (one turn for all
   that a turn started). `usage` says what it spent, `stop` ends the
-  turn running now, and `pause`/`resume` hold its turns while messages wait. Needs the claude CLI.
+  turn running now, and `pause`/`resume` hold its turns while messages wait.
 - `digest`: an agent that briefs you on this repository once a day: open
   pull requests and their checks, open TODO items and uncommitted work, in
   your inbox, and only what changed. `ask "brief me"` for one now. Its

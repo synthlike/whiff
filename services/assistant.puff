@@ -1,9 +1,10 @@
 ; assistant: a resident agent you talk to by leaving it messages. Each
-; message wakes Claude for one turn of the same session, so it remembers the
-; whole conversation, days apart; its answer lands in your inbox. Replying
+; message wakes a model for one turn of the same conversation, so it
+; remembers all of it, days apart; its answer lands in your inbox. Replying
 ; to an answer is your next message, and messages that come while it answers
 ; wait their turn. It has no tools: it reads what you send and answers.
-; Needs the claude CLI.
+; It runs on huff, on Kimi K2 through OpenRouter: the daemon needs
+; OPENROUTER_API_KEY. Its conversation is puff data in its home.
 ;   whiff call assistant/tell "the release is on Friday; remind me what's left"
 ;   whiff inbox                  ; its answer, from :assistant
 ;   whiff reply 7 "and the docs?"   ; the next message; or :seen to dismiss
@@ -12,10 +13,13 @@
 ;   whiff call assistant/forget  ; start a new conversation
 ;
 ; Its home is ~/.whiff/agents/<its name>. For another agent, write another
-; (agent name :prompt "...") file; :model picks Claude's model, :can
-; [:gh/prs :todo/add] gives it those whiff functions as tools (another
-; agent's :helper/ask too, whose answer comes back as a turn), and :every
-; 1d gives it a turn of its own each day, which answers only with news.
+; (agent name :prompt "...") file; :model picks the model, a provider's as
+; here or a Claude model ("" for Claude's default, "opus"), which runs on
+; the claude CLI; :can [:gh/prs :todo/add] gives it those whiff functions
+; as tools (another agent's :helper/ask too, whose answer comes back as a
+; turn), and :every 1d gives it a turn of its own each day, which answers
+; only with news.
 
 (agent assistant
-  :prompt "Help the user keep track of what they tell you.")
+  :prompt "Help the user keep track of what they tell you."
+  :model "openrouter/moonshotai/kimi-k2")

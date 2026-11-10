@@ -161,7 +161,9 @@ such as its shell, have their own permissions.
 ### Run a resident agent
 
 An agent can also live in whiff, with its own mailbox and conversation.
-The included agents use the Claude CLI. Install the assistant:
+The assistant runs on Kimi K2 through OpenRouter, on huff, so the daemon
+needs `OPENROUTER_API_KEY`; an agent whose `:model` is a Claude model, or
+none, runs on the Claude CLI. Install the assistant:
 
 ```sh
 ln -s "$PWD"/services/assistant.puff ~/.whiff/services/

@@ -249,3 +249,120 @@ func readTrim(t *testing.T, path string) string {
 	}
 	return strings.TrimSpace(string(b))
 }
+
+// TestAssistantOnHuff runs services/assistant.puff as shipped, on huff,
+// with its model swapped for a model server that answers what it was told
+// last: told twice, it answers each in your inbox, and the second turn's
+// request carries the first, one conversation.
+func TestAssistantOnHuff(t *testing.T) {
+	t.Parallel()
+	src := shippedAssistant(t)
+	dir := tempDir(t)
+	withHuff(t, dir)
+	var mu sync.Mutex
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, string(b))
+		mu.Unlock()
+		var req struct {
+			Messages []struct{ Content string }
+		}
+		json.Unmarshal(b, &req)
+		text, _ := json.Marshal("Noted: " + req.Messages[len(req.Messages)-1].Content)
+		io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":`+string(text)+`},"finish_reason":"stop"}],"usage":{"prompt_tokens":20,"completion_tokens":4,"cost":0.001}}`)
+	}))
+	defer srv.Close()
+	setEnv(t, dir, "WHIFF_LOCAL_URL", srv.URL)
+	writeServices(t, dir, map[string]string{
+		"assistant": strings.Replace(src, assistantModel, `:model "local/fake"`, 1),
+	})
+	start(t, dir)
+	c := dial(t, dir)
+	for _, said := range []string{"the release is on Friday", "and the docs"} {
+		if resp, err := c.Eval(`(call :assistant/tell "`+said+`")`, ""); err != nil || resp.Error != "" {
+			t.Fatalf("tell %q = %+v %v", said, resp, err)
+		}
+		eventually(t, "the answer to "+said, func() string {
+			text, err := c.Inbox("me")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(text, "Noted: "+said) {
+				return "answered"
+			}
+			return text
+		}, "answered")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(bodies) != 2 {
+		t.Fatalf("%d requests, want 2", len(bodies))
+	}
+	for _, want := range []string{`"model":"fake"`, `Help the user keep track of what they tell you.`, `the release is on Friday`, `Noted: the release is on Friday`, `and the docs`} {
+		if !strings.Contains(bodies[1], want) {
+			t.Errorf("the second request has no %s:\n%s", want, bodies[1])
+		}
+	}
+}
+
+// TestAssistantOnOpenRouter runs services/assistant.puff as shipped, on
+// its real model, when WHIFF_TEST_OPENROUTER=1 and OPENROUTER_API_KEY is
+// set: told a fact, then asked it, it remembers. It costs well under a
+// cent.
+func TestAssistantOnOpenRouter(t *testing.T) {
+	if os.Getenv("WHIFF_TEST_OPENROUTER") != "1" || os.Getenv("OPENROUTER_API_KEY") == "" {
+		t.Skip("set WHIFF_TEST_OPENROUTER=1 and OPENROUTER_API_KEY to run it on OpenRouter")
+	}
+	dir := tempDir(t)
+	withHuff(t, dir)
+	writeServices(t, dir, map[string]string{"assistant": shippedAssistant(t)})
+	start(t, dir)
+	c := dial(t, dir)
+	answers := 0
+	for _, said := range []string{
+		"Remember this: the release is on Friday. Answer only: ok.",
+		"Which day is the release? Answer with the day only.",
+	} {
+		if resp, err := c.Eval(`(call :assistant/tell "`+said+`")`, ""); err != nil || resp.Error != "" {
+			t.Fatalf("tell %q = %+v %v", said, resp, err)
+		}
+		answers++
+		var text string
+		for deadline := time.Now().Add(2 * time.Minute); ; time.Sleep(time.Second) {
+			var err error
+			if text, err = c.Inbox("me"); err != nil {
+				t.Fatal(err)
+			}
+			if strings.Count(text, ":assistant") >= answers {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("no answer to %q: inbox %s", said, text)
+			}
+		}
+		t.Logf("inbox after %q:\n%s", said, text)
+		if answers == 2 && !strings.Contains(text, "Friday") {
+			t.Errorf("it forgot the day: %s", text)
+		}
+	}
+	if got, _ := c.Eval(`(call :assistant/usage)`, ""); got.Value != "" {
+		t.Logf("usage: %s", got.Value)
+	}
+}
+
+// assistantModel is the model services/assistant.puff ships with.
+const assistantModel = `:model "openrouter/moonshotai/kimi-k2"`
+
+func shippedAssistant(t *testing.T) string {
+	t.Helper()
+	src, err := os.ReadFile(filepath.Join("..", "..", "services", "assistant.puff"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(src), assistantModel) {
+		t.Fatalf("assistant.puff has no %s", assistantModel)
+	}
+	return string(src)
+}

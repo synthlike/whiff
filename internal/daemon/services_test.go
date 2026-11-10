@@ -431,16 +431,14 @@ answer "$mode in $(basename "$PWD"): $msg"
 	setEnv(t, dir, "HOME", dir)
 }
 
-// TestAssistantService runs services/assistant.puff, installed, with a
-// fake claude on PATH that says whether it starts or resumes the session
+// TestAssistantService runs services/assistant.puff, installed, on the
+// claude CLI rather than its model, with a fake claude on PATH that says whether it starts or resumes the session
 // and echoes the message; and watcher, an agent with :model and :every,
 // whose first scheduled turn has nothing to say and its second news.
 func TestAssistantService(t *testing.T) {
 	t.Parallel()
-	src, err := os.ReadFile(filepath.Join("..", "..", "services", "assistant.puff"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	// It ships on huff; :model "" runs it on the claude CLI instead.
+	src := []byte(strings.Replace(shippedAssistant(t), assistantModel, `:model ""`, 1))
 	dir := tempDir(t)
 	fakeClaude(t, dir)
 	// helper is a copy under another name whose home began a conversation
