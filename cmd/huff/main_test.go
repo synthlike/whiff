@@ -87,6 +87,33 @@ func TestHuffJSON(t *testing.T) {
 	}
 }
 
+// -compact summarizes a transcript that grew past it, says so as claude
+// -p does, keeps the summary in -t's file, and what it summarized beside
+// it.
+func TestHuffCompact(t *testing.T) {
+	env := map[string]string{"WHIFF_LOCAL_URL": model(t)}
+	dir := t.TempDir()
+	tr := filepath.Join(dir, "huff-s1.puff")
+	for _, said := range []string{"the release is on Friday", "and the docs"} {
+		runHuff(t, env, "", "-m", "local/x", "-t", tr, said)
+	}
+	out, errs, code := runHuff(t, env, "", "-json", "-compact", "10", "-m", "local/x", "-t", tr, "what is left?")
+	if code != 0 || !strings.Contains(out, `"subtype":"compact_boundary"`) {
+		t.Fatalf("%d %s\n%s", code, errs, out)
+	}
+	b, _ := os.ReadFile(tr)
+	if !strings.HasPrefix(string(b), `[{:role :user :text "`+strings.TrimSuffix(huff.SummaryPrefix, "\n\n")) || !strings.Contains(string(b), "User: the release is on Friday") || !strings.Contains(string(b), `"what is left?"`) {
+		t.Errorf("transcript: %s", b)
+	}
+	before, _ := filepath.Glob(filepath.Join(dir, "huff-s1.before-*.puff"))
+	if len(before) != 1 {
+		t.Fatalf("kept before compacting: %v", before)
+	}
+	if b, _ := os.ReadFile(before[0]); !strings.HasPrefix(string(b), `[{:role :user :text "the release is on Friday"}`) || !strings.Contains(string(b), `"what is left?"`) {
+		t.Errorf("before compacting: %s", b)
+	}
+}
+
 // What's missing says so.
 func TestHuffErrors(t *testing.T) {
 	huff.Backoff = time.Millisecond

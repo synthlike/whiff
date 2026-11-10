@@ -102,6 +102,12 @@ It bills per token to those keys, not to a Claude subscription. Its tools
 are the same `:can` functions, called as the agent's session, so writes
 meet the review gate and history has each call. The conversation is kept
 in `~/.whiff/agents/<name>/huff-<session>.puff`, puff data you can read.
+Once a model call would send about 80,000 tokens (`huff -compact`), the
+model summarizes the older part of the conversation and the summary takes
+its place, so a long-lived agent stays cheap and within its model's
+context; the transcript as it was is kept beside it, as
+`huff-<session>.before-<time>.puff`, and the turn's steps say
+"compacted". The summary's cost is the turn's.
 A turn stops at 20 model calls, or at `:turn` dollars where the provider
 reports cost, as OpenRouter does. A turn whose daemon dies stops within
 a second, dropping the call it waits on, rather than going on, billed,

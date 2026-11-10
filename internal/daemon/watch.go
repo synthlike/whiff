@@ -113,10 +113,13 @@ func step(line string) []puff.Value {
 	}
 	switch l.Type {
 	case "system":
-		if l.Subtype != "init" {
-			return nil
+		switch l.Subtype {
+		case "init":
+			return []puff.Value{stepItem("began", l.Model, "")}
+		case "compact_boundary":
+			return []puff.Value{stepItem("compacted", "the conversation: its older part summarized", "")}
 		}
-		return []puff.Value{stepItem("began", l.Model, "")}
+		return nil
 	case "assistant", "user":
 		var vs []puff.Value
 		for _, c := range l.Message.Content {

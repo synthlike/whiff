@@ -1,6 +1,7 @@
 // Package huff is whiff's own agent harness: a model, a transcript and
 // tools, a turn at a time (run.go), the tools files and commands in a
 // directory, as claude -p's (local.go), or what its caller gives it.
+// A transcript past a limit is compacted (compact.go).
 // This file is its provider-neutral transcript and the providers a
 // model's name picks; chat.go speaks OpenAI's Chat Completions format,
 // which OpenRouter, OpenAI and local servers share. It knows nothing of

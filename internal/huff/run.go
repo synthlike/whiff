@@ -41,25 +41,35 @@ type Turn struct {
 	// holds back credit for each call in flight as if its reply were that
 	// long, so a model's whole limit can refuse calls the credit would pay.
 	MaxTokens int
+	// Compact, if not 0, is how many tokens, as Estimate guesses them, a
+	// model call may send before the transcript is compacted (compact.go),
+	// keeping about a quarter of it as it was. Compacted, if not nil,
+	// hears that it was, with what the summary took.
+	Compact   int
+	Compacted func(u Usage)
 }
 
 // A Result is how a run ended: the model's last text, the transcript with
-// the run's messages, what it took, how many model calls it made, and why
-// it stopped: "end", "length" or "filter" as the model's last reply said,
-// or "calls", "usd" or "tokens" for the limit it reached.
+// the run's messages, what it took, summaries included, how many model
+// calls it made, and why it stopped: "end", "length" or "filter" as the
+// model's last reply said, or "calls", "usd" or "tokens" for the limit it
+// reached. If the run compacted the transcript, Compacted says how many
+// times, and Full is the transcript as it would be without, to keep.
 type Result struct {
-	Text    string
-	History []Message
-	Usage   Usage
-	Calls   int
-	Stop    string
+	Text      string
+	History   []Message
+	Usage     Usage
+	Calls     int
+	Stop      string
+	Compacted int
+	Full      []Message
 }
 
 // Run runs t: it calls the model, runs the tools it asks for, gives it
 // their answers, and goes on until it answers without calling any, or
 // reaches a limit. An error from the provider ends it, with the result so
 // far, the transcript as far as it got.
-func Run(ctx context.Context, t Turn) (Result, error) {
+func Run(ctx context.Context, t Turn) (r Result, err error) {
 	maxCalls := t.Limits.Calls
 	if maxCalls <= 0 {
 		maxCalls = 20
@@ -68,7 +78,17 @@ func Run(ctx context.Context, t Turn) (Result, error) {
 	if step == nil {
 		step = func(Message, Usage) {}
 	}
-	r := Result{History: append(append([]Message(nil), t.History...), Message{Role: "user", Text: t.Input})}
+	r = Result{History: append(append([]Message(nil), t.History...), Message{Role: "user", Text: t.Input})}
+	full := append([]Message(nil), r.History...)
+	add := func(m Message) {
+		r.History = append(r.History, m)
+		full = append(full, m)
+	}
+	defer func() {
+		if r.Compacted > 0 {
+			r.Full = full
+		}
+	}()
 	var tools []Tool
 	if t.Tools != nil {
 		tools = t.Tools.Tools()
@@ -78,13 +98,27 @@ func Run(ctx context.Context, t Turn) (Result, error) {
 			r.Stop = "calls"
 			return r, nil
 		}
+		if t.Compact > 0 && Estimate(t.System, r.History) > t.Compact {
+			ms, u, ok, err := Compact(ctx, t.Provider, t.Model, t.System, r.History, t.Compact/4, t.MaxTokens)
+			r.Usage = r.Usage.Add(u)
+			if err != nil {
+				return r, err
+			}
+			if ok {
+				r.History = append([]Message(nil), ms...)
+				r.Compacted++
+				if t.Compacted != nil {
+					t.Compacted(u)
+				}
+			}
+		}
 		reply, err := t.Provider.Complete(ctx, Request{Model: t.Model, System: t.System, Messages: r.History, Tools: tools, MaxTokens: t.MaxTokens})
 		if err != nil {
 			return r, err
 		}
 		r.Calls++
 		r.Usage = r.Usage.Add(reply.Usage)
-		r.History = append(r.History, reply.Message)
+		add(reply.Message)
 		if reply.Message.Text != "" {
 			r.Text = reply.Message.Text
 		}
@@ -100,7 +134,7 @@ func Run(ctx context.Context, t Turn) (Result, error) {
 			} else {
 				m.Result, m.IsError = t.Tools.Call(ctx, c)
 			}
-			r.History = append(r.History, m)
+			add(m)
 			step(m, Usage{})
 		}
 		switch {

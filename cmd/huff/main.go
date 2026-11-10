@@ -97,6 +97,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	calls := fs.Int("calls", 20, "the most model calls a turn makes")
 	usd := fs.Float64("usd", 0, "the most dollars a turn spends, as the provider reports cost; 0 for no limit")
 	tokens := fs.Int("tokens", 0, "the most tokens a turn uses, in and out; 0 for no limit")
+	compact := fs.Int("compact", 80000, "summarize the older part of the transcript once a model call would send about this many tokens, keeping the transcript before it beside -t's file; 0 never")
 	maxTokens := fs.Int("max-tokens", 16384, "the most tokens a reply may have; 0 for the provider's default")
 	stream := fs.Bool("json", false, "print each step as a line of JSON, as claude -p --output-format stream-json does, the last saying how it ended")
 	dir := fs.String("dir", "", "where its tools act; the working directory by default")
@@ -139,11 +140,13 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 
 	t := huff.Turn{Provider: p, Model: name, System: *system, History: history, Input: input,
-		Limits: huff.Limits{Calls: *calls, USD: *usd, Tokens: *tokens}, MaxTokens: *maxTokens}
+		Limits: huff.Limits{Calls: *calls, USD: *usd, Tokens: *tokens}, MaxTokens: *maxTokens, Compact: *compact}
 	out := json.NewEncoder(stdout)
 	if *stream {
 		out.Encode(map[string]any{"type": "system", "subtype": "init", "model": *model})
 		t.Step = func(m huff.Message, _ huff.Usage) { out.Encode(streamStep(m)) }
+		// As claude -p says it compacted.
+		t.Compacted = func(huff.Usage) { out.Encode(map[string]any{"type": "system", "subtype": "compact_boundary"}) }
 	}
 	wd := *dir
 	if wd == "" {
@@ -188,6 +191,12 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 
 	r, err := huff.Run(ctx, t)
+	if r.Compacted > 0 && *transcript != "" {
+		before := strings.TrimSuffix(*transcript, ".puff") + ".before-" + time.Now().Format("20060102T150405") + ".puff"
+		if werr := writeTranscript(before, r.Full); werr != nil {
+			fmt.Fprintf(stderr, "huff: the transcript before compacting isn't kept: %v\n", werr)
+		}
+	}
 	if werr := writeTranscript(*transcript, r.History); werr != nil {
 		fmt.Fprintf(stderr, "huff: the transcript isn't kept: %v\n", werr)
 	}

@@ -263,7 +263,7 @@ func TestTaskWatch(t *testing.T) {
 	dir := tempDir(t)
 	start(t, dir)
 	c := dial(t, dir)
-	script := `printf '%s\n' '{"type":"system","subtype":"init","model":"haiku"}' '{"type":"assistant","message":{"content":[{"type":"text","text":"Let me look."},{"type":"tool_use","name":"mcp__whiff__todo_list","input":{}}]}}' '{"type":"user","message":{"content":[{"type":"tool_result","content":[{"type":"text","text":"(ok [])"}]}]}}' 'plain text'
+	script := `printf '%s\n' '{"type":"system","subtype":"init","model":"haiku"}' '{"type":"system","subtype":"compact_boundary"}' '{"type":"assistant","message":{"content":[{"type":"text","text":"Let me look."},{"type":"tool_use","name":"mcp__whiff__todo_list","input":{}}]}}' '{"type":"user","message":{"content":[{"type":"tool_result","content":[{"type":"text","text":"(ok [])"}]}]}}' 'plain text'
 while [ ! -e go ]; do sleep 0.02; done
 printf '%s\n' '{"subtype":"success","is_error":false,"result":"Nothing to do.","total_cost_usd":0.25,"num_turns":2,"type":"result"}'`
 	r, _ := c.Message("call", "jobs/run", `[["sh" "-c" `+puff.Print(puff.String(script))+`] {:stream #t :as :text}]`, dir)
@@ -285,7 +285,7 @@ printf '%s\n' '{"subtype":"success","is_error":false,"result":"Nothing to do.","
 	eventually(t, "the job's steps", func() string { return fmt.Sprint(strings.Contains(view(), "plain text")) }, "true")
 	got := view()
 	for _, want := range []string{
-		`(ok (items [{:label "began  haiku"} {:label "says  Let me look."} {:label "calls  todo_list {}"} {:label "answer  (ok [])"} {:label "plain text"}]`,
+		`(ok (items [{:label "began  haiku"} {:label "compacted  the conversation: its older part summarized"} {:label "says  Let me look."} {:label "calls  todo_list {}"} {:label "answer  (ok [])"} {:label "plain text"}]`,
 		`{:changed [:jobs/` + id + ` :tasks/changed]}`,
 	} {
 		if !strings.Contains(got, want) {
