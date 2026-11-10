@@ -100,7 +100,9 @@ are the same `:can` functions, called as the agent's session, so writes
 meet the review gate and history has each call. The conversation is kept
 in `~/.whiff/agents/<name>/huff-<session>.puff`, puff data you can read.
 A turn stops at 20 model calls, or at `:turn` dollars where the provider
-reports cost, as OpenRouter does. `huff` needs to be on the daemon's
+reports cost, as OpenRouter does. A turn whose daemon dies stops within
+a second, dropping the call it waits on, rather than going on, billed,
+for nobody; its conversation is kept. `huff` needs to be on the daemon's
 `PATH`, as `go install ./cmd/...` puts it.
 
 The pipeline's developers and reviewers, plan's planner and the

@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/synthlike/whiff/internal/huff"
 	"github.com/synthlike/whiff/internal/puff"
@@ -47,7 +48,38 @@ flags:
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	ctx = whileParent(ctx, os.Getppid(), os.Getppid, time.Second)
 	os.Exit(run(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr, os.Getenv))
+}
+
+// errOrphaned ends a turn whose parent died: nobody hears how it goes.
+var errOrphaned = errors.New("huff's parent ended, as a whiff daemon killed, so the turn stopped")
+
+// whileParent is ctx, cancelled with errOrphaned once the process that
+// started huff is gone, as getppid, checked every so often, says when it
+// is no longer parent: an orphaned turn would go on calling the model,
+// billed, for nobody. A huff whose parent is init already isn't watched.
+func whileParent(ctx context.Context, parent int, getppid func() int, every time.Duration) context.Context {
+	if parent <= 1 {
+		return ctx
+	}
+	ctx, cancel := context.WithCancelCause(ctx)
+	go func() {
+		t := time.NewTicker(every)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if getppid() != parent {
+					cancel(errOrphaned)
+					return
+				}
+			}
+		}
+	}()
+	return ctx
 }
 
 // run is huff with its arguments, streams and environment, returning the
@@ -161,6 +193,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 	why := ""
 	switch {
+	case err != nil && errors.Is(context.Cause(ctx), errOrphaned):
+		why = errOrphaned.Error()
 	case err != nil:
 		why = err.Error()
 	case r.Stop == "calls":

@@ -3,12 +3,15 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -141,5 +144,71 @@ func TestHuffTools(t *testing.T) {
 	}
 	if _, errs, code := runHuff(t, nil, "", "-m", "local/x", "-tools", "Read,Shell", "x"); code != 1 || !strings.Contains(errs, "there is no tool Shell") {
 		t.Errorf("an unknown tool: %d %s", code, errs)
+	}
+}
+
+// TestMain runs huff itself when a test starts this binary as huff.
+func TestMain(m *testing.M) {
+	if os.Getenv("HUFF_TEST_MAIN") == "1" {
+		os.Args = append([]string{"huff"}, strings.Fields(os.Getenv("HUFF_TEST_ARGS"))...)
+		main()
+	}
+	os.Exit(m.Run())
+}
+
+// A turn stops once its parent has gone, and only then.
+func TestWhileParent(t *testing.T) {
+	var ppid atomic.Int64
+	ppid.Store(42)
+	ctx := whileParent(context.Background(), 42, func() int { return int(ppid.Load()) }, time.Millisecond)
+	time.Sleep(20 * time.Millisecond)
+	if ctx.Err() != nil {
+		t.Fatal("cancelled while its parent runs")
+	}
+	ppid.Store(1)
+	select {
+	case <-ctx.Done():
+		if !errors.Is(context.Cause(ctx), errOrphaned) {
+			t.Errorf("cause = %v", context.Cause(ctx))
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("not cancelled once its parent went")
+	}
+	if bg := context.Background(); whileParent(bg, 1, nil, time.Millisecond) != bg {
+		t.Error("a huff init started is watched")
+	}
+}
+
+// TestOrphanedTurn starts huff from a shell that ends at once, as a
+// daemon killed leaves its job: huff drops the model call it waits on,
+// rather than going on, billed, for nobody.
+func TestOrphanedTurn(t *testing.T) {
+	asked, dropped := make(chan struct{}), make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Read: only then does the server notice the client going.
+		io.Copy(io.Discard, r.Body)
+		close(asked)
+		<-r.Context().Done()
+		close(dropped)
+	}))
+	// A huff that failed to stop is cut off, so it ends and Close returns.
+	defer func() { srv.CloseClientConnections(); srv.Close() }()
+	// The shell outlives huff's start, so huff begins with a parent to lose.
+	log := filepath.Join(t.TempDir(), "huff.log")
+	cmd := exec.Command("sh", "-c", `"$0" >"$1" 2>&1 & sleep 1`, os.Args[0], log)
+	cmd.Env = append(os.Environ(), "HUFF_TEST_MAIN=1", "HUFF_TEST_ARGS=-m local/x hello", "WHIFF_LOCAL_URL="+srv.URL+"/v1")
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		ch   chan struct{}
+		what string
+	}{{asked, "huff didn't call the model"}, {dropped, "an orphaned huff kept waiting on the model"}} {
+		select {
+		case <-c.ch:
+		case <-time.After(10 * time.Second):
+			b, _ := os.ReadFile(log)
+			t.Fatalf("%s:\n%s", c.what, b)
+		}
 	}
 }
