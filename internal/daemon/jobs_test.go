@@ -256,3 +256,64 @@ func TestJobs(t *testing.T) {
 	// A service file can't take :jobs's address.
 	inHistory(`jobs.puff:1:1: :jobs is whiff's own address; rename the file`)
 }
+
+// A job with :output :file keeps all it prints in jobs/<id>, next to
+// whiff.db, while its result has the tail, as any job's, and :output; one
+// without keeps only the tail. Old output dirs go at start.
+func TestJobOutputFile(t *testing.T) {
+	dir := tempDir(t)
+	start(t, dir)
+	c := dial(t, dir)
+	wait := func(src string) (string, string) {
+		t.Helper()
+		resp, err := c.Eval(`(match `+src+` [(err {:kind :pending :id id}) id])`, dir)
+		if err != nil || resp.Error != "" {
+			t.Fatalf("%s: %v %s", src, err, resp.Error)
+		}
+		r, err := c.Message("wait", "", "["+resp.Value+"]", dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.Value, r.Value
+	}
+	// 200000 bytes of stdout, over three times what a tail keeps.
+	big := `["sh" "-c" "yes 0123456789abcdefghi | head -c 200000; echo oops >&2"]`
+	id, r := wait(`(call :jobs/run ` + big + ` {:output :file})`)
+	out := filepath.Join(dir, "jobs", id)
+	if !strings.Contains(r, `:output "`+out+`"`) {
+		t.Errorf("the result names no :output %s: %.200s", out, r)
+	}
+	if b, err := os.ReadFile(filepath.Join(out, "stdout")); err != nil || len(b) != 200000 {
+		t.Errorf("stdout file = %d bytes, %v; want 200000", len(b), err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(out, "stderr")); string(b) != "oops\n" {
+		t.Errorf("stderr file = %q", b)
+	}
+	if len(r) > 2*tailSize {
+		t.Errorf("the result is %d bytes: it should hold only the tail", len(r))
+	}
+	// :as :text answers the tail; the file is there all the same.
+	id, r = wait(`(call :jobs/run ["echo" "hi"] {:output :file :as :text})`)
+	if b, _ := os.ReadFile(filepath.Join(dir, "jobs", id, "stdout")); r != `(ok "hi\n")` || string(b) != "hi\n" {
+		t.Errorf(":as :text = %s, file %q", r, b)
+	}
+	// Without it, no dir.
+	id, _ = wait(`(call :jobs/run ["echo" "hi"])`)
+	if _, err := os.Stat(filepath.Join(dir, "jobs", id)); err == nil {
+		t.Errorf("a job without :output :file has a dir")
+	}
+
+	old := filepath.Join(dir, "jobs", "999999")
+	os.MkdirAll(old, 0o700)
+	os.WriteFile(filepath.Join(old, "stdout"), nil, 0o600)
+	long := time.Now().Add(-historyKept - time.Hour)
+	os.Chtimes(filepath.Join(old, "stdout"), long, long)
+	os.Chtimes(old, long, long)
+	pruneOutput(filepath.Join(dir, "jobs"), time.Now().Add(-historyKept))
+	if _, err := os.Stat(old); err == nil {
+		t.Error("an output dir untouched past historyKept stays")
+	}
+	if _, err := os.Stat(out); err != nil {
+		t.Errorf("a new output dir went: %v", err)
+	}
+}

@@ -321,7 +321,8 @@ Each process is a `:jobs/run` job, so the job tools work on them too:
 - `:timeout :none` runs a job until it ends or is stopped; other jobs time
   out after 1h unless their `:timeout` says otherwise.
 - `:jobs/output id` is a running job's output so far: the last 64KiB of
-  stdout and of stderr. `procs/logs` reads it. A stopped job's error
+  stdout and of stderr; a job run with `:output :file` keeps all of it in
+  `~/.whiff/jobs/<id>/`. `procs/logs` reads it. A stopped job's error
   also carries `:stdout` and `:stderr`, including its shutdown output;
   procs keeps that output for its logs after the job ends.
 - Cancelling a job, its timeout, or `whiff stop` sends its process group

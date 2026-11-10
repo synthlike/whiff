@@ -896,6 +896,11 @@ func TestStoredJob(t *testing.T) {
 	if got, err = storedJob(7, puff.Print(j.stored())); err != nil || got.opts.timeout != 0 || got.opts.retry != 1 {
 		t.Errorf("storedJob with :timeout :none = %+v %v", got, err)
 	}
+	// One that may run again keeps its output in its file.
+	j.opts = jobOpts{retry: 1, file: true}
+	if got, err = storedJob(7, puff.Print(j.stored())); err != nil || !got.opts.file {
+		t.Errorf("storedJob with :output :file = %+v %v", got, err)
+	}
 	for _, p := range []string{`[1]`, `{:cwd "/x"}`, `(not read`} {
 		if got, err := storedJob(7, p); err == nil {
 			t.Errorf("storedJob(%s) = %+v, want an error", p, got)

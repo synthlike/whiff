@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"slices"
 	"strings"
 	"sync"
@@ -63,6 +64,7 @@ type jobOpts struct {
 	retry      int    // how many times it may run again
 	idempotent bool   // running it twice does what running it once does
 	stream     bool   // each line it prints is published on :jobs/<id>; its result's :stdout is the last
+	file       bool   // :output :file: all it prints is kept in its output dir, not only the tail
 	sandbox    bool   // it runs in a container that sees only dir
 	net        bool   // sandboxed, it may reach the network
 	// can is, for :session, the functions the job's whiff mcp may call as
@@ -90,6 +92,8 @@ type proc struct {
 	cancel         context.CancelFunc
 	stdout, stderr tail
 	stream         bool         // its job's :stream: out is stdout's last line
+	output         string       // with :output :file, the dir its stdout and stderr files are in
+	files          []*os.File   // those files, closed as it ends
 	termed         atomic.Int64 // when its group got SIGTERM, in Unix nanoseconds; 0 until then
 }
 
@@ -100,7 +104,7 @@ func (d *daemon) jobsService() *service {
 	return &service{name: "jobs", d: d, cur: caller{addr: "jobs"},
 		fns: map[string]handler{
 			"run": {params: []string{"cmd", "opts"}, optional: 1, mark: puff.MarkWrite, marked: true, native: d.runJob, cmd: true,
-				doc: "Run cmd, [program args...], here; pending now, {:exit :stdout :stderr} when done. Options: :timeout (1h), or :none for a server; :stdin, a string; :dir, where it runs; :as :text answers (ok stdout), or (err {:kind :exit}) unless it exits 0; :origin :agent, for a job whose output a model writes, answers as :agent's; :retry n runs it again, up to n times, under its id, if a timeout or whiff stopped it, or whiff died while it ran, and only if it is :read or :idempotent #t says running it twice is safe; :stream #t publishes each line it prints on :jobs/<id> as it comes, and its result's :stdout is the last line, as claude -p --output-format stream-json's result, and tasks/watch shows them; :session [:addr/fn ...], from a service: the job's whiff mcp acts as an agent session, :agent/<service> for an agent's turn or a new :agent/<n>, reaching only those functions, gated as any agent's; :sandbox #t runs it in a container that sees only its :dir, without the network, or with it as :sandbox {:net #t}, and it fails to start where there's no sandbox (whiff sandbox check). :read for a read-only command, as whiff ls lists them."},
+				doc: "Run cmd, [program args...], here; pending now, {:exit :stdout :stderr} when done. Options: :timeout (1h), or :none for a server; :stdin, a string; :dir, where it runs; :as :text answers (ok stdout), or (err {:kind :exit}) unless it exits 0; :origin :agent, for a job whose output a model writes, answers as :agent's; :retry n runs it again, up to n times, under its id, if a timeout or whiff stopped it, or whiff died while it ran, and only if it is :read or :idempotent #t says running it twice is safe; :output :file keeps all it prints, not only the last 64KiB, in stdout and stderr files under ~/.whiff/jobs/<id>/, which its result names as :output; :stream #t publishes each line it prints on :jobs/<id> as it comes, and its result's :stdout is the last line, as claude -p --output-format stream-json's result, and tasks/watch shows them; :session [:addr/fn ...], from a service: the job's whiff mcp acts as an agent session, :agent/<service> for an agent's turn or a new :agent/<n>, reaching only those functions, gated as any agent's; :sandbox #t runs it in a container that sees only its :dir, without the network, or with it as :sandbox {:net #t}, and it fails to start where there's no sandbox (whiff sandbox check). :read for a read-only command, as whiff ls lists them."},
 			"list": {mark: puff.MarkRead, marked: true, native: d.listJobs,
 				doc: "The running jobs, each {:id :cmd :cwd :from}, and :container if it is sandboxed."},
 			"cancel": {params: []string{"id"}, mark: puff.MarkWrite, marked: true, native: d.cancelJob,
@@ -125,8 +129,14 @@ func (d *daemon) runJob(m message, args []puff.Value) (puff.Value, error) {
 			return r, nil
 		}
 	}
+	// One you accepted is the task its sender already waits for. The id
+	// comes first: an :output :file job's files are named by it.
+	id := m.held
+	if id == 0 {
+		d.do(func(st *state) { id = st.newID() })
+	}
 	j.ctx, j.cancel = context.WithCancel(d.ctx)
-	p, err := d.spawn(j)
+	p, err := d.spawn(j, id)
 	if err != nil {
 		j.cancel()
 		d.revoke(j)
@@ -136,11 +146,6 @@ func (d *daemon) runJob(m message, args []puff.Value) (puff.Value, error) {
 	// it is in one already.
 	project := cmp.Or(m.project, projectOf(j.opts.dir))
 	d.do(func(st *state) {
-		// One you accepted is the task its sender already waits for.
-		id := m.held
-		if id == 0 {
-			id = st.newID()
-		}
 		// A job in a chain you accepted goes on in it, unless a model writes
 		// its output: what its sender does with that is the agent's.
 		j.ticket = ticket{id: id, msg: m.id, from: m.from, dir: m.dir,
@@ -207,6 +212,8 @@ func jobArgs(m message, args []puff.Value) (puff.Vector, jobOpts, bool, error) {
 			o.retry = int(n)
 		case puff.Equal(e.Key, puff.Keyword("idempotent")) && isBool:
 			o.idempotent = bool(b)
+		case puff.Equal(e.Key, puff.Keyword("output")) && puff.Equal(e.Val, puff.Keyword("file")):
+			o.file = true
 		case puff.Equal(e.Key, puff.Keyword("stream")) && isBool:
 			o.stream = bool(b)
 		case puff.Equal(e.Key, puff.Keyword("sandbox")) && isBool:
@@ -317,10 +324,12 @@ func (j *job) argv() []string {
 	return argv
 }
 
-// spawn starts an attempt at j, in its own process group, so a cancel or
-// timeout stops what it started too: SIGTERM, then SIGKILL for what's left
-// after stopGrace (see stop).
-func (d *daemon) spawn(j *job) (*proc, error) {
+// spawn starts an attempt at j, task id, in its own process group, so a
+// cancel or timeout stops what it started too: SIGTERM, then SIGKILL for
+// what's left after stopGrace (see stop). With :output :file, all it
+// prints goes to stdout and stderr in its output dir too, each attempt's
+// over the last's.
+func (d *daemon) spawn(j *job, id int64) (*proc, error) {
 	p := &proc{stream: j.opts.stream}
 	if j.opts.timeout > 0 {
 		p.ctx, p.cancel = context.WithTimeout(j.ctx, j.opts.timeout)
@@ -337,11 +346,19 @@ func (d *daemon) spawn(j *job) (*proc, error) {
 		p.runner, p.box = c, sandbox.Name("job")
 	}
 	cmd := p.runner.Command(p.ctx, p.box, j.opts.dir, j.argv())
-	cmd.Stdout, cmd.Stderr = &p.stdout, &p.stderr
+	var stdout, stderr io.Writer = &p.stdout, &p.stderr
+	if j.opts.file {
+		if err := p.openOutput(d.outputDir(id)); err != nil {
+			p.cancel()
+			return nil, err
+		}
+		stdout, stderr = io.MultiWriter(p.files[0], &p.stdout), io.MultiWriter(p.files[1], &p.stderr)
+	}
+	cmd.Stdout, cmd.Stderr = stdout, stderr
 	if p.stream {
 		// A first attempt has its id only once it has started, on the route
 		// goroutine: a line before that is in its output, not published.
-		cmd.Stdout = &lines{w: &p.stdout, emit: func(line string) {
+		cmd.Stdout = &lines{w: stdout, emit: func(line string) {
 			d.do(func(st *state) {
 				if j.id != 0 {
 					st.publish(message{cause: j.msg, from: "jobs", topic: fmt.Sprintf("jobs/%d", j.id), args: puff.Print(puff.NewVector(puff.String(line))), dir: j.dir, lineage: lineage{user: j.user}})
@@ -367,10 +384,41 @@ func (d *daemon) spawn(j *job) (*proc, error) {
 	cmd.WaitDelay = stopGrace
 	if err := cmd.Start(); err != nil {
 		p.cancel()
+		p.closeOutput()
 		return nil, err
 	}
 	p.cmd = cmd
 	return p, nil
+}
+
+// outputDir is the dir an :output :file job's files are in:
+// jobs/<id> next to whiff.db.
+func (d *daemon) outputDir(id int64) string {
+	return filepath.Join(filepath.Dir(d.services), "jobs", strconv.FormatInt(id, 10))
+}
+
+// openOutput makes dir and p's stdout and stderr files in it, emptied.
+func (p *proc) openOutput(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	for _, name := range []string{"stdout", "stderr"} {
+		f, err := os.OpenFile(filepath.Join(dir, name), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+		if err != nil {
+			p.closeOutput()
+			return err
+		}
+		p.files = append(p.files, f)
+	}
+	p.output = dir
+	return nil
+}
+
+func (p *proc) closeOutput() {
+	for _, f := range p.files {
+		f.Close()
+	}
+	p.files = nil
 }
 
 // began records p as j's new attempt.
@@ -393,6 +441,7 @@ func (d *daemon) result(j *job, p *proc) puff.Value {
 	err := p.cmd.Wait()
 	defer p.cancel()
 	p.stop()
+	p.closeOutput()
 	if p.box != "" && p.ctx.Err() != nil {
 		// Its client, stopped, may have left its container running.
 		end, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -419,14 +468,14 @@ func (d *daemon) result(j *job, p *proc) puff.Value {
 		e := puff.Errorf("exit", "job %d exited %d", j.id, code).(puff.Tag).At(0).(puff.Map)
 		e, _ = e.With(puff.Keyword("exit"), puff.Int(code))
 		e, _ = e.With(puff.Keyword("stderr"), puff.String(p.stderr.String()))
-		return puff.NewTag("err", e)
+		return puff.NewTag("err", p.withDir(e))
 	}
 	out, _ := puff.NewMap(
 		puff.Key("exit", puff.Int(code)),
 		puff.Key("stdout", puff.String(p.out())),
 		puff.Key("stderr", puff.String(p.stderr.String())),
 	)
-	return puff.Ok(out)
+	return puff.Ok(p.withDir(out))
 }
 
 // withOutput is r, an (err e), with p's :stdout and :stderr in e.
@@ -434,7 +483,15 @@ func (p *proc) withOutput(r puff.Value) puff.Value {
 	e := r.(puff.Tag).At(0).(puff.Map)
 	e, _ = e.With(puff.Keyword("stdout"), puff.String(p.out()))
 	e, _ = e.With(puff.Keyword("stderr"), puff.String(p.stderr.String()))
-	return puff.NewTag("err", e)
+	return puff.NewTag("err", p.withDir(e))
+}
+
+// withDir is m with :output, p's output dir, if it has one.
+func (p *proc) withDir(m puff.Map) puff.Map {
+	if p.output != "" {
+		m, _ = m.With(puff.Keyword("output"), puff.String(p.output))
+	}
+	return m
 }
 
 // stop kills what's left of p's group stopGrace after its SIGTERM, if it
@@ -485,7 +542,7 @@ func (d *daemon) await(j *job, p *proc) {
 		var next *proc
 		if d.ctx.Err() == nil {
 			var err error
-			if next, err = d.spawn(j); err != nil {
+			if next, err = d.spawn(j, j.id); err != nil {
 				d.note("job %d can't run again, so it ends as it did: %v", j.id, err)
 				d.end(j, r)
 				return
@@ -549,7 +606,7 @@ func (d *daemon) rerun(j *job, r puff.Value) {
 	if n := len(j.attempts); n > 0 && j.attempts[n-1].ended.IsZero() {
 		j.ended("unknown")
 	}
-	p, err := d.spawn(j)
+	p, err := d.spawn(j, j.id)
 	d.do(func(st *state) {
 		if err != nil {
 			st.note(fmt.Sprintf("job %d can't run again, so it ends as it did: %v", j.id, err))
@@ -691,6 +748,9 @@ func (j *job) value() puff.Value {
 	}
 	if j.box != "" {
 		es = append(es, puff.Key("container", puff.String(j.box)))
+	}
+	if j.p != nil && j.p.output != "" {
+		es = append(es, puff.Key("output", puff.String(j.p.output)))
 	}
 	m, _ := puff.NewMap(es...)
 	return m

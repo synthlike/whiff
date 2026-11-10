@@ -257,8 +257,11 @@ open at once, or `:tasks`. Parents and children are in
 - **Jobs.** Anything outside puff that takes a while runs as a job,
   `(call :jobs/run ["go" "test" "./..."] {:dir ... :timeout 10m})`: pending
   at once, `{:exit :stdout :stderr}` as its `whiff/done`, the last 64KiB of
-  each stream kept. `:as :text` answers stdout as text, or an err unless it
-  exits 0. This is how services run `claude -p`, `gh` or a build.
+  each stream kept. `:output :file` keeps all of both too, in
+  `~/.whiff/jobs/<id>/stdout` and `stderr`, and its result says where, as
+  `:output`: a scraped page or a long turn isn't cut. They go 30 days
+  after they were last written, at start. `:as :text` answers stdout as
+  text, or an err unless it exits 0. This is how services run `claude -p`, `gh` or a build.
   `:jobs/output id` is a running job's output so far. With `:stream #t`
   each line it prints is published on `:jobs/<id>` as it comes, and its
   result's stdout is the last line: an agent's turn runs `claude -p

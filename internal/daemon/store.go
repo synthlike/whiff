@@ -53,8 +53,8 @@ const resultKept = 30 * 24 * time.Hour
 
 // openStore opens whiff.db, next to the services directory (so
 // ~/.whiff/whiff.db), with its buckets. Only the daemon opens it. It
-// deletes history older than historyKept, then compacts whiff.db if that
-// left much of it free.
+// deletes history older than historyKept, and :output :file jobs' output
+// untouched as long, then compacts whiff.db if that left much of it free.
 func openStore(services string) (*bbolt.DB, error) {
 	dir := filepath.Dir(services)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -80,7 +80,27 @@ func openStore(services string) (*bbolt.DB, error) {
 		db.Close()
 		return nil, err
 	}
+	pruneOutput(filepath.Join(dir, "jobs"), time.Now().Add(-historyKept))
 	return compactStore(db)
+}
+
+// pruneOutput deletes the job output dirs in dir last written before
+// cutoff. What can't be read or deleted stays, for the next start.
+func pruneOutput(dir string, cutoff time.Time) {
+	es, _ := os.ReadDir(dir)
+	for _, e := range es {
+		if fi, err := e.Info(); err == nil && e.IsDir() && fi.ModTime().Before(cutoff) {
+			newest := fi.ModTime()
+			for _, name := range []string{"stdout", "stderr"} {
+				if f, err := os.Stat(filepath.Join(dir, e.Name(), name)); err == nil && f.ModTime().After(newest) {
+					newest = f.ModTime()
+				}
+			}
+			if newest.Before(cutoff) {
+				os.RemoveAll(filepath.Join(dir, e.Name()))
+			}
+		}
+	}
 }
 
 // compactStore is db, compacted into a new file that takes its place, if a
@@ -778,6 +798,9 @@ func (j *job) stored() puff.Value {
 		if o.stream {
 			with("stream", puff.Bool(true))
 		}
+		if o.file {
+			with("output", puff.Keyword("file"))
+		}
 		if o.sandbox {
 			sb, _ := puff.NewMap(puff.Key("net", puff.Bool(o.net)))
 			with("sandbox", sb)
@@ -819,6 +842,7 @@ func storedJob(id int64, p string) (*job, error) {
 	idem, _ := get("idempotent").(puff.Bool)
 	stream, _ := get("stream").(puff.Bool)
 	j.opts.retry, j.opts.text, j.opts.idempotent, j.opts.stream = int(n), puff.Equal(get("as"), puff.Keyword("text")), bool(idem), bool(stream)
+	j.opts.file = puff.Equal(get("output"), puff.Keyword("file"))
 	as, _ := get("attempts").(puff.Vector)
 	for i := range as.Len() {
 		m, _ := as.At(i).(puff.Map)
