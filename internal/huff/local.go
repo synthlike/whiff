@@ -171,6 +171,29 @@ func (l *Local) resolve(p string) (string, error) {
 	return p, nil
 }
 
+// resolveWrite is resolve for a file to write: not in .git, nor .git
+// itself, a worktree's file naming its gitdir. Its hooks and config, as
+// core.fsmonitor, are what git runs on the host, as whiff's own read-only
+// git status does.
+func (l *Local) resolveWrite(file string) (string, error) {
+	p, err := l.resolve(file)
+	if err != nil {
+		return "", err
+	}
+	root, err := filepath.EvalSymlinks(l.Dir)
+	if err != nil {
+		return "", err
+	}
+	rel, _ := filepath.Rel(root, p)
+	for part := range strings.SplitSeq(rel, string(filepath.Separator)) {
+		// macOS's file system ignores case: .GIT is .git there.
+		if strings.EqualFold(part, ".git") {
+			return "", fmt.Errorf("%s is in .git, which you don't write", file)
+		}
+	}
+	return p, nil
+}
+
 func (l *Local) read(file string, offset, limit int) (string, error) {
 	p, err := l.resolve(file)
 	if err != nil {
@@ -208,7 +231,7 @@ func (l *Local) read(file string, offset, limit int) (string, error) {
 }
 
 func (l *Local) write(file, content string) (string, error) {
-	p, err := l.resolve(file)
+	p, err := l.resolveWrite(file)
 	if err != nil {
 		return "", err
 	}
@@ -222,7 +245,7 @@ func (l *Local) write(file, content string) (string, error) {
 }
 
 func (l *Local) edit(file, old, new string, all bool) (string, error) {
-	p, err := l.resolve(file)
+	p, err := l.resolveWrite(file)
 	if err != nil {
 		return "", err
 	}

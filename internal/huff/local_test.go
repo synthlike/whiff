@@ -77,6 +77,30 @@ func TestLocalStaysInDir(t *testing.T) {
 	}
 }
 
+// Nothing under .git, nor a worktree's .git file, is written: git runs
+// its hooks and config on the host. It can be read.
+func TestLocalLeavesGit(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, ".git", "hooks"), 0o755)
+	os.WriteFile(filepath.Join(dir, ".git", "config"), []byte("[core]\n"), 0o644)
+	os.Symlink(".git", filepath.Join(dir, "g"))
+	l := &Local{Dir: dir, Names: []string{"Read", "Write", "Edit"}}
+	for _, p := range []string{".git/hooks/pre-commit", ".git", "sub/.git", ".GIT/config", "g/config"} {
+		if out, isErr := call(t, l, "Write", map[string]any{"file_path": p, "content": "x"}); !isErr || !strings.Contains(out, "in .git") {
+			t.Errorf("Write %s = %q %v, want it refused", p, out, isErr)
+		}
+	}
+	if out, isErr := call(t, l, "Edit", map[string]any{"file_path": ".git/config", "old_string": "[core]", "new_string": "[core]\nfsmonitor = x"}); !isErr || !strings.Contains(out, "in .git") {
+		t.Errorf("Edit .git/config = %q %v, want it refused", out, isErr)
+	}
+	if out, isErr := call(t, l, "Read", map[string]any{"file_path": ".git/config"}); isErr || !strings.Contains(out, "[core]") {
+		t.Errorf("Read .git/config = %q %v", out, isErr)
+	}
+	if out, isErr := call(t, l, "Write", map[string]any{"file_path": ".gitignore", "content": "x\n"}); isErr {
+		t.Errorf("Write .gitignore = %q", out)
+	}
+}
+
 func TestLocalBash(t *testing.T) {
 	dir := t.TempDir()
 	l := &Local{Dir: dir, Names: []string{"Bash"}, Allow: []string{"echo hi", "ls:*"}}
