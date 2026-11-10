@@ -68,7 +68,8 @@ const usage = `usage:
   whiff sandbox build                    build the image sandboxed commands run in, with that runtime
   whiff peer add <name> <user@host> [--dir <path>] [--whiff <path>]
                                          reach another machine's whiff, over ssh, as you: its calls run in
-                                         dir there, and whiff is its path there if ssh doesn't find it
+                                         dir there, and whiff is its path there if it is neither on ssh's
+                                         PATH nor in ~/go/bin
   whiff peer ls                          list the peers: connected, connecting or offline, and why
   whiff peer rm <name>                   disconnect a peer and forget it
   whiff bridge                           connect stdin and stdout to the daemon, starting it if need be:

@@ -165,11 +165,12 @@ changes the image.
 ## 4. Connect the two
 
 From the laptop, the VPS becomes a peer: your whiff runs `ssh whiff@host
-whiff bridge` and keeps it connected. Calls to `address@vps` run there,
-in `--dir`:
+whiff bridge`, finding whiff in `~/go/bin` where waft put it, and keeps
+it connected, reconnecting by itself after a reboot or a dropped
+network. Calls to `address@vps` run there, in `--dir`:
 
 ```sh
-whiff peer add vps whiff@203.0.113.7 --whiff /home/whiff/go/bin/whiff --dir /home/whiff/src/tally
+whiff peer add vps whiff@203.0.113.7 --dir /home/whiff/src/tally
 whiff peer ls
 # vps  connected  whiff@203.0.113.7 · /home/whiff/src/tally
 whiff ls                  # every function, with its :read or :write mark

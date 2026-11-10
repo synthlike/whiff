@@ -500,7 +500,8 @@ daemon, starting it if need be. No listener and no new protocol: what
 reaches the peer is what `whiff call` would send there, as you.
 
 - **Peers are kept in whiff.db.** `whiff peer add vps whiff@host` (with
-  `--whiff <path>` if ssh doesn't find whiff there, and `--dir <path>`
+  `--whiff <path>` if whiff is neither on ssh's PATH there nor in
+  `~/go/bin`, where `go install` and waft put it, and `--dir <path>`
   for where its calls run), `whiff peer ls`, `whiff peer rm vps`; or
   `:peers/add`, `/list`, `/view` and `/rm`, whiff's own address. Adding
   and removing one is yours only: an agent's call is refused.

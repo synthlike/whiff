@@ -104,7 +104,7 @@ by default), the service files, and the daemon running; with `:sandbox
 reach it from your machine as a [peer](design.md#peers):
 
 ```sh
-whiff peer add vps whiff@203.0.113.7 --whiff /home/whiff/go/bin/whiff
+whiff peer add vps whiff@203.0.113.7
 ```
 
 Peers need the same whiff on both sides, so give `:version` a tag or a

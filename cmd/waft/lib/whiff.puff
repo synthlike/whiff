@@ -11,7 +11,7 @@
 ; The host needs golang-go, to build whiff and huff, git, for pipeline's
 ; worktrees and commits, and the user :linger #t, so its whiff runs
 ; without a login. Then reach it from here with
-;   whiff peer add vps whiff@host --whiff /home/whiff/go/bin/whiff
+;   whiff peer add vps whiff@host
 ;
 ; Options:
 ;   :version   whiff's and huff's, as go install takes it: a tag, or a

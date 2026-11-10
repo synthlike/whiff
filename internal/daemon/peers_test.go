@@ -5,6 +5,8 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -142,6 +144,35 @@ func TestPeerArgv(t *testing.T) {
 	got := strings.Join(p.argv(), " ")
 	if !strings.HasPrefix(got, "ssh -o BatchMode=yes") || !strings.HasSuffix(got, " whiff@203.0.113.7 /home/whiff/go/bin/whiff bridge") {
 		t.Errorf("argv = %s", got)
+	}
+	// Without a path, the peer finds whiff on its PATH, or else where go
+	// install puts it.
+	p.whiff = "whiff"
+	if argv := p.argv(); argv[len(argv)-1] != findWhiff {
+		t.Errorf("argv without a path = %q", argv)
+	}
+	home, onPath := t.TempDir(), t.TempDir()
+	fake := func(dir, says string) {
+		os.MkdirAll(dir, 0o755)
+		os.WriteFile(filepath.Join(dir, "whiff"), []byte("#!/bin/sh\necho "+says+" \"$@\"\n"), 0o755)
+	}
+	fake(filepath.Join(home, "go", "bin"), "go-bin")
+	run := func(path string) string {
+		// As ssh does: the remote command, a string, run by the user's shell.
+		cmd := exec.Command("/bin/sh", "-c", findWhiff)
+		cmd.Env = []string{"HOME=" + home, "PATH=" + path}
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Errorf("%v: %s", err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	if got := run("/usr/bin:/bin"); got != "go-bin bridge" {
+		t.Errorf("without whiff on PATH = %q, want go install's", got)
+	}
+	fake(onPath, "path")
+	if got := run(onPath + ":/usr/bin:/bin"); got != "path bridge" {
+		t.Errorf("with whiff on PATH = %q, want PATH's", got)
 	}
 }
 

@@ -72,9 +72,19 @@ func (p *peer) argv() []string {
 	if len(p.cmd) > 0 {
 		return p.cmd
 	}
-	return []string{"ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15",
-		"-o", "ServerAliveCountMax=3", p.dest, p.whiff, "bridge"}
+	remote := []string{p.whiff, "bridge"}
+	if p.whiff == "whiff" {
+		remote = []string{findWhiff}
+	}
+	return append([]string{"ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15",
+		"-o", "ServerAliveCountMax=3", p.dest}, remote...)
 }
+
+// findWhiff runs whiff bridge on a peer that names no path for whiff: the
+// one on PATH, or else go install's, which a non-interactive ssh's PATH
+// leaves out, as for a whiff waft installed. It is sh's, in single quotes,
+// so a login shell that isn't sh, as fish, passes it on as it is.
+const findWhiff = `sh -c 'command -v whiff >/dev/null && exec whiff bridge; exec "${GOBIN:-$HOME/go/bin}/whiff" bridge'`
 
 // stored is p as whiff.db holds it.
 func (p *peer) stored() puff.Value {
