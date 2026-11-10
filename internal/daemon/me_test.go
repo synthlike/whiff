@@ -388,3 +388,21 @@ func TestMeInboxSurvivesRestart(t *testing.T) {
 		}
 	})
 }
+
+// No service file or client takes any of whiff's own addresses.
+func TestOwnAddrs(t *testing.T) {
+	dir := tempDir(t)
+	files := map[string]string{}
+	for _, name := range ownAddrs {
+		files[name] = "(service " + name + ")"
+	}
+	writeServices(t, dir, files)
+	start(t, dir)
+	c := dial(t, dir)
+	for _, name := range ownAddrs {
+		historyHas(t, c, name+".puff:1:1: :"+name+" is whiff's own address; rename the file")
+		if resp, err := c.Claim(name, ""); err != nil || !strings.HasPrefix(resp.Value, "(err {:kind :taken") {
+			t.Errorf("claim :%s = %+v %v", name, resp, err)
+		}
+	}
+}

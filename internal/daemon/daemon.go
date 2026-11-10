@@ -115,6 +115,9 @@ func Run(ctx context.Context, dir, services string) error {
 	d.wg.Go(d.route)
 	// whiff's own addresses: see own.
 	for _, s := range []*service{d.jobsService(), d.meService(), d.reviewService(), d.tasksService(), d.timersService(), d.peersService()} {
+		if !own(s.name) {
+			panic(":" + s.name + " is built in but not in ownAddrs")
+		}
 		d.do(func(st *state) { st.addrs[s.name] = s })
 		d.wg.Go(func() { s.run(ctx) })
 	}
@@ -594,8 +597,10 @@ func (d *daemon) evalIn(ctx context.Context, env *puff.Env, cur *caller, out *st
 	return resp
 }
 
+// ownAddrs are whiff's own addresses, its built-in services': startup
+// refuses a built-in that isn't here, so a new one can't be left out.
+var ownAddrs = []string{"jobs", "me", "review", "tasks", "timers", "peers"}
+
 // own says whether name is one of whiff's own addresses, which no service
 // file or client may take.
-func own(name string) bool {
-	return name == "jobs" || name == "me" || name == "review" || name == "tasks" || name == "peers"
-}
+func own(name string) bool { return slices.Contains(ownAddrs, name) }
