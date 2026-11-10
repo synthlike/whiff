@@ -418,7 +418,7 @@
         (heard (publish :pipeline/done {:run n :status status :branch branch :dir dir :note note :from from}))
         ; After :pipeline/done, so a planner hears of the end first.
         (heard (publish :pipeline/step {:run n :step status}))
-        (ok (set-run state n {:step status :from from})))))
+        (ok (set-run state n {:step status :from from :note note})))))
 
   ; denied are the tool calls the dev's Claude's own permissions refused,
   ; from out, its JSON result: "Bash go test -race ./...", or the tool's
@@ -686,15 +686,26 @@
                            :actions (run-actions n run)})))
           {:changed :pipeline/step})))
 
+  ; show-text is run n as show shows it: a failed run says why first,
+  ; which a quiet run tells nobody else.
+  (def (show-text n run)
+    (let [{:task t :step s :round r :branch b} run]
+      (str "Run " n ": " t "\n" (keyword/name s) ", round " r ", " b
+        (match [s (map/get run :note)] [[:failed (some why)] (str "\n\nWhy: " why)] [_ ""])
+        "\n\nThe last review:\n\n" (map/get-or run :review "None yet.")
+        "\n\nThe diff it reviewed:\n\n" (map/get-or run :diff "None yet."))))
+
+  (test "a failed run says why; one that runs, or ended otherwise, doesn't"
+    (let [run {:task "t" :step :failed :round 1 :branch "whiff/1" :note "After the review step's task 17: commit failed"}]
+      (= [(string/contains? (show-text 1 run) "\n\nWhy: After the review step's task 17: commit failed\n\nThe last review:")
+          (string/contains? (show-text 1 (map/set run :step :ready)) "Why:")
+          (string/contains? (show-text 1 (map/delete run :note)) "Why:")]
+        [#t #f #f])))
+
   (on (show state n) :read
-    "Run n, its last review and the diff that review was of, as a view of text; (err {:kind :no-run}) if there is no such run."
+    "Run n, why it failed if it did, its last review and the diff that review was of, as a view of text; (err {:kind :no-run}) if there is no such run."
     (match (map/get-in state [:runs n])
-      [(some run)
-       (let [{:task t :step s :round r :branch b} run]
-         (ok (view/text (str "Run " n ": " t "\n" (keyword/name s) ", round " r ", " b
-                          "\n\nThe last review:\n\n" (map/get-or run :review "None yet.")
-                          "\n\nThe diff it reviewed:\n\n" (map/get-or run :diff "None yet."))
-               {:changed :pipeline/step})))]
+      [(some run) (ok (view/text (show-text n run) {:changed :pipeline/step}))]
       [_ (err {:kind :no-run :message (str "no run " n)})]))
 
   (on (cancel state n) :write :update
