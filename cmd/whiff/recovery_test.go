@@ -22,6 +22,7 @@ import (
 // it ends failed and offers Retry, which finishes it. Either way each result
 // is taken once.
 func TestRecovery(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("kills and restarts a daemon at each point")
 	}
@@ -193,6 +194,7 @@ func recoverAfter(t *testing.T, after time.Duration) {
 // fails saying so, and Retry, which would start a second dev in the same
 // worktree, refuses until the first is stopped.
 func TestRecoveryStray(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("kills and restarts a daemon")
 	}

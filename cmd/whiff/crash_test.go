@@ -18,6 +18,7 @@ import (
 // TestCrash kills a real daemon, as a crash or power cut would, with nothing
 // to tidy up: what it stored as it went is all the next one has.
 func TestCrash(t *testing.T) {
+	t.Parallel()
 	dir, err := os.MkdirTemp("/tmp", "whiff-test-")
 	if err != nil {
 		t.Fatal(err)

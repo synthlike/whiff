@@ -18,6 +18,7 @@ import (
 // ssh: the bridge starts the daemon there, calls go through as the user's,
 // and closing the connection ends the bridge, leaving the daemon running.
 func TestBridge(t *testing.T) {
+	t.Parallel()
 	// A short directory: a unix socket path must fit in about 100 bytes.
 	dir, err := os.MkdirTemp("/tmp", "whiff-peer-")
 	if err != nil {
@@ -80,6 +81,7 @@ func TestBridge(t *testing.T) {
 // TestBridgeFails reaches a peer by a command that ends without answering,
 // as ssh does when it can't log in: the error says what it printed.
 func TestBridgeFails(t *testing.T) {
+	// Not in parallel: it lowers rpc.HelloWait for every client.
 	_, err := rpc.DialCommand(context.Background(),
 		[]string{"sh", "-c", "echo 'ssh: connect to host vps port 22: Connection refused' >&2; exit 255"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "ssh: connect to host vps port 22: Connection refused") {
@@ -102,6 +104,7 @@ func TestBridgeFails(t *testing.T) {
 // TestPeerProtocol reaches a peer that speaks another protocol: it says
 // which, and that the two whiffs need to match.
 func TestPeerProtocol(t *testing.T) {
+	t.Parallel()
 	old := strconv.Itoa(rpc.Version - 1)
 	c, err := rpc.DialCommand(context.Background(),
 		[]string{"sh", "-c", `read hello; echo '{"version":` + old + `}'; cat >/dev/null`}, nil)
@@ -119,6 +122,7 @@ func TestPeerProtocol(t *testing.T) {
 // whiff's, each id with the peer's name, and accepts, replies and cancels
 // there by it; a peer that isn't connected says so.
 func TestPeerQueues(t *testing.T) {
+	t.Parallel()
 	daemon := func(files map[string]string) string {
 		dir, err := os.MkdirTemp("/tmp", "whiff-q-")
 		if err != nil {

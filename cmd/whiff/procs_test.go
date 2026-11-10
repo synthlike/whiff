@@ -22,6 +22,7 @@ import (
 // after a crash, one whose process group still runs isn't started again
 // until it is gone.
 func TestProcs(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("stops, kills and restarts a daemon")
 	}

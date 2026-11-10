@@ -9,6 +9,7 @@ import (
 
 // A lead's work, as whiff services lead lists it.
 func TestWorkLine(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
 	for _, tt := range []struct{ in, want string }{
 		{`{:id 7 :to :pipeline :status :ended :at 2026-11-03T11:57:00Z :result (ok {:run 7 :status :ready :branch "whiff/7" :cost 0.314})}`,

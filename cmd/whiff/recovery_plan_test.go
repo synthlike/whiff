@@ -32,6 +32,7 @@ esac
 // it on (Plan again, Review again or Retry), which finishes it. Either way
 // its last branch has each task once.
 func TestRecoveryPlan(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("kills and restarts a daemon at each point")
 	}
