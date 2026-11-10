@@ -394,6 +394,45 @@ cmd whiff enabled and running whiff []`
 	}
 }
 
+// TestWhiffLibSandbox asks whiff.puff for the sandbox: podman, and the
+// image built unless it's there, so nobody logs in to build it.
+func TestWhiffLibSandbox(t *testing.T) {
+	lib, err := os.ReadFile("lib/whiff.puff")
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := func(opts string) []resource {
+		t.Helper()
+		path := write(t, `(use "whiff.puff")
+(host "admin@a" [(user "whiff" {:linger #t} [(whiff `+opts+`)])])`)
+		os.WriteFile(filepath.Join(filepath.Dir(path), "whiff.puff"), lib, 0o644)
+		hosts, err := load(context.Background(), path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return hosts[0].resources
+	}
+	find := func(rs []resource, s string) resource {
+		for _, r := range rs {
+			if r.String() == s {
+				return r
+			}
+		}
+		return nil
+	}
+	rs := host(`{:sandbox #t}`)
+	if find(rs, "pkg podman") == nil {
+		t.Error("no podman")
+	}
+	c, ok := find(rs, "cmd whiff's sandbox image").(*cmd)
+	if !ok || c.script != userBus+"\n~/go/bin/whiff sandbox build" || c.unless != userBus+"; ~/go/bin/whiff sandbox check" || c.opts().as != "whiff" {
+		t.Errorf("sandbox image: %+v", c)
+	}
+	if rs := host(`{}`); find(rs, "pkg podman") != nil || find(rs, "cmd whiff's sandbox image") != nil {
+		t.Error("the sandbox without :sandbox")
+	}
+}
+
 // TestRemote runs a script as its user, in its home.
 func TestRemote(t *testing.T) {
 	if got, want := remote("whiff", "go install x"), `sudo -n -H -u 'whiff' -- sh -c 'cd "$HOME" || exit 1

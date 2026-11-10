@@ -36,7 +36,10 @@ Or try one without installing it: `whiff try services/git.puff status`.
   `'["go" "test" "./..."]'`) there, and has a reviewer Claude review the
   diff; until both pass, the review goes back to the dev, up to 3 rounds,
   then it is committed on the branch and you hear in your inbox. `runs`,
-  `view`, `cancel n`; `:pipeline/done` as each run ends. Needs the claude CLI.
+  `view`, `cancel n`; `merge n` into your branch, or `push n onto` to
+  origin, `""` for the run's own branch, never rewinding one, so a run on
+  a peer becomes a pull request without logging in there;
+  `:pipeline/done` as each run ends. Needs the claude CLI.
 - `lead`: a Sonnet agent that builds software with `board/build`, which
   hands it `pipeline/build`, an ask that answers when a run ends: a scaffold run, a few parts at once on a
   model you name (haiku), then one run from all their branches merged. Its

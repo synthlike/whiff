@@ -23,7 +23,9 @@ sniff (browser)                                 ~/src/tally (a clone)
 waft (sets the VPS up, then gets out of the way)
 ```
 
-It takes about an hour, most of it waiting for apt. The model calls cost
+You never log in to the VPS: waft sets it up from the laptop, and from
+then on the laptop's whiff drives it. It takes about an hour, most of it
+waiting for apt and the sandbox image. The model calls cost
 cents: on Kimi K2 a small task took us one to two cents a dev turn.
 
 ## What you need
@@ -118,14 +120,15 @@ and write `vps.puff`:
 
 (host "admin@203.0.113.7"
   [(hardened {})                                 ; ssh by key only, a firewall, security upgrades
-   (pkg "git" "golang-go" "gh" "podman")
+   (pkg "git" "golang-go" "gh")
    (user "whiff" {:keys ["~/.ssh/id_ed25519.pub"] :linger #t}
      [(ssh-key)                                  ; a key for GitHub, made on the host
       (repo "~/src/tally" "git@github.com:you/tally.git")
       (whiff {:version "v0.8.1"
               :env {"OPENROUTER_API_KEY" {:cmd "op read op://dev/openrouter/key"}
                     "GH_TOKEN" {:cmd "op read op://dev/github-tally-read/token"}}
-              :services ["pipeline.puff" "plan.puff" "prnotes.puff"]})])])
+              :services ["pipeline.puff" "plan.puff" "prnotes.puff"]
+              :sandbox #t})])])
 ```
 
 What each part does:
@@ -139,7 +142,9 @@ What each part does:
   `go install`, writes `~/.whiff/env` with the two secrets, read on your
   laptop as you apply and sent over ssh's stdin, copies the services, and
   starts the daemon as a systemd user unit. It gives the user a git
-  identity for pipeline's commits, `whiff` unless you pass `:git`.
+  identity for pipeline's commits, `whiff` unless you pass `:git`, and
+  with `:sandbox #t` installs podman and builds the image sandboxed
+  commands run in, unless `whiff sandbox check` says it's there.
 - `GH_TOKEN` only needs to read pull requests: a fine-grained token for
   the one repository is enough. Pushes go through the deploy key.
 
@@ -153,15 +158,9 @@ yet. The plan printed its public half; add it to `you/tally` as a deploy
 key, with write access so the host can push branches, and apply again.
 `waft plan vps.puff` then shows every line `ok`.
 
-One step waft leaves to you: build the image sandboxed commands run in,
-once, as whiff (it takes a few minutes):
-
-```sh
-ssh whiff@203.0.113.7 go/bin/whiff sandbox build
-ssh whiff@203.0.113.7 go/bin/whiff sandbox check
-# runtime  podman version 5.8.6
-# image    whiff-sandbox:37efc6b57970
-```
+The sandbox image takes a few minutes on the first apply; after that
+the plan shows `whiff's sandbox image` as `ok` until a whiff version
+changes the image.
 
 ## 4. Connect the two
 
@@ -219,11 +218,11 @@ taken on with `pipeline@vps/retry 1 '""'`. If the VPS restarts mid-run,
 the run says so honestly rather than guessing how far it got, and its
 container is cleaned up when whiff comes back.
 
-To review the change as a pull request, push the branch from the VPS and
-open one from the laptop:
+To review the change as a pull request, have the VPS push the run's
+branch, through its deploy key, and open one from the laptop:
 
 ```sh
-ssh whiff@203.0.113.7 git -C src/tally push -u origin whiff/1
+whiff call pipeline@vps/push 1 '""'        # "" for the run's own branch, whiff/1
 gh pr create --repo you/tally --head whiff/1 \
   --title "Add a 'tally sub' command" --body "Built and reviewed by whiff on the VPS."
 whiff call todo/done 3             # the item's line, as todo/open says
@@ -313,8 +312,8 @@ request updates:
 whiff call pipeline@vps/build '"/home/whiff/src/tally"' '"whiff/1"' \
   '"Print the result of tally sub with a trailing newline, as review asked."' '["go" "test" "./..."]' \
   '{:dev "openrouter/moonshotai/kimi-k2" :reviewer "openrouter/moonshotai/kimi-k2" :sandbox #t}'
-# pending 15 (whiff wait 15); once ready, its branch is whiff/2:
-ssh whiff@203.0.113.7 git -C src/tally push origin whiff/2:whiff/1
+# pending 15 (whiff wait 15); once ready, run 2 pushes onto the PR's branch:
+whiff call pipeline@vps/push 2 '"whiff/1"'
 ```
 
 (`pipeline/retry` is for a run that gave up, failed or was cancelled: it
@@ -345,7 +344,8 @@ whiff call plan@vps/approve 1                           # build them
 
 or with the buttons on the inbox message in sniff. When the last task is
 built, one message says so and names the last run's branch, which holds
-the whole goal; push it as in step 5. `whiff call plan@vps/plans` says
+the whole goal; push it as in step 5, `whiff call pipeline@vps/push <run>
+'""'`. `whiff call plan@vps/plans` says
 where each plan is meanwhile.
 
 ## 8. Seeing it all
@@ -386,7 +386,8 @@ whiff peer ls
   0600 file on the host. A turn whose daemon dies stops at once, rather
   than calling the model for nobody.
 - **A peer acts as you, nothing more.** Your laptop drives the VPS over
-  your ssh key; the VPS can't reach back.
+  your ssh key; the VPS can't reach back. A push never rewinds a branch
+  on GitHub: it goes as a fast-forward or not at all.
 
 ## Next
 

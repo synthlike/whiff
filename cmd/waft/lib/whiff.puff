@@ -24,6 +24,9 @@
 ;   :git       {:name :email} pipeline commits as, if the user has no git
 ;              identity yet: {:name "whiff" :email "whiff@localhost"} by
 ;              default; one the user has is left as it is
+;   :sandbox   #t to install podman and build the image sandboxed commands
+;              run in (a few minutes, once per whiff version that changes
+;              it), so :sandbox #t runs work without logging in
 
 (def whiff-unit "[Unit]
 Description=whiff
@@ -55,8 +58,14 @@ WantedBy=default.target
      (cmd (str "git config --global user.name " (sh-quote name) "\ngit config --global user.email " (sh-quote email))
           {:name "git identity for pipeline's commits"
            :unless "git config --global user.name >/dev/null && git config --global user.email >/dev/null"})
-     (env "~/.whiff/env" (map/get-or opts :env {}) {:restarts "whiff"})
-     (file "~/.config/systemd/user/whiff.service" whiff-unit {:restarts "whiff"})]
+     (env "~/.whiff/env" (map/get-or opts :env {}) {:restarts "whiff"})]
+    (if (map/get-or opts :sandbox #f)
+      [(pkg "podman")
+       (cmd (string/concat user-bus "\n~/go/bin/whiff sandbox build")
+            {:name "whiff's sandbox image"
+             :unless (string/concat user-bus "; ~/go/bin/whiff sandbox check")})]
+      [])
+    [(file "~/.config/systemd/user/whiff.service" whiff-unit {:restarts "whiff"})]
     (vector/map (map/get-or opts :services [])
       (fn (s) (file (string/concat "~/.whiff/services/" (path/base s)) {:from s})))
     [(cmd (string/concat user-bus "\nsystemctl --user daemon-reload\nsystemctl --user enable --now whiff")

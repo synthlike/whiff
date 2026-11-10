@@ -712,6 +712,31 @@ echo "changed things"
 		t.Errorf("retry of a ready run = %s", got)
 	}
 
+	// Pushing sends a ready run's branch to origin, as itself or onto a
+	// branch there, never rewinding one; a run that isn't ready has
+	// nothing to push.
+	origin := filepath.Join(dir, "origin.git")
+	git(dir, "init", "-q", "--bare", origin)
+	git(repo, "remote", "add", "origin", origin)
+	if got := call("push", `[2 ""]`); got != `(ok "whiff/2")` {
+		t.Errorf("push = %s", got)
+	}
+	if got := call("push", `[2 "pr"]`); got != `(ok "pr")` {
+		t.Errorf("push onto pr = %s", got)
+	}
+	if got := git(origin, "log", "--format=%s", "pr"); got != "another\nfirst\n" {
+		t.Errorf("origin's pr after the push = %q", got)
+	}
+	if got := call("push", `[1 "pr"]`); !strings.Contains(got, ":kind :exit") {
+		t.Errorf("push that would rewind pr = %s", got)
+	}
+	if got := call("push", `[9 ""]`); !strings.Contains(got, ":no-run") {
+		t.Errorf("push of no run = %s", got)
+	}
+	if got := call("push", `[2 :pr]`); !strings.Contains(got, ":bad-call") {
+		t.Errorf("push onto a keyword = %s", got)
+	}
+
 	// Merging fast-forwards your branch to a ready run's; once it has
 	// moved on, another run's branch doesn't merge.
 	if got := call("merge", "[2]"); got != `(ok "whiff/2")` {

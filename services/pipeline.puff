@@ -751,6 +751,16 @@
          (ok [b (tidy state n :merged)]))]
       [_ (no-run state n (str "run " n " isn't ready: nothing to merge"))]))
 
+  (on (push state n onto) :write
+    "Pushes ready run n's branch to its repository's origin, as onto, a branch name there (\"\" for the run's own, whiff/n), only as a fast-forward: how a run on another machine becomes a pull request, or updates one, without logging in there. (ok onto); git's error if origin's branch moved on, and (err {:kind :no-run}) unless run n is ready."
+    (match [(map/get-in state [:runs n]) onto]
+      [[_ o] when (not (string? o)) (err {:kind :bad-call :message (str "want a branch name, \"\" for the run's own, got " (value/to-string o))})]
+      [[(some {:step :ready :repo repo :branch b}) o]
+       (let [to (if (= o "") b o)
+             _ (try (git repo ["push" "-q" "origin" (str "refs/heads/" b ":refs/heads/" to)]))]
+         (ok to))]
+      [_ (no-run state n (str "run " n " isn't ready: nothing to push"))]))
+
   (on (discard state n) :write :update
     "Discards run n, ended and not merged: removes its worktree, uncommitted work and all, and its branch. (ok :discarded); (err {:kind :no-run}) unless run n ended so."
     (match (map/get-in state [:runs n])
