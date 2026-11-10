@@ -169,7 +169,7 @@
 (def (start text)
   (let [_ (try (over-budget))
         _ (try (file/mkdir home))
-        opts {:stdin text :dir home :timeout (unwrap (map/get limits :time)) :origin :agent :session tools :stream #t}
+        opts {:stdin text :dir home :timeout (unwrap (map/get limits :time)) :origin :agent :session tools :stream #t :output :file}
         id (int/to-string (try (submitted (call :jobs/run (claude (try (session))) opts))))]
     (do (try (file/append turns (str id "\n")))
       (ok id))))

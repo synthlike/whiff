@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -48,6 +49,7 @@ type task struct {
 	parent int64
 	began  time.Time  // when it began, if known: an ended ask's isn't kept
 	cmd    puff.Value // a job's command, whole
+	output string     // a job's output dir, with :output :file
 	fn     string     // one held or waiting: the function it is for
 	why    string     // one held or waiting: what it waits on, in a few words
 }
@@ -151,8 +153,21 @@ func (d *daemon) tasks(keep func(task) bool, limit int, now time.Time) []task {
 	all := append(open, ended...)
 	for i := range all {
 		all[i].what = short(all[i].what)
+		// A job run with :output :file has its files, whether it runs or
+		// ended.
+		if all[i].cmd != nil {
+			if dir := d.outputDir(all[i].id); isDir(dir) {
+				all[i].output = dir
+			}
+		}
 	}
 	return all
+}
+
+// isDir says whether path is a directory.
+func isDir(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && fi.IsDir()
 }
 
 // waitsOn is what a, held or waiting in an inbox, waits on, in a few
@@ -365,7 +380,7 @@ func (t task) item(now time.Time) puff.Value {
 }
 
 // node is t as :tasks/tree gives it: as list does, with when it began, a
-// job's :cmd, each argument cut short, what a claude's JSON output says it cost, and its
+// job's :cmd, each argument cut short, its :output dir if it keeps one, what a claude's JSON output says it cost, and its
 // children, each a node, oldest first.
 func (t task) node(children map[int64][]task) puff.Value {
 	m := t.value().(puff.Map)
@@ -375,6 +390,9 @@ func (t task) node(children map[int64][]task) puff.Value {
 	}
 	if t.cmd != nil {
 		with("cmd", cutArgs(t.cmd))
+	}
+	if t.output != "" {
+		with("output", puff.String(t.output))
 	}
 	if usd, ok := claudeCost(t.result); ok {
 		with("cost", puff.Float(usd))
@@ -504,7 +522,7 @@ func (d *daemon) tasksService() *service {
 				doc:    "(ok view): the tasks that failed in the last day, newest first, as view gives them: :failed, :interrupted, or a result's :status :failed or :gave-up; not those you cancelled or rejected.",
 				native: view(task.failed)},
 			"tree": {params: []string{"id"}, mark: puff.MarkRead, marked: true,
-				doc: "(ok node): task id, as list gives it, with :began, a job's :cmd, each argument cut to 80 characters, the :cost a claude's JSON output says, and :children, the tasks its work began, as an agent's turn or a pipeline build's jobs, each a node, oldest first. (err {:kind :no-id}) if it isn't open and didn't end in the last day.",
+				doc: "(ok node): task id, as list gives it, with :began, a job's :output dir if it ran with :output :file, a job's :cmd, each argument cut to 80 characters, the :cost a claude's JSON output says, and :children, the tasks its work began, as an agent's turn or a pipeline build's jobs, each a node, oldest first. (err {:kind :no-id}) if it isn't open and didn't end in the last day.",
 				native: func(_ message, args []puff.Value) (puff.Value, error) {
 					id, ok := args[0].(puff.Int)
 					if !ok {

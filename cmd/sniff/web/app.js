@@ -1651,7 +1651,7 @@ function stepsIn(children) {
       const began = Date.parse(n.began || n.at), result = String(n.result || "");
       let kind = n.status === "ended" ? (n.state === "done" ? "ok" : "err") : "running";
       if (kind === "ok" && /^\(ok \{:exit [1-9]/.test(result)) kind = "err";
-      steps.push({ from: n.from, name: jobName(n.cmd), at: n.began || n.at, ms: (n.status === "ended" ? Date.parse(n.at) : Date.now()) - began, kind, cost: n.cost });
+      steps.push({ from: n.from, name: jobName(n.cmd), at: n.began || n.at, ms: (n.status === "ended" ? Date.parse(n.at) : Date.now()) - began, kind, cost: n.cost, output: n.output });
     }
     (n.children || []).forEach(walk);
   };
@@ -1673,7 +1673,9 @@ function stepList(steps) {
     const li = el("li", s.kind === "running" ? "open" : s.kind === "ok" ? "ok" : "failed");
     const how = (s.kind === "running" ? "running " : s.kind === "ok" ? "" : "failed, ") + roughly(s.ms) + (s.cost ? ", " + usd(s.cost) : "");
     li.append(el("span", "work-to", ":" + s.from), el("span", "work-how", s.name), el("span", "hint", how));
-    li.title = fullTime(s.at);
+    // A job run with :output :file, as an agent's turn, keeps all it
+    // printed: hovering says where.
+    li.title = fullTime(s.at) + (s.output ? "\nall its output: " + s.output : "");
     ol.append(li);
   }
   return ol;

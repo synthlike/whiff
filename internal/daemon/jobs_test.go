@@ -292,6 +292,10 @@ func TestJobOutputFile(t *testing.T) {
 	if len(r) > 2*tailSize {
 		t.Errorf("the result is %d bytes: it should hold only the tail", len(r))
 	}
+	// tasks/tree names the dir, after the job ended too.
+	if r, _ := c.Eval(`(call :tasks/tree `+id+`)`, dir); !strings.Contains(r.Value, `:output "`+out+`"`) {
+		t.Errorf("tasks/tree %s = %.300s, want its :output", id, r.Value)
+	}
 	// :as :text answers the tail; the file is there all the same.
 	id, r = wait(`(call :jobs/run ["echo" "hi"] {:output :file :as :text})`)
 	if b, _ := os.ReadFile(filepath.Join(dir, "jobs", id, "stdout")); r != `(ok "hi\n")` || string(b) != "hi\n" {

@@ -233,7 +233,7 @@
 
   (def (dev state n input)
     (let [run (run-of state n)
-          opts {:stdin input :dir (map/get-or run :dir "") :as :text :timeout 30m :stream #t}
+          opts {:stdin input :dir (map/get-or run :dir "") :as :text :timeout 30m :stream #t :output :file}
           lead (map/get-or run :lead "")
           id (try (submitted (call :jobs/run (dev-cmd run)
                                (if (= lead "") opts (map/set opts :session [(unwrap (keyword/from-string (str lead "/ask")))])))))]
@@ -242,7 +242,7 @@
   (def (check state n)
     (let [run (run-of state n)
           {:check cmd :dir dir} run
-          opts {:dir dir :timeout 10m}
+          opts {:dir dir :timeout 10m :output :file}
           opts (match (map/get-or run :sandbox #f) [#f opts] [s (map/set opts :sandbox s)])
           id (try (submitted (call :jobs/run cmd opts)))]
       (ok (waiting state n :check id))))
@@ -298,7 +298,7 @@
         (finish state n :failed "The developer changed nothing.")
         (let [input (str review-prompt "\n\nTask: " task "\n\nThe check " (check-text checked) (files-text (named run task)) "\n\nThe diff:\n" diff)
               id (try (submitted (call :jobs/run (reviewer-cmd model)
-                                   {:stdin input :dir dir :as :text :timeout 10m :stream (huff? model)})))]
+                                   {:stdin input :dir dir :as :text :timeout 10m :stream (huff? model) :output :file})))]
           (ok (waiting (set-run state n {:checked checked :diff diff}) n :review id))))))
 
   ; subject is a commit's subject, at most 72 characters: the review's

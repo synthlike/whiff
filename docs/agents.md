@@ -113,7 +113,10 @@ acting only in its worktree and writing nothing in `.git`, whose hooks
 and config git runs on the host, and Bash runs only what its Claude could:
 the check and go vet, go build, gofmt and git status, diff and log,
 without a shell. Its conversation is kept in `~/.whiff/huff/`, so a
-retry goes on from it. With `:sandbox #t` in the team, or in the map
+retry goes on from it. Everything an agent's turn, a developer, a
+reviewer or the check prints is kept in `~/.whiff/jobs/<id>/` for 30
+days, not only the last 64KiB: `tasks/tree` names the dir, and sniff
+says it when you hover a step of the work. With `:sandbox #t` in the team, or in the map
 `build` takes, the developer's Bash commands and the check run in a
 container that sees only the worktree, without the network unless
 `{:net #t}`; a run that asks for it needs its developer on huff.

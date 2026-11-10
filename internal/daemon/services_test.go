@@ -1567,7 +1567,7 @@ func TestAgentDelegate(t *testing.T) {
 	}
 	// Under each, the helper's turn that answered it: its job, whose
 	// parent the ask is.
-	if !regexp.MustCompile(`\{:actions \[\{:action \[:tasks/result ` + task + `\] :label "Result"\}\] :at \S+ :children \[\{:at \S+ :began \S+ :children \[\] :cmd \["claude" .* :from :helper :id \d+ :parent ` + task + ` `).MatchString(work) {
+	if !regexp.MustCompile(`\{:actions \[\{:action \[:tasks/result ` + task + `\] :label "Result"\}\] :at \S+ :children \[\{:at \S+ :began \S+ :children \[\] :cmd \["claude" .* :from :helper :id \d+ (?::output "[^"]*" )?:parent ` + task + ` `).MatchString(work) {
 		t.Errorf("lead's work, with what each began = %s", work)
 	}
 	if text, _ := c.Inbox("review"); strings.Contains(text, "jobs/run") {
@@ -1803,7 +1803,7 @@ echo done
 	// reviewer, each a child of the build.
 	r, _ := c.Message("call", "tasks/tree", "["+first+"]", "")
 	var ran []string
-	for _, m := range regexp.MustCompile(`:cmd \["(\w+)".*?:from :pipeline :id \d+ :parent `+first+` `).FindAllStringSubmatch(r.Value, -1) {
+	for _, m := range regexp.MustCompile(`:cmd \["(\w+)".*?:from :pipeline :id \d+ (?::output "[^"]*" )?:parent `+first+` `).FindAllStringSubmatch(r.Value, -1) {
 		ran = append(ran, m[1])
 	}
 	if strings.Join(ran, ", ") != "claude, true, claude" {

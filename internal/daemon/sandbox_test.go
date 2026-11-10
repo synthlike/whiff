@@ -268,7 +268,9 @@ func TestPipelineSandbox(t *testing.T) {
 	if !strings.Contains(bashSaid, "?? f.txt") {
 		t.Errorf("the dev's git status said %q, want f.txt untracked", bashSaid)
 	}
-	historyHas(t, c, `(ok {:exit 0 :stderr "" :stdout "Linux\nwhiff/1\n"})`)
+	// The check ran in the container, its output kept in its file too.
+	historyHas(t, c, `/jobs/`)
+	historyHas(t, c, `" :stderr "" :stdout "Linux\nwhiff/1\n"})`)
 }
 
 // TestPipelineGitRedirect has a dev, with its file tools only, plant a
