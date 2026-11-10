@@ -974,12 +974,39 @@ esac
 	if got := call("draft", `["drafted" ["true"] ""]`); got != "(ok 3)" {
 		t.Fatalf("plan/draft = %s", got)
 	}
-	inboxHas("the draft", `"plan 3, drafted: proposed. Its tasks, in repo, on main:\n\n1. one\n2. two" {:actions [{:action [:plan/approve 3] :label "Build it"} {:action [:plan/discard 3] :label "Discard"}]}`)
+	inboxHas("the draft", `"plan 3, drafted: proposed. Its tasks, in repo, on main:\n\n1. one\n2. two" {:actions [{:action [:plan/approve 3] :label "Build it"} {:action [:plan/add 3 3] :ask "The new task, built last" :label "Add a task"} {:action [:plan/redraft 3] :ask "What the planner should do differently" :label "Plan again with a note"} {:action [:plan/discard 3] :label "Discard"}]}`)
 	if b, _ := os.ReadFile(filepath.Join(dir, "planned")); !strings.Contains(string(b), "The check: true\n\nGoal: drafted") {
 		t.Errorf("the planner read:\n%s", b)
 	}
 	if got := call("approve", "[1]"); !strings.Contains(got, ":no-plan") {
 		t.Errorf("approve of a merged plan = %s", got)
+	}
+	// Planned again with a note, the planner hears its last tasks and the
+	// note, and the plan waits again with what it answers.
+	if got := call("redraft", `[3 "fewer, bigger tasks"]`); got != "(ok :planning)" {
+		t.Fatalf("plan/redraft = %s", got)
+	}
+	eventually(t, "the planner hears the note", func() string {
+		b, _ := os.ReadFile(filepath.Join(dir, "planned"))
+		return fmt.Sprint(strings.Contains(string(b), "You planned this before:\n1. one\n2. two\n\nPlan it again. Their note on that plan: fewer, bigger tasks"))
+	}, "true")
+	eventually(t, "the plan waits again", func() string { return call("remove", `[3 9]`) }, `(err {:kind :no-task :message "plan 3 has tasks 1 to 2"})`)
+	// Tasks added and removed, at most 4, at least 1.
+	if got := call("add", `[3 2 "middle"]`); got != `(ok ["one" "middle" "two"])` {
+		t.Errorf("add = %s", got)
+	}
+	call("add", `[3 4 "last"]`)
+	if got := call("add", `[3 1 "fifth"]`); !strings.Contains(got, ":full") {
+		t.Errorf("a fifth task = %s", got)
+	}
+	call("remove", `[3 4]`)
+	if got := call("remove", `[3 2]`); got != `(ok ["one" "two"])` {
+		t.Errorf("remove = %s", got)
+	}
+	for _, args := range []string{`[3 0 "x"]`, `[3 4 "x"]`, `[3 1 ""]`} {
+		if got := call("add", args); !strings.Contains(got, ":no-task") && !strings.Contains(got, ":bad-task") {
+			t.Errorf("add %s = %s", args, got)
+		}
 	}
 	for _, args := range []string{`[3 3 "x"]`, `[3 0 "x"]`, `[3 1 ""]`} {
 		if got := call("edit", args); !strings.Contains(got, ":no-task") && !strings.Contains(got, ":bad-task") {

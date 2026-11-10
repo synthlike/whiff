@@ -12,6 +12,9 @@
 ;   whiff call plan/start "..." '["go" "test" "./..."]' openrouter/moonshotai/kimi-k2.6   ; every role on Kimi, through huff
 ;   whiff call plan/start "..." '["go" "test" "./..."]' '{:planner "opus" :dev "haiku"}'  ; or each its own
 ;   whiff call plan/edit 3 2 "store todos in a map"        ; a drafted plan's task 2
+;   whiff call plan/add 3 3 "document the commands"        ; a new task 3, the rest after it
+;   whiff call plan/remove 3 1     ; drop a drafted plan's task 1
+;   whiff call plan/redraft 3 "fewer, bigger tasks"   ; plan it again, the planner told why
 ;   whiff call plan/approve 3      ; build a drafted plan's tasks
 ;   whiff call plan/retry 1 "store todos in a map"   ; after a task's run gave up
 ;   whiff call plan/review-again 1  ; after a task's reviewer failed
@@ -41,13 +44,25 @@
     and nothing else.
     """)
 
+  ; numbered is tasks, one a line, numbered from 1.
+  (def (numbered ts)
+    (string/join (vector/map (vector/range 0 (vector/length ts)) (fn (i) (str (+ i 1) ". " (unwrap (vector/get ts i))))) "\n"))
+
   ; planner-input is what the planner reads: the prompt, the check and the
-  ; goal.
-  (def (planner-input goal check)
-    (str prompt "\n\nThe check: " (string/join check " ") "\n\nGoal: " goal))
+  ; goal; planning again, p's last tasks and your note on them.
+  (def (planner-input p)
+    (let [{:goal goal :check check} p
+          again (match (map/get p :note)
+                  [(some note) (str "\n\nYou planned this before:\n" (numbered (map/get-or p :last [])) "\n\nPlan it again. Their note on that plan: " note)]
+                  [_ ""])]
+      (str prompt "\n\nThe check: " (string/join check " ") "\n\nGoal: " goal again)))
 
   (test "the planner hears the check, the one command the developer can run"
-    (string/contains? (planner-input "g" ["go" "test" "./..."]) "The check: go test ./...\n\nGoal: g"))
+    (string/contains? (planner-input {:goal "g" :check ["go" "test" "./..."]}) "The check: go test ./...\n\nGoal: g"))
+
+  (test "planning again, the planner hears its last plan and your note"
+    (string/ends-with? (planner-input {:goal "g" :check ["true"] :last ["a" "b"] :note "fewer"})
+      "Goal: g\n\nYou planned this before:\n1. a\n2. b\n\nPlan it again. Their note on that plan: fewer"))
 
   ; where names the repository at repo and the branch checked out there,
   ; "whiff, on main", or the commit base if none is: what a draft is of.
@@ -174,14 +189,25 @@
 
   (def (edit-action n i) {:label "Edit" :action [:plan/edit n i] :ask "The task, as it should be"})
 
+  (def (remove-action n i) {:label "Remove" :action [:plan/remove n i]})
+
+  (def (add-action n i) {:label "Add a task" :action [:plan/add n i] :ask "The new task, built last"})
+
+  (def (redraft-action n) {:label "Plan again with a note" :action [:plan/redraft n] :ask "What the planner should do differently"})
+
+  ; draft-actions are what a drafted plan n of total tasks offers as a
+  ; whole: build it, add a task while there is room, plan it again, or
+  ; discard it.
+  (def (draft-actions n total)
+    (vector/concat [(approve-action n)] (if (< total most) [(add-action n (+ total 1))] []) [(redraft-action n) (discard-action n)]))
+
   ; propose stops plan n at its tasks, for you to edit and approve, saying
   ; where it was planned, so a draft in the wrong repository shows.
   (def (propose state n)
     (let [{:tasks ts} (plan-of state n)
-          listed (vector/map (vector/range 0 (vector/length ts)) (fn (i) (str (+ i 1) ". " (unwrap (vector/get ts i)))))
           in (match (map/get-in state [:plans n :where]) [(some w) (str ", in " w)] [_ ""])]
-      (finish state n :proposed (str "Its tasks" in ":\n\n" (string/join listed "\n"))
-        [(approve-action n) (discard-action n)])))
+      (finish state n :proposed (str "Its tasks" in ":\n\n" (numbered ts))
+        (draft-actions n (vector/length ts)))))
 
   ; moved is r, once :plan/changed says plan n's tickets moved, so a client
   ; showing the board fetches it again.
@@ -195,7 +221,7 @@
     (let [{:goal goal :check check :repo repo} (plan-of state n)
           {:planner model} (roles (map/get-or (plan-of state n) :model ""))
           id (try (submitted (call :jobs/run (planner-cmd model)
-                               {:stdin (planner-input goal check) :dir repo :as :text :timeout 10m})))]
+                               {:stdin (planner-input (plan-of state n)) :dir repo :as :text :timeout 10m})))]
       (ok (-> state (set-plan n {:step :planning}) (map/set-in [:jobs id] n)))))
 
   ; begin plans goal with check as plan n, its roles on model, (ok [n
@@ -260,11 +286,12 @@
                                               [(and (= step :done) (= i (- total 1))) [(show-action r) (merge-action n b)]]
                                               [_ [(show-action r)]])}})]
                 [_ (if (= step :proposed)
-                     ; A drafted plan's tasks can be edited; the first ticket
-                     ; builds or discards it.
+                     ; A drafted plan's tasks can be edited, or removed while
+                     ; it has others; the first ticket acts on the plan.
                      {:step :planned :item {:label task :detail where
                                             :actions (vector/concat [(edit-action n (+ i 1))]
-                                                       (if (= i 0) [(approve-action n) (discard-action n)] []))}}
+                                                       (if (> total 1) [(remove-action n (+ i 1))] [])
+                                                       (if (= i 0) (draft-actions n total) []))}}
                      {:step (if (= step :building) :planned :skipped) :item {:label task :detail where}})])))))))
 
   (test "a ticket per task, at its run's step"
@@ -293,14 +320,23 @@
          (fn ({:item {:actions as}}) (vector/length as)))
       [1 2]))
 
-  (test "a drafted plan's tasks can be edited, and it built or discarded"
+  (test "a drafted plan's tasks can be edited or removed, and it built, added to, planned again or discarded"
     (= (tickets 6 {:goal "g" :step :proposed :tasks ["a" "b"]} [])
       [{:step :planned :item {:label "a" :detail "plan 6, task 1 of 2"
                               :actions [{:label "Edit" :action [:plan/edit 6 1] :ask "The task, as it should be"}
+                                        {:label "Remove" :action [:plan/remove 6 1]}
                                         {:label "Build it" :action [:plan/approve 6]}
+                                        {:label "Add a task" :action [:plan/add 6 3] :ask "The new task, built last"}
+                                        {:label "Plan again with a note" :action [:plan/redraft 6] :ask "What the planner should do differently"}
                                         {:label "Discard" :action [:plan/discard 6]}]}}
        {:step :planned :item {:label "b" :detail "plan 6, task 2 of 2"
-                              :actions [{:label "Edit" :action [:plan/edit 6 2] :ask "The task, as it should be"}]}}]))
+                              :actions [{:label "Edit" :action [:plan/edit 6 2] :ask "The task, as it should be"}
+                                        {:label "Remove" :action [:plan/remove 6 2]}]}}]))
+
+  (test "a drafted plan's one task can't be removed, and a full one takes no more"
+    (= [(vector/map (tickets 7 {:goal "g" :step :proposed :tasks ["a"]} []) (fn ({:item {:actions as}}) (vector/map as (fn ({:label l}) l))))
+        (vector/contains? (vector/map (draft-actions 8 4) (fn ({:label l}) l)) "Add a task")]
+      [[["Edit" "Build it" "Add a task" "Plan again with a note" "Discard"]] #f]))
 
   (test "the goal while it has no tasks, and the tasks a failed plan didn't start"
     (= [(tickets 2 {:goal "g" :step :planning :tasks []} [])
@@ -443,16 +479,56 @@
 
   (on (edit state n i task) :write :update
     "Sets task i, from 1, of drafted plan n to task, a string. (ok tasks); (err {:kind :no-plan}) unless plan n waits for approval, (err {:kind :no-task}) unless it has task i."
+    (let [ts (try (drafted state n))
+          task (try (task-text task))]
+      (if (not (and (= (value/type i) :int) (>= i 1) (<= i (vector/length ts))))
+        (err {:kind :no-task :message (str "plan " n " has tasks 1 to " (vector/length ts))})
+        (let [ts (vector/set ts (- i 1) task)]
+          (moved n (ok [ts (set-plan state n {:tasks ts})]))))))
+
+  ; drafted is plan n's tasks, if it waits for approval, else the no-plan
+  ; for why it can't change them.
+  (def (drafted state n)
     (match (map/get-in state [:plans n])
-      [(some {:step :proposed :tasks ts})
-       (cond
-         [(not (= (value/type task) :string)) (err {:kind :bad-task :message "want the task as a string"})]
-         [(= (string/trim task) "") (err {:kind :bad-task :message "the task is empty"})]
-         [(not (and (= (value/type i) :int) (>= i 1) (<= i (vector/length ts))))
-          (err {:kind :no-task :message (str "plan " n " has tasks 1 to " (vector/length ts))})]
-         [_ (let [ts (vector/set ts (- i 1) task)]
-              (moved n (ok [ts (set-plan state n {:tasks ts})])))])]
+      [(some {:step :proposed :tasks ts}) (ok ts)]
       [_ (no-plan state n (str "plan " n " doesn't wait for approval"))]))
+
+  ; task-text is task, checked to be a task's text.
+  (def (task-text task)
+    (cond
+      [(not (= (value/type task) :string)) (err {:kind :bad-task :message "want the task as a string"})]
+      [(= (string/trim task) "") (err {:kind :bad-task :message "the task is empty"})]
+      [_ (ok task)]))
+
+  (on (add state n i task) :write :update
+    "Adds task, a string, to drafted plan n as its task i, from 1, the tasks from i on after it; i one past the last adds it last. A plan has at most 4. (ok tasks); (err {:kind :no-plan}) unless plan n waits for approval, (err {:kind :no-task}) for an i out of range, (err {:kind :full}) for a fifth."
+    (let [ts (try (drafted state n))
+          task (try (task-text task))
+          total (vector/length ts)]
+      (cond
+        [(>= total most) (err {:kind :full :message (str "plan " n " has " most " tasks, as many as a plan may: remove one first")})]
+        [(not (and (= (value/type i) :int) (>= i 1) (<= i (+ total 1))))
+         (err {:kind :no-task :message (str "plan " n " takes a task 1 to " (+ total 1))})]
+        [_ (let [ts (vector/concat (vector/slice ts 0 (- i 1)) [task] (vector/slice ts (- i 1) total))]
+             (moved n (ok [ts (set-plan state n {:tasks ts})])))])))
+
+  (on (remove state n i) :write :update
+    "Removes task i, from 1, from drafted plan n, which keeps at least one. (ok tasks); (err {:kind :no-plan}) unless plan n waits for approval, (err {:kind :no-task}) unless it has task i, (err {:kind :last-task}) for its only one: discard the plan instead."
+    (let [ts (try (drafted state n))
+          total (vector/length ts)]
+      (cond
+        [(not (and (= (value/type i) :int) (>= i 1) (<= i total)))
+         (err {:kind :no-task :message (str "plan " n " has tasks 1 to " total)})]
+        [(= total 1) (err {:kind :last-task :message (str "task " i " is plan " n "'s only one: discard the plan instead")})]
+        [_ (let [ts (vector/concat (vector/slice ts 0 (- i 1)) (vector/slice ts i total))]
+             (moved n (ok [ts (set-plan state n {:tasks ts})])))])))
+
+  (on (redraft state n note) :write :update
+    "Plans drafted plan n's goal again, the planner told its last tasks and note, your words on what to do differently; its new tasks land in your inbox, as a draft's do. (ok :planning); (err {:kind :no-plan}) unless plan n waits for approval."
+    (let [ts (try (drafted state n))
+          note (try (match (task-text note) [(ok s) (ok s)] [_ (err {:kind :bad-note :message "want a note for the planner, a string"})]))
+          state (set-plan state n {:last ts :note note :tasks [] :actions []})]
+      (moved n (ok [:planning (try (ask-planner state n))]))))
 
   (on (retry state n note) :write :update
     "Takes plan n on after the run of the task it stopped at gave up, failed or was cancelled: its dev Claude gets note, your words for it (\"\" for none), and up to 3 more rounds, and the plan goes on from there. (ok :retrying); (err {:kind :no-plan}) unless plan n stopped so."
