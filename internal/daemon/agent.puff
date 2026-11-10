@@ -184,7 +184,7 @@
       (ok :done))))
 
 ; number is a JSON number as a float.
-(def (number x) (if (= (value/type x) :int) (float/from-int x) x))
+(def (number x) (if (int? x) (float/from-int x) x))
 
 ; outcome is what turn i's job result r answers: (ok text), or (err e)
 ; with :outcome. A turn's cost is kept, as what it spent is spent however
@@ -531,7 +531,7 @@
 
 (on (restart turn)
   "Takes turn, one that failed once it ran, again as a new turn of the same conversation: it gets the message it had, why it failed and the tasks it had started, so it carries on rather than does them twice. Its answer comes to your inbox, as a tell's. (ok :restarting); (err {:kind :no-turn}) for a turn that didn't fail so, or was restarted."
-  (let [i (if (= (value/type turn) :int) (int/to-string turn) turn)]
+  (let [i (if (int? turn) (int/to-string turn) turn)]
     (match (vector/find (failed-turns) (fn ({:turn t}) (= t i)))
       [(some {:why why :text text})
        (let [_ (try (set-failed (vector/filter (failed-turns) (fn ({:turn t}) (not (= t i))))))
@@ -561,7 +561,7 @@
 
 (on (later d note) :read
   "Sets the agent a turn of its own once d has passed, as 1d, with note, what to look at: it waits its turn, as a wake does, and answers only with news. (ok due), when it comes. :read, as it writes nothing but the agent's home: its turn's tools are gated as any. The agent's own tool."
-  (if (and (= (value/type d) :duration) (>= d 0s) (= (value/type note) :string))
+  (if (and (= (value/type d) :duration) (>= d 0s) (string? note))
     (let [due (+ (time/now) d)
           i (uuid/new)
           _ (try (file/mkdir home))
@@ -587,5 +587,5 @@
            [(none) (answered i o #f)]))] ; a turn from before tells queued
       ; Your reply to an answer is a tell, which waits its turn.
       [_ (match r
-           [(ok text) when (= (value/type text) :string) (send :tell text)]
+           [(ok text) when (string? text) (send :tell text)]
            [_ (ok :done)])])))

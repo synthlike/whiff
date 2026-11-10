@@ -149,7 +149,7 @@
   (def (passes? spec)
     (match (map/get spec :ready)
       [(none) #t]
-      [(some url) when (= (value/type url) :string) (match (http/get url {:timeout 2s}) [(ok _) #t] [_ #f])]
+      [(some url) when (string? url) (match (http/get url {:timeout 2s}) [(ok _) #t] [_ #f])]
       [(some cmd) (match (proc/run cmd {:dir (dir-of spec) :timeout 5s}) [(ok {:exit 0}) #t] [_ #f])]))
 
   (def (proc state name) (map/get-or (map/get-or state :procs {}) name {:status :down}))

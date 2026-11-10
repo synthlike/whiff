@@ -552,7 +552,7 @@
   ; as ["go" "test" "./..."]; else why not, before a run takes a worktree.
   (def (command? check)
     (if (and (= (value/type check) :vector) (not (vector/empty? check))
-          (vector/all? check (fn (a) (= (value/type a) :string))))
+          (vector/all? check (fn (a) (string? a))))
       (ok :done)
       (err {:kind :bad-check :message (str "check wants a command, a vector of strings as [\"go\" \"test\" \"./...\"], got " (value/to-string check))})))
 

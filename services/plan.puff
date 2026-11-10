@@ -46,7 +46,7 @@
 
   ; numbered is tasks, one a line, numbered from 1.
   (def (numbered ts)
-    (string/join (vector/map (vector/range 0 (vector/length ts)) (fn (i) (str (+ i 1) ". " (unwrap (vector/get ts i))))) "\n"))
+    (string/join (vector/map-indexed ts (fn (i t) (str (+ i 1) ". " t))) "\n"))
 
   ; planner-input is what the planner reads: the prompt, the check and the
   ; goal; planning again, p's last tasks and your note on them.
@@ -78,7 +78,7 @@
   (def (set-plan state n m)
     (map/update-in state [:plans n] (fn (p) (map/merge p m))))
 
-  (def (strings? v) (vector/all? v (fn (x) (= (value/type x) :string))))
+  (def (strings? v) (vector/all? v (fn (x) (string? x))))
 
   ; tasks reads the planner's answer: the JSON array in it, even inside a
   ; code fence, as (ok tasks), at most most of them.
@@ -267,10 +267,9 @@
           total (vector/length ts)]
       (if (= total 0)
         [{:step step :item {:label goal :detail (str "plan " n ", " (keyword/name step))}}]
-        (vector/map (vector/range 0 total)
-          (fn (i)
-            (let [task (unwrap (vector/get ts i))
-                  where (str "plan " n ", task " (+ i 1) " of " total)
+        (vector/map-indexed ts
+          (fn (i task)
+            (let [where (str "plan " n ", task " (+ i 1) " of " total)
                   run (match (vector/get built i)
                         [(some r) (vector/find runs (fn ({:run x}) (= x r)))]
                         [_ (none)])]
@@ -481,7 +480,7 @@
     "Sets task i, from 1, of drafted plan n to task, a string. (ok tasks); (err {:kind :no-plan}) unless plan n waits for approval, (err {:kind :no-task}) unless it has task i."
     (let [ts (try (drafted state n))
           task (try (task-text task))]
-      (if (not (and (= (value/type i) :int) (>= i 1) (<= i (vector/length ts))))
+      (if (not (and (int? i) (>= i 1) (<= i (vector/length ts))))
         (err {:kind :no-task :message (str "plan " n " has tasks 1 to " (vector/length ts))})
         (let [ts (vector/set ts (- i 1) task)]
           (moved n (ok [ts (set-plan state n {:tasks ts})]))))))
@@ -496,7 +495,7 @@
   ; task-text is task, checked to be a task's text.
   (def (task-text task)
     (cond
-      [(not (= (value/type task) :string)) (err {:kind :bad-task :message "want the task as a string"})]
+      [(not (string? task)) (err {:kind :bad-task :message "want the task as a string"})]
       [(= (string/trim task) "") (err {:kind :bad-task :message "the task is empty"})]
       [_ (ok task)]))
 
@@ -507,7 +506,7 @@
           total (vector/length ts)]
       (cond
         [(>= total most) (err {:kind :full :message (str "plan " n " has " most " tasks, as many as a plan may: remove one first")})]
-        [(not (and (= (value/type i) :int) (>= i 1) (<= i (+ total 1))))
+        [(not (and (int? i) (>= i 1) (<= i (+ total 1))))
          (err {:kind :no-task :message (str "plan " n " takes a task 1 to " (+ total 1))})]
         [_ (let [ts (vector/concat (vector/slice ts 0 (- i 1)) [task] (vector/slice ts (- i 1) total))]
              (moved n (ok [ts (set-plan state n {:tasks ts})])))])))
@@ -517,7 +516,7 @@
     (let [ts (try (drafted state n))
           total (vector/length ts)]
       (cond
-        [(not (and (= (value/type i) :int) (>= i 1) (<= i total)))
+        [(not (and (int? i) (>= i 1) (<= i total)))
          (err {:kind :no-task :message (str "plan " n " has tasks 1 to " total)})]
         [(= total 1) (err {:kind :last-task :message (str "task " i " is plan " n "'s only one: discard the plan instead")})]
         [_ (let [ts (vector/concat (vector/slice ts 0 (- i 1)) (vector/slice ts i total))]

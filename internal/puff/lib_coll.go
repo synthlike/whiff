@@ -143,6 +143,30 @@ var vectorFns = []*Builtin{
 		}
 		return Vector{items}, nil
 	})},
+	{Name: "vector/map-indexed", Args: "v f", Doc: "(f i item) of each item, i counting from 0.", Fn: vecFn(func(c *Call, v Vector, f Value, _ []Value) (Value, error) {
+		items := make([]Value, len(v.items))
+		for i, x := range v.items {
+			r, err := c.Apply(f, Int(i), x)
+			if err != nil {
+				return nil, err
+			}
+			items[i] = r
+		}
+		return Vector{items}, nil
+	})},
+	{Name: "vector/distinct-by", Args: "v f", Doc: "The first item for each value of f, in order: (vector/distinct-by tasks (fn (t) (map/get t :section))).", Fn: vecFn(func(c *Call, v Vector, f Value, _ []Value) (Value, error) {
+		var items, keys []Value
+		for _, x := range v.items {
+			k, err := c.Apply(f, x)
+			if err != nil {
+				return nil, err
+			}
+			if !slices.ContainsFunc(keys, func(seen Value) bool { return Equal(seen, k) }) {
+				keys, items = append(keys, k), append(items, x)
+			}
+		}
+		return Vector{items}, nil
+	})},
 	{Name: "vector/filter", Args: "v f", Doc: "The items for which f is #t.", Fn: vecFn(func(c *Call, v Vector, f Value, _ []Value) (Value, error) {
 		var items []Value
 		for _, x := range v.items {

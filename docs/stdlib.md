@@ -45,6 +45,8 @@ In `puff` and in whiff alike. Names without a namespace are under core.
 - `(min a b ...)`: The least of the values, as < compares them.
 - `(max a b ...)`: The greatest of the values, as > compares them.
 - `(str v ...)`: The values joined together, strings as they are and the rest printed: (str "line " 12) is "line 12".
+- `(string? v)`: Whether v is a string.
+- `(int? v)`: Whether v is an int: #f for a float, 1.0 too.
 
 ### string
 
@@ -112,6 +114,8 @@ In `puff` and in whiff alike. Names without a namespace are under core.
 - `(vector/range start end)`: The ints from start up to end.
 - `(vector/sort v)`: v's items in ascending order: ints, floats, strings or durations.
 - `(vector/map v f)`: f of each item.
+- `(vector/map-indexed v f)`: (f i item) of each item, i counting from 0.
+- `(vector/distinct-by v f)`: The first item for each value of f, in order: (vector/distinct-by tasks (fn (t) (map/get t :section))).
 - `(vector/filter v f)`: The items for which f is #t.
 - `(vector/find v f)`: (some x): the first item for which f is #t; (none) if there isn't one.
 - `(vector/any? v f)`: Whether f is #t for some item.

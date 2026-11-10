@@ -74,7 +74,7 @@
   ; columns is items as a board's columns: a column per heading, in the order
   ; they first come, each item ticking itself when picked.
   (def (columns items)
-    (let [heads (vector/reduce items [] (fn (hs {:section s}) (if (vector/contains? hs s) hs (vector/append hs s))))]
+    (let [heads (vector/map (vector/distinct-by items (fn ({:section s}) s)) (fn ({:section s}) s))]
       (vector/map heads
         (fn (h)
           {:title (if (= h "") file h)

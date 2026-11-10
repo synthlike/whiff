@@ -95,7 +95,7 @@
   (on (checks-of state pr) :read
     "The checks of pull request pr, a number, as checks gives them."
     (match pr
-      [n when (= (value/type n) :int) (checks-for [(int/to-string n)])]
+      [n when (int? n) (checks-for [(int/to-string n)])]
       [_ (err {:kind :bad-call :message (string/concat "want a pull request's number, got " (value/to-string pr))})]))
 
   (on (watch state) :write :update

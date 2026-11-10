@@ -265,6 +265,14 @@ var valueFns = []*Builtin{
 	{Name: "value/type", Args: "v", Doc: "v's type: :bool, :int, :float, :string, :keyword, :duration, :time, :vector, :map, :tag or :function.", Fn: func(_ *Call, args []Value) (Value, error) {
 		return Keyword(typeName(args[0])), nil
 	}},
+	{Name: "string?", Args: "v", Doc: "Whether v is a string.", Fn: func(_ *Call, args []Value) (Value, error) {
+		_, ok := args[0].(String)
+		return Bool(ok), nil
+	}},
+	{Name: "int?", Args: "v", Doc: "Whether v is an int: #f for a float, 1.0 too.", Fn: func(_ *Call, args []Value) (Value, error) {
+		_, ok := args[0].(Int)
+		return Bool(ok), nil
+	}},
 	{Name: "keyword/name", Args: "k", Doc: "k's name, without its colon: \"ready\" for :ready.", Fn: func(_ *Call, args []Value) (Value, error) {
 		k, err := arg[Keyword](args, 0, "a keyword")
 		if err != nil {

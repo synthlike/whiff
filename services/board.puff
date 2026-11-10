@@ -227,7 +227,7 @@
   ; line, as models do, "go test ./...", split into its words; "" for none.
   ; Anything else stays as it is, for choose to refuse.
   (def (command check)
-    (if (= (value/type check) :string)
+    (if (string? check)
       (vector/filter (string/split check " ") (fn (w) (not (= w ""))))
       check))
 
@@ -284,15 +284,15 @@
   ; :reviewer and :repo, strings for :check and :models, a count for
   ; :most, dollars for :day, and #t, #f or {:net #t} for :sandbox.
   (def (set-role team k v)
-    (let [strings? (fn (x) (and (= (value/type x) :vector) (vector/all? x (fn (y) (= (value/type y) :string)))))
+    (let [strings? (fn (x) (and (= (value/type x) :vector) (vector/all? x (fn (y) (string? y)))))
           bad (fn (want) (err {:kind :bad-team :message (str k " wants " want ", got " (value/to-string v))}))]
       (cond
         [(not (vector/contains? (map/keys team-defaults) k))
          (err {:kind :bad-team :message (str "a team has :lead :dev :reviewer :repo :check :models :most :day and :sandbox, not " (value/to-string k))})]
         [(= v :default) (ok (map/set team k (unwrap (map/get team-defaults k))))]
-        [(vector/contains? [:lead :dev :reviewer :repo] k) (if (= (value/type v) :string) (ok (map/set team k v)) (bad "a string"))]
+        [(vector/contains? [:lead :dev :reviewer :repo] k) (if (string? v) (ok (map/set team k v)) (bad "a string"))]
         [(vector/contains? [:check :models] k) (if (strings? v) (ok (map/set team k v)) (bad "a vector of strings"))]
-        [(= k :most) (if (and (= (value/type v) :int) (> v 0)) (ok (map/set team k v)) (bad "a count"))]
+        [(= k :most) (if (and (int? v) (> v 0)) (ok (map/set team k v)) (bad "a count"))]
         [(= k :sandbox) (if (vector/contains? [#t #f {:net #t}] v) (ok (map/set team k v)) (bad "#t, #f or {:net #t}"))]
         [_ (match (value/type v)
              [:int when (>= v 0) (ok (map/set team k (float/from-int v)))]
@@ -436,7 +436,7 @@
 
   (on (set-team state project changes) :write :update
     "Sets the roles of project's team that changes, a map, names, keeping the rest: {:dev \"haiku\" :reviewer \"sonnet\"}, the developers' and reviewers' models; :models [\"haiku\" \"sonnet\"], those its runs may use, [] for any; :check [\"go\" \"test\" \"./...\"]; :most 3, runs going at once; :day 5.0, dollars a day for its runs and its lead's turns for it, 0.0 for no limit; :lead \"lead\", the agent tell tells; :repo \"~/src/tally\", its repository; :sandbox #t, its devs' commands and checks in a container that sees only the run's worktree, {:net #t} with the network, for devs on huff. :default puts a role back to its default. changes may be that map printed, as sniff's Change sends it. (ok team)."
-    (let [changes (if (= (value/type changes) :string) (try (value/from-string changes)) changes)]
+    (let [changes (if (string? changes) (try (value/from-string changes)) changes)]
       (if (not (= (value/type changes) :map))
         (err {:kind :bad-team :message (str "want the roles to set, as {:dev \"haiku\" :most 3}, got " (value/to-string changes))})
         (let [team (try (set-roles (team-of state project) changes))
