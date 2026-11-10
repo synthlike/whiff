@@ -167,6 +167,7 @@ type state struct {
 	cut        []ticket        // what load read, until resume takes it up: accepted as whiff went
 	jobs       map[int64]*job
 	nextID     int64                       // the last id given to a message answered later, or a job
+	idsTo      int64                       // the last id stored as reserved: newID gives up to it without the disk
 	lastMsg    int64                       // the last id given to a message or an eval in history: see msgID
 	waiters    map[int64][]chan puff.Value // whiff waits, by the id they wait for
 	subs       map[*watcher]bool           // clients' subscriptions: whiff sub

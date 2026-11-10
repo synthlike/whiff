@@ -32,7 +32,7 @@ func BenchmarkMessages(b *testing.B) {
 		b.Fatal(err)
 	}
 	writeServices(b, dir, map[string]string{
-		"bench": `(service bench (on (echo x) "Answers x." (ok x)))`,
+		"bench": `(service bench (on (echo x) "Answers x." (ok x)) (ask (q x) "Waits in the inbox."))`,
 	})
 	start(b, dir)
 	c := dial(b, dir)
@@ -86,6 +86,22 @@ func BenchmarkMessages(b *testing.B) {
 				}
 			}
 		})
+		perSecond(b)
+	})
+
+	// An ask and your reply: a task, which takes an id, is stored as it
+	// waits in the inbox and again as it ends, each on the route goroutine.
+	b.Run("ask/reply", func(b *testing.B) {
+		for i := range b.N {
+			resp, err := c.Message("call", "bench/q", fmt.Sprintf("[%d]", i), "")
+			if err != nil {
+				b.Fatal(err)
+			}
+			id := pendingOf(b, resp.Value)
+			if r, err := c.Message("reply", "", "["+id+" (ok 1)]", ""); err != nil || r.Value != "(ok :done)" {
+				b.Fatalf("reply %s = %+v %v", id, r, err)
+			}
+		}
 		perSecond(b)
 	})
 

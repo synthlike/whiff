@@ -623,9 +623,13 @@ broken over lines to fit, as `whiff state` is.
 - History, service state, every inbox, `:review`'s queue too, timers,
   running jobs and results are stored. What a `whiff try` address holds
   isn't. History is stored about 100ms after it happens, in batches, so a
-  message never waits for the disk: a crash loses that last moment of it,
-  and if whiff.db falls 10000 entries behind, what doesn't fit isn't
-  stored, and the log says so. It's kept 30 days, deleted at start, and
+  message answered at once never waits for the disk: a crash loses that
+  last moment of it, and if whiff.db falls 10000 entries behind, what
+  doesn't fit isn't stored, and the log says so. A task does wait: it is
+  committed as it begins, in an inbox or the review queue, and again as it
+  ends, before anyone hears of either, so routing pauses for those two
+  commits (ids are reserved 256 at a time, so taking one rarely adds a
+  third). It's kept 30 days, deleted at start, and
   whiff.db is compacted then if a quarter of it is free. Clients get the
   last 1000 entries.
 - A job isn't resumed. When whiff stops it stops the job, as a cancel or

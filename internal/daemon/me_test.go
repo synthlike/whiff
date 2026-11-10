@@ -355,8 +355,9 @@ func TestMeInboxSurvivesRestart(t *testing.T) {
 		}
 	}
 
-	// With the inbox empty, the next id still comes after the last, and an
-	// answered message doesn't come back.
+	// With the inbox empty, the next id still comes after the last (after
+	// the block it was reserved in), and an answered message doesn't come
+	// back.
 	last, _ := strconv.Atoi(passed)
 	restart(func(db *bbolt.DB) {
 		if p := stored(db, asked); p != "" {
@@ -367,8 +368,8 @@ func TestMeInboxSurvivesRestart(t *testing.T) {
 		t.Errorf("inbox = %q, want it empty", text)
 	}
 	waits := id(c, `(call :planner/ask)`)
-	if n, _ := strconv.Atoi(waits); n != last+1 {
-		t.Errorf("the next id is %d, want %d", n, last+1)
+	if n, _ := strconv.Atoi(waits); n <= last {
+		t.Errorf("the next id is %d, want one after %d", n, last)
 	}
 
 	// One that can't be read is noted and kept, and what comes after it

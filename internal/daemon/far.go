@@ -702,8 +702,11 @@ func (d *daemon) once(key string, run func() rpc.Response) rpc.Response {
 			return *kept
 		case wait == nil:
 			resp := run()
+			// Stored off the route goroutine, before the waiters are let
+			// go: they find it stored.
+			err := keepKeyed(d.db, key, resp)
 			d.do(func(st *state) {
-				if err := keepKeyed(st.db, key, resp); err != nil {
+				if err != nil {
 					st.note(fmt.Sprintf("a submission key isn't stored, so a message sent again with it would run again: %v", err))
 				}
 				close(st.keyed[key])

@@ -31,7 +31,7 @@ func stopDaemon(t *testing.T, c *rpc.Client, done <-chan error) {
 }
 
 // pendingOf is the id in r, a printed pending.
-func pendingOf(t *testing.T, r string) string {
+func pendingOf(t testing.TB, r string) string {
 	t.Helper()
 	v, err := puff.ReadValue(r)
 	if err != nil {
@@ -980,5 +980,34 @@ func TestStoredKey(t *testing.T) {
 		if got := puff.Print(storedKey(c.key)); got != c.want {
 			t.Errorf("storedKey(%q) = %s; want %s", c.key, got, c.want)
 		}
+	}
+}
+
+// newID reserves ids a block at a time: the block's last is stored before
+// its first is given, so a restart, which begins after what is stored,
+// never gives one again; within a block, nothing is written.
+func TestNewIDBlocks(t *testing.T) {
+	db, err := openStore(filepath.Join(t.TempDir(), "services"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	stored := func() int64 {
+		var n int64
+		db.View(func(tx *bbolt.Tx) error { n, err = storedInt(tx, nextIDKey); return err })
+		return n
+	}
+	st := &state{db: db}
+	if id := st.newID(); id != 1 || stored() != idBlock {
+		t.Errorf("the first id = %d, stored %d; want 1, stored %d", id, stored(), idBlock)
+	}
+	for range idBlock - 1 {
+		st.newID()
+	}
+	if stored() != idBlock {
+		t.Errorf("after a block's ids, stored %d; want %d", stored(), idBlock)
+	}
+	if id := st.newID(); id != idBlock+1 || stored() != 2*idBlock {
+		t.Errorf("the next block's first id = %d, stored %d; want %d, stored %d", id, stored(), idBlock+1, 2*idBlock)
 	}
 }

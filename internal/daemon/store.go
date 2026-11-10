@@ -26,7 +26,7 @@ const storeTimeout = 10 * time.Second
 // by name.
 var stateBucket = []byte("state")
 
-// metaBucket holds nextIDKey, the last id given out, and agentsKey, the last
+// metaBucket holds nextIDKey, the last id reserved (see newID), and agentsKey, the last
 // agent's number, so each means one thing even across a restart: a stale
 // whiff reply can't answer another message.
 var (
@@ -268,13 +268,23 @@ func storeInt(tx *bbolt.Tx, key []byte, n int64) error {
 	return tx.Bucket(metaBucket).Put(key, strconv.AppendInt(nil, n, 10))
 }
 
-// newID is a new id for a message answered later, or a job. One that can't
-// be stored still works until the next restart, so it is only noted.
+// idBlock is how many ids newID reserves at a time.
+const idBlock = 256
+
+// newID is a new id for a message answered later, or a job. Ids are
+// reserved idBlock at a time, the last of them stored before the first is
+// given, so the route goroutine waits on the disk once a block rather
+// than once an id; a restart begins after the block, skipping what it
+// didn't give. One that can't be stored still works until the next
+// restart, so it is only noted.
 func (st *state) newID() int64 {
 	st.nextID++
-	err := st.db.Update(func(tx *bbolt.Tx) error { return storeInt(tx, nextIDKey, st.nextID) })
-	if err != nil {
-		st.note(fmt.Sprintf("the last id, %d, isn't stored: %v", st.nextID, err))
+	if st.nextID > st.idsTo {
+		st.idsTo = st.nextID + idBlock - 1
+		err := st.db.Update(func(tx *bbolt.Tx) error { return storeInt(tx, nextIDKey, st.idsTo) })
+		if err != nil {
+			st.note(fmt.Sprintf("the last id reserved, %d, isn't stored: %v", st.idsTo, err))
+		}
 	}
 	return st.nextID
 }
@@ -432,6 +442,7 @@ func (st *state) load() {
 		}
 		n, err := storedInt(tx, nextIDKey)
 		st.nextID = max(st.nextID, n)
+		st.idsTo = st.nextID
 		return err
 	})
 	if err != nil {
