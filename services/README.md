@@ -38,7 +38,9 @@ Or try one without installing it: `whiff try services/git.puff status`.
   then it is committed on the branch and you hear in your inbox. `runs`,
   `view`, `cancel n`; `merge n` into your branch, or `push n onto` to
   origin, `""` for the run's own branch, never rewinding one, so a run on
-  a peer becomes a pull request without logging in there;
+  a peer becomes a pull request without logging in there. A run from an
+  `origin/` base fetches first, and `pull` fast-forwards the repository's
+  checked-out branch, so a clone nobody pulls on keeps up;
   `:pipeline/done` as each run ends. Needs the claude CLI.
 - `lead`: a Sonnet agent that builds software with `board/build`, which
   hands it `pipeline/build`, an ask that answers when a run ends: a scaffold run, a few parts at once on a

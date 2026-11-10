@@ -186,10 +186,12 @@ worktree of its own, whiff runs your check there, and a reviewer model
 reviews the diff; until both pass, the review goes back to the developer,
 up to three rounds. On the VPS both roles run on huff, and `:sandbox #t`
 runs the developer's commands and the check in a container that sees
-only the worktree, without the network:
+only the worktree, without the network. The base, `origin/main`, has the
+run fetch first, so it starts from what is merged on GitHub, not from the
+day waft cloned:
 
 ```sh
-whiff call pipeline@vps/build '"/home/whiff/src/tally"' '"main"' \
+whiff call pipeline@vps/build '"/home/whiff/src/tally"' '"origin/main"' \
   "\"Add a 'tally sub' command, with a test\"" '["go" "test" "./..."]' \
   '{:dev "openrouter/moonshotai/kimi-k2" :reviewer "openrouter/moonshotai/kimi-k2" :sandbox #t}'
 # pending 12 (whiff wait 12)
@@ -201,7 +203,7 @@ on:
 ```sh
 cd ~/src/tally
 whiff eval '(let [{:text t} (unwrap (vector/first (unwrap (call :todo/open))))]
-  (call :pipeline@vps/build "/home/whiff/src/tally" "main" t ["go" "test" "./..."]
+  (call :pipeline@vps/build "/home/whiff/src/tally" "origin/main" t ["go" "test" "./..."]
     {:dev "openrouter/moonshotai/kimi-k2" :reviewer "openrouter/moonshotai/kimi-k2" :sandbox #t}))'
 ```
 
@@ -324,10 +326,12 @@ goes on in the same developer session, with your note.)
 
 For a change too big for one task, `plan` has a planner read the
 repository (it can't change it) and split the goal into a few tasks, each
-built as a pipeline run from the branch of the one before. `draft` stops
-before building, so you can read the tasks first:
+built as a pipeline run from the branch of the one before. It plans and
+builds from the clone's checked-out branch, so bring that up to date
+first; `draft` stops before building, so you can read the tasks first:
 
 ```sh
+whiff call pipeline@vps/pull       # git pull --ff-only in the clone
 whiff call plan@vps/draft \
   "\"A 'tally stats' command: count, sum and mean of the numbers in a file, one per line, with tests\"" \
   '["go" "test" "./..."]' \

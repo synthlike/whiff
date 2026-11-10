@@ -805,6 +805,32 @@ echo "changed things"
 		t.Errorf("review-again of a ready run = %s", got)
 	}
 
+	// A clone nobody pulls on, as a peer's: what is merged on origin
+	// since reaches a build from origin/main, which fetches first, and
+	// pull fast-forwards the branch checked out.
+	git(repo, "push", "-q", "origin", "main")
+	git(repo, "branch", "-q", "-u", "origin/main", "main")
+	other := filepath.Join(dir, "other")
+	git(dir, "clone", "-q", origin, other)
+	git(other, "commit", "-q", "--allow-empty", "-m", "merged upstream")
+	git(other, "push", "-q", "origin", "main")
+	upstream := strings.TrimSpace(git(other, "rev-parse", "HEAD"))
+	got := call("start-on", `["`+repo+`" "origin/main" "on upstream" `+check+` ""]`)
+	if !strings.HasPrefix(got, "(ok ") {
+		t.Fatalf("start-on from origin/main = %s", got)
+	}
+	n := strings.TrimSuffix(strings.TrimPrefix(got, "(ok "), ")")
+	done()
+	if log := git(repo, "log", "--format=%s", "whiff/"+n); !strings.HasPrefix(log, "on upstream\nmerged upstream\n") {
+		t.Errorf("run %s from origin/main has:\n%s", n, log)
+	}
+	if got := call("pull", "[]"); got != `(ok "`+upstream+`")` {
+		t.Errorf("pull = %s, want %s", got, upstream)
+	}
+	if got := strings.TrimSpace(git(repo, "rev-parse", "main")); got != upstream {
+		t.Errorf("main after pull = %s, want %s", got, upstream)
+	}
+
 	// Outside a repository nothing starts.
 	resp, err := c.Message("call", "pipeline/start", `["x" `+check+`]`, dir)
 	if err != nil || !strings.Contains(resp.Value, "not a git repository") {

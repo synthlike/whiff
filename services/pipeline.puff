@@ -571,6 +571,16 @@
         [(err _) when (< tries 3) (recur (free repo (+ n 1)) (+ tries 1))]
         [e e])))
 
+  ; fetch-for fetches origin into repo if a base is one of its branches,
+  ; origin/main say: a clone on a peer, which nobody pulls on, then starts
+  ; a run from what was merged since. Other bases need no network.
+  (def (fetch-for repo bases)
+    (if (vector/any? bases (fn (b) (and (string? b) (string/starts-with? b "origin/"))))
+      (match (git repo ["fetch" "-q" "origin"])
+        [(ok _) (ok :fetched)]
+        [(err e) (err {:kind :fetch :message (str "git fetch origin in " repo ": " (map/get-or e :message ""))})])
+      (ok :local)))
+
   ; begin starts a run on task in repo, from base, a commit or branch, or
   ; a vector of them merged, the first's worktree with the rest merged in:
   ; [n state], or the err it couldn't start for. extra are the run's
@@ -579,6 +589,7 @@
     (let [_ (try (command? check))
           _ (try (sandboxable extra))
           bases (if (= (value/type base) :vector) base [base])
+          _ (try (fetch-for repo bases))
           base (string/trim (try (git repo ["rev-parse" (unwrap (vector/first bases))])))
           _ (try (file/mkdir home))
           n (try (worktree repo (map/get-or state :next 1) base))
@@ -760,6 +771,12 @@
              _ (try (git repo ["push" "-q" "origin" (str "refs/heads/" b ":refs/heads/" to)]))]
          (ok to))]
       [_ (no-run state n (str "run " n " isn't ready: nothing to push"))]))
+
+  (on (pull state) :write
+    "Fast-forwards the branch checked out in the repository here to its upstream, as git pull --ff-only: so a clone on a peer, which nobody pulls on, has what was merged before a plan reads it. Builds from an origin/ base fetch by themselves. (ok commit), the commit it is at now; git's error if the branch has diverged or changes are in the way."
+    (let [repo (string/trim (try (proc/output ["git" "rev-parse" "--show-toplevel"])))
+          _ (try (git repo ["pull" "-q" "--ff-only"]))]
+      (ok (string/trim (try (git repo ["rev-parse" "HEAD"]))))))
 
   (on (discard state n) :write :update
     "Discards run n, ended and not merged: removes its worktree, uncommitted work and all, and its branch. (ok :discarded); (err {:kind :no-run}) unless run n ended so."
