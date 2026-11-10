@@ -505,7 +505,10 @@ reaches the peer is what `whiff call` would send there, as you.
   would one sent on that machine; one you let through here goes on as
   yours. An agent session's `:can` names a far function as it does any
   other, `:pipeline@vps/build`. A message from a `:read` function, as a
-  view, can't reach a `:write` function there either.
+  view, can't reach a `:write` function there either. It comes back in
+  its origin too: a task an agent answers there, or a job with `:origin
+  :agent` ends, is an agent's here, so what a service does with it is
+  held as an agent's would be.
 - **It runs in the peer's dir,** `--dir`, never in the laptop's
   directory, or in `whiff call -C <dir>`'s, relative to it.
 - **A task there is a task here.** A message that begins a task on the

@@ -553,7 +553,7 @@ func (d *daemon) checkFar(name string, c *rpc.Client, ids []int64) {
 		return
 	}
 	for _, f := range fs {
-		resp, err := c.Forward(rpc.Request{Op: "call", Target: ":tasks/result", Args: fmt.Sprintf("[%d]", f.remote)})
+		resp, err := c.Forward(rpc.Request{Op: "result", Args: fmt.Sprintf("[%d]", f.remote)})
 		if err != nil {
 			return
 		}
@@ -564,7 +564,13 @@ func (d *daemon) checkFar(name string, c *rpc.Client, ids []int64) {
 		}
 		d.do(func(st *state) {
 			if a := st.take("", f.id); a != nil {
-				d.answer(st, a.ticket, a.addr, farActions(t.At(0), name))
+				// Answered by an agent there, it is an agent's here, as
+				// reply lowers one answered here.
+				tk := a.ticket
+				if resp.Origin != "user" {
+					tk.user, tk.reviewed = false, false
+				}
+				d.answer(st, tk, a.addr, farActions(t.At(0), name))
 			}
 		})
 	}

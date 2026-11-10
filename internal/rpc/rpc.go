@@ -25,14 +25,15 @@ import (
 
 // Version is the protocol version. Bump it when a message changes, or a
 // function clients evaluate is renamed (21: a submission key, which an
-// older daemon would ignore and run a message twice); hello and stop must stay readable by every version, so an old
+// older daemon would ignore and run a message twice; 22: result, which a
+// peer asks a far task's by); hello and stop must stay readable by every version, so an old
 // daemon can be stopped.
-const Version = 21
+const Version = 22
 
 // Request is a client's message to the daemon. The daemon answers each with
 // a Response, in order, except an answer or a cancel, which have none.
 type Request struct {
-	Op      string `json:"op"`                // "hello", "eval", "repl", "cancel", "call", "send", "pub", "sub", "try", "inbox", "reply", "accept", "reject", "mode", "wait", "cancel-task", "claim", "answer", "history", "trace", "ls" or "stop"
+	Op      string `json:"op"`                // "hello", "eval", "repl", "cancel", "call", "send", "pub", "sub", "try", "inbox", "reply", "accept", "reject", "mode", "wait", "result", "cancel-task", "claim", "answer", "history", "trace", "ls" or "stop"
 	Version int    `json:"version,omitempty"` // hello: the client's protocol
 	Src     string `json:"src,omitempty"`     // eval, repl: puff code; claim: the interface, (on ...) and (ask ...) forms without bodies; try: the service file
 	File    string `json:"file,omitempty"`    // try: the service file's name, for its errors
@@ -76,6 +77,7 @@ type Request struct {
 type Response struct {
 	Version  int       `json:"version,omitempty"` // hello: the daemon's protocol
 	Value    string    `json:"value,omitempty"`   // eval: the printed value; others: the printed Result
+	Origin   string    `json:"origin,omitempty"`  // result: the task's chain's, "user" or "agent", lowered if an agent answered it
 	Out      string    `json:"out,omitempty"`     // eval: what io/println wrote
 	History  []Entry   `json:"history,omitempty"` // history, trace: history so far, oldest first
 	Error    string    `json:"error,omitempty"`

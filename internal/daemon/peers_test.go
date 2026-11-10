@@ -156,6 +156,7 @@ func TestFar(t *testing.T) {
   (ask (q x) "A question."))`})
 	writeServices(t, dir, map[string]string{"asker": `(service asker
   (on (go x) "Asks far's box." (call :box@far/q x))
+  (on (model) "Runs a model's job far." (call :jobs@far/run ["echo" "hi"] {:origin :agent :as :text}))
   (on (whiff/done id r) "Its answer." (call :me/tell (str "asker heard " (value/to-string r)))))`})
 	done := start(t, dir)
 	c := dial(t, dir)
@@ -238,6 +239,19 @@ func TestFar(t *testing.T) {
 	eventually(t, "asker hears far's answer", func() string {
 		text, _ := c.Inbox("me")
 		return fmt.Sprint(strings.Contains(text, `asker heard (ok :because)`))
+	}, "true")
+
+	// One an agent answers there is an agent's here, as reply makes one
+	// answered here: what asker does with it isn't yours.
+	here("asker/model", "[]")
+	eventually(t, "asker hears the far model's answer as an agent's", func() string {
+		h, _ := historyOf(c)
+		for line := range strings.SplitSeq(h, "\n") {
+			if strings.Contains(line, ":asker/whiff/done") && strings.Contains(line, `"hi\n"`) {
+				return fmt.Sprint(strings.Contains(line, " agent "))
+			}
+		}
+		return "no done"
 	}, "true")
 
 	// One that ends while whiff is down is answered as it comes back.

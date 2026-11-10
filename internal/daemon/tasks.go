@@ -12,6 +12,7 @@ import (
 	"go.etcd.io/bbolt"
 
 	"github.com/synthlike/whiff/internal/puff"
+	"github.com/synthlike/whiff/internal/rpc"
 )
 
 // :tasks shows the tasks, what whiff answers pending and later with
@@ -527,6 +528,29 @@ func (d *daemon) tasksService() *service {
 		},
 		subs: map[string]subscriber{}, code: map[string][]*puff.Form{},
 		mailbox: make(chan message, mailboxSize), quit: make(chan struct{}), done: make(chan struct{})}
+}
+
+// clientResult is :tasks/result for a client, req.Args the printed vector
+// [id], with the origin the task ended in: a peer asks it for a far task,
+// so an agent's answer there arrives here as an agent's.
+func (d *daemon) clientResult(req rpc.Request) rpc.Response {
+	v, _ := puff.ReadValue(req.Args)
+	vec, ok := v.(puff.Vector)
+	var id puff.Int
+	if ok && vec.Len() == 1 {
+		id, ok = vec.At(0).(puff.Int)
+	}
+	if !ok || vec.Len() != 1 {
+		return rpc.Response{Error: fmt.Sprintf("want [id], got %s", req.Args)}
+	}
+	t, _, r, err := storedResult(d.db, int64(id))
+	switch {
+	case err != nil:
+		return rpc.Response{Value: puff.Print(puff.Errorf("store", "%v", err))}
+	case r == nil:
+		return rpc.Response{Value: puff.Print(puff.Errorf("no-id", "task %d hasn't ended, or its result isn't kept", id))}
+	}
+	return rpc.Response{Value: puff.Print(puff.Ok(r)), Origin: string(origin(t.user))}
 }
 
 func (d *daemon) taskResult(_ message, args []puff.Value) (puff.Value, error) {
