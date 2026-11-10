@@ -137,3 +137,42 @@ func TestSessionEndsWithJob(t *testing.T) {
 		t.Errorf("the worker's ask = %+v %v, want it cancelled", r, err)
 	}
 }
+
+// A connection holding a session is an agent's though a later request
+// leaves the flag out: its write is held for review, and it can't cancel
+// your task.
+func TestSessionStaysAgent(t *testing.T) {
+	dir := tempDir(t)
+	file := filepath.Join(dir, "touched")
+	writeServices(t, dir, map[string]string{"box": `(service box (ask (q x) "A question."))`})
+	start(t, dir)
+	you, agent := dial(t, dir), dial(t, dir)
+	agent.Agent = true
+	if _, err := agent.Claim("agent", ""); err != nil {
+		t.Fatal(err)
+	}
+	agent.Agent = false
+	reviewer := dial(t, dir)
+	if _, err := reviewer.Sub("review/pending"); err != nil {
+		t.Fatal(err)
+	}
+	msg := func(c *rpc.Client, op, target, args string) string {
+		t.Helper()
+		r, err := c.Message(op, target, args, dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Error != "" {
+			return "error: " + r.Error
+		}
+		return r.Value
+	}
+	pendingOf(t, msg(agent, "call", "jobs/run", `[["touch" "`+file+`"]]`))
+	if _, err := os.Stat(file); err == nil {
+		t.Error("the session's write ran ungated")
+	}
+	q := pendingOf(t, msg(you, "call", "box/q", `["x"]`))
+	if r := msg(agent, "cancel-task", "", "["+q+"]"); !strings.Contains(r, ":kind :refused") {
+		t.Errorf("the session's cancel of yours = %s", r)
+	}
+}

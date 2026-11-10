@@ -251,6 +251,12 @@ func (d *daemon) serve(stop func(), closing <-chan struct{}, nc net.Conn) {
 		from := ""
 		if held != nil {
 			from = held.name
+			// A connection holding a session, :agent/*, which only whiff
+			// assigns, is an agent's whatever its later requests say: else
+			// leaving the flag out would act as you, past its :can.
+			if strings.HasPrefix(from, "agent/") {
+				req.Agent = true
+			}
 		}
 		if held != nil && held.can != nil {
 			if why := fenced(held, req); why != "" {
