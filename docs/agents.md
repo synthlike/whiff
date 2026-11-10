@@ -257,3 +257,26 @@ Restart action after inspecting the work; retry a failed delegated build
 through the pipeline's own Retry action. The
 [troubleshooting guide](troubleshooting.md) covers stuck queues, budgets
 and recovery after a crash.
+
+## Move an agent to another machine
+
+An agent on huff can move to a [peer](from-scratch.md) and back, its
+conversation, spending, laters and mode with it:
+
+```sh
+whiff move lead vps          # it is :lead@vps now
+whiff call lead@vps/tell "carry on with the parser tonight"
+whiff move lead@vps here     # back again
+```
+
+Your laptop drives both directions; the VPS never reaches back. An agent
+moves only when it is idle, with nothing in its inbox and no task of its
+open, since those are ids of the whiff it is on; `whiff call
+lead/cancel` or letting them end clears the way. The functions in its
+`:can` must be on the other machine, as `board` and `pipeline` for a
+lead, with the key its model needs. A Claude agent doesn't move: its
+conversation is in Claude's own files on its machine. Nothing is
+deleted: the file it leaves goes to `~/.whiff/moved` and is put back as
+it was (a symlink stays one) when it returns, and an old home is set
+aside, not overwritten. If a step fails, the ones before are undone, so
+the agent is in one place.

@@ -131,7 +131,7 @@ func run(ctx context.Context, dir, services string, env []string) error {
 	}
 	d.wg.Go(d.route)
 	// whiff's own addresses: see own.
-	for _, s := range []*service{d.jobsService(), d.meService(), d.reviewService(), d.tasksService(), d.timersService(), d.peersService()} {
+	for _, s := range []*service{d.jobsService(), d.meService(), d.reviewService(), d.tasksService(), d.timersService(), d.peersService(), d.agentsService()} {
 		if !own(s.name) {
 			panic(":" + s.name + " is built in but not in ownAddrs")
 		}
@@ -619,7 +619,7 @@ func (d *daemon) evalIn(ctx context.Context, env *puff.Env, cur *caller, out *st
 
 // ownAddrs are whiff's own addresses, its built-in services': startup
 // refuses a built-in that isn't here, so a new one can't be left out.
-var ownAddrs = []string{"jobs", "me", "review", "tasks", "timers", "peers"}
+var ownAddrs = []string{"jobs", "me", "review", "tasks", "timers", "peers", "agents"}
 
 // home is the home directory in d's environment.
 func (d *daemon) home() string {

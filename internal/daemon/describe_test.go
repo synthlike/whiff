@@ -127,7 +127,11 @@ func TestLs(t *testing.T) {
 	// Columns line up within each address.
 	files := filepath.Join(dir, "services", "files.puff")
 	greet := filepath.Join(dir, "services", "greet.puff")
-	want := `:files
+	want := `:agents
+  (adopt bundle)  :write  Installs the agent in bundle, as pack gives it, under its name, and starts it, paused if it was: (ok :adopted). (err {:kind :exists}) if there's one of its name here, (err {:kind :missing}) if its :can names functions that aren't here.
+  (drop name)     :write  Removes agent name, packed and adopted elsewhere: its file goes to ~/.whiff/moved and its home aside. (ok :dropped); (err {:kind :busy}) if anything came for it since it was packed.
+  (pack name)     :write  Pauses agent name and gives it as a bundle for adopt, where it goes: (ok bundle). It must be idle and on huff: (err {:kind :busy}) with what it waits on, or (err {:kind :not-movable}). whiff move does it all.
+:files
   (peek path)       :read   Reads a file.
   (remember x)      :write  Keeps x.
   (save path text)  :write  Writes a file.

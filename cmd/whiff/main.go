@@ -50,6 +50,9 @@ const usage = `usage:
   whiff free <agent/n>                   let everything an agent session sends, publishes and evaluates through
   whiff gate <agent/n>                   hold an agent session's :write messages for review again, as by default
   whiff session <agent/n>                what an agent session wrote, and how: held, accepted, trusted or free
+  whiff move <agent> <peer>              move an idle agent on huff to a peer, its conversation, spending
+                                         and mode with it: it is <agent>@<peer> there
+  whiff move <agent>@<peer> here         bring it back
   whiff eval <code>                      evaluate puff code in the daemon and print its value
   whiff repl                             evaluate forms as they're typed, in the daemon, keeping what they define
   whiff history [<query>]                print the last 1000 messages, newest first; with query, what it matches of 30 days'
@@ -130,6 +133,8 @@ func run(args []string, dir, services string, stdout, stderr io.Writer) int {
 		return message(dir, "cancel-task", "", args[1:], stdout, stderr)
 	case len(args) >= 2 && (args[0] == "trust" && len(args) >= 3 || args[0] == "free" || args[0] == "gate"):
 		return setMode(dir, args[0], args[1], args[2:], stdout, stderr)
+	case len(args) == 3 && args[0] == "move":
+		return moveAgent(dir, args[1], args[2], stdout, stderr)
 	case len(args) == 2 && args[0] == "session":
 		session := func(c *rpc.Client) (string, error) {
 			es, err := c.History()
@@ -981,4 +986,91 @@ func startDaemon() error {
 		return err
 	}
 	return cmd.Process.Release()
+}
+
+// moveAgent moves agent what, name or name@peer, to to, a peer or
+// "here": pack where it is, adopt where it goes, drop where it was. A
+// step that fails undoes the ones before, so the agent is in one place.
+func moveAgent(dir, what, to string, stdout, stderr io.Writer) int {
+	name, from, _ := strings.Cut(strings.TrimPrefix(what, ":"), "@")
+	dest := to
+	if to == "here" {
+		dest = ""
+	}
+	if name == "" || from == dest {
+		fmt.Fprintf(stderr, "whiff: move %s %s: want an agent and somewhere else, as move lead vps or move lead@vps here\n", what, to)
+		return 2
+	}
+	c := connect(dir, stderr)
+	if c == nil {
+		return 1
+	}
+	defer c.Close()
+	at := func(addr, peer string) string {
+		if peer == "" {
+			return addr
+		}
+		return addr + "@" + peer
+	}
+	where := func(peer string) string {
+		if peer == "" {
+			return "here"
+		}
+		return peer
+	}
+	// call is target's answer to args, (ok v) or (err e), as a value.
+	call := func(target string, args ...puff.Value) puff.Value {
+		resp, err := c.Forward(rpc.Request{Op: "call", Target: target, Args: puff.Print(puff.NewVector(args...))})
+		if err == nil && resp.Error != "" {
+			err = errors.New(resp.Error)
+		}
+		if err != nil {
+			return puff.Errorf("rpc", "%v", err)
+		}
+		v, err := puff.ReadValue(resp.Value)
+		if err != nil {
+			return puff.Errorf("rpc", "%v", err)
+		}
+		return v
+	}
+	failed := func(step string, r puff.Value) int {
+		fmt.Fprintf(stderr, "whiff: %s: %s\n", step, errWords(r))
+		return 1
+	}
+	n := puff.String(name)
+	packed := call(at("agents", from)+"/pack", n)
+	bundle := puff.OkValue(packed)
+	if bundle == nil {
+		return failed("pack "+at(name, from), packed)
+	}
+	resume := func() {
+		if p, _ := puff.Field(bundle, "paused").(puff.Bool); !bool(p) {
+			call(at(name, from) + "/resume")
+		}
+	}
+	if r := call(at("agents", dest)+"/adopt", bundle); puff.OkValue(r) == nil {
+		resume()
+		return failed("adopt "+name+" "+where(dest)+"; it stays "+where(from), r)
+	}
+	if r := call(at("agents", from)+"/drop", n); puff.OkValue(r) == nil {
+		// Back where it was: the copy that went is packed and dropped there.
+		code := failed("drop "+at(name, from)+"; it stays "+where(from), r)
+		if u := call(at("agents", dest)+"/pack", n); puff.OkValue(u) == nil {
+			fmt.Fprintf(stderr, "whiff: and its copy %s couldn't be packed again: %s; remove it there with agents/drop\n", where(dest), errWords(u))
+		} else if u := call(at("agents", dest)+"/drop", n); puff.OkValue(u) == nil {
+			fmt.Fprintf(stderr, "whiff: and its copy %s couldn't be dropped: %s\n", where(dest), errWords(u))
+		}
+		resume()
+		return code
+	}
+	fmt.Fprintf(stdout, "%s moved %s: it is :%s now\n", name, where(dest), at(name, dest))
+	return 0
+}
+
+// errWords is r, an (err e), as words: e's :message, or r printed.
+func errWords(r puff.Value) string {
+	if m, ok := puff.Field(puff.ErrValue(r), "message").(puff.String); ok {
+		return string(m)
+	}
+	return puff.Print(r)
 }
